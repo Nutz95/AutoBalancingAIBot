@@ -1,0 +1,6 @@
+{
+    "idf.portWin": "COM10",
+    "idf.openOcdConfigs": [
+        "board/esp32s3-builtin.cfg"
+    ]
+}

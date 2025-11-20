@@ -1,7 +1,7 @@
 # Project Context
 
 ## Purpose
-An autobalancing AI bot with 2 servo motors (STS 3215 HS from Feetech), using ESP32-S3 as controller and connected to a BMI088 gyroscope through SPI.
+An autobalancing AI bot with 2 servo motors (STS 3215 HS from Waveshare), using ESP32-S3 as controller and connected to a BMI088 gyroscope through SPI.
 The bot has 2 22mm wheels on each side, a platform with all the electronics on top and a camera on a small mast.
 
 ## Tech Stack
@@ -11,8 +11,39 @@ The bot has 2 22mm wheels on each side, a platform with all the electronics on t
 - The ESP32S3 code will be event driven as much as possible.
 - The Feetech STS 3215-HS servos are using RX/TX protocol and are linked in series.
 
-## Project Conventions
+### Waveshare STS 3215 HS Product page
+The official product page is located here: https://www.waveshare.com/wiki/ST3215-HS_Servo_Motor
 
+### Waveshare STS 3215 HS Servo specifications
+Here are the spec for the Waveshare STS 3215 HS servos:
+    Input Voltage: 6-12.6V
+    Mechanical Limited Angle: No Limit
+    Rotating Angle: 360° (servo mode angle control)/motor mode continuous rotation
+    Baudrate: 1Mbps
+    Gear: high-precision metal gear
+    Idling Speed: 0.094sec/60° (106RPM)@12V
+    Position Sensor Resolution: 360°/4096
+    ID Range: 0-253
+    Feedback: Position, Load, Speed, Input Voltage
+    Load Current: 240mAA
+    Locked-rotor Current: 2.4A
+    Dimension: 45.22mm x 35mm x 24.72mm
+### Waveshare STS 3215 HS Features
+    High speed, with a maximum speed of up to 106 RPM.
+    Support connecting in series, simultaneously controlling up to 253 servo motors (provided that there is sufficient power) and obtaining feedback information from each motor.
+    360° magnetic encoder, allowing for a wider angle control range.
+    High precision, with an angle control accuracy of 360°/4096.
+    Any angle can be set as the motor's midpoint, facilitating assembly.
+    Acceleration and deceleration function for smoother motion effects.
+    Compact structural design for a more aesthetically pleasing product appearance.
+    Wide voltage input range of 6-12.6V, capable of direct power supply from 2s or 3s lithium batteries.
+    High torque, up to 20kg.cm@12V.
+    Programmable work modes: Servo mode for angle control / Motor mode for continuous rotation.
+
+## Project Conventions
+### Documentation Update
+
+After each complete OpenSpec iteration (spec application and code generation), update the project documentation (README.md, specs, and relevant doc files) to reflect the latest changes, features, and architecture. This ensures the documentation stays synchronized with the codebase and project evolution.
 ### Code Style
 
 - Use C++ for the ESP32 code
@@ -37,7 +68,7 @@ The bot has 2 22mm wheels on each side, a platform with all the electronics on t
 - An event-based mechanism to handle the RX/TX commands from the Maixcam.
 - On BMI088/AutoBalancer/ServoDriver classes, add logs that can be reused in tests. (Gyro/Accelerometer data, ServoDriver commands sent for debug, AutoBalancer inputs and outputs for debug purposes.)
 - Add a constant DEBUG or LOG_LEVEL to trigger Debug logs and select the log level.
-- Use the 3rd party Arduino library to control the BMI088 (BMI08x-Arduino from Bosch Sensortec).
+- Use the 3rd party Arduino library to control the BMI088 (BMI08x-Arduino from Bosch Sensortec: https://github.com/bolderflight/bmi088-arduino.git).
 - Use the official SCServo library from Feetech to drive the STS 3215 HS servos.
 
 ### Testing Strategy
@@ -64,11 +95,22 @@ No need for complicated workflow, simple commits will do fine. No need for branc
 - A main power switch and a fuse are placed between the LIPO battery and the XH-M609 undervoltage protection board.
 - The ESP32S3 is connected through SPI to the BMI088 Gyro/Accelerometer board.
 - The SPI pins from the ESP32S3 used to drive the BMI088 board are:
-  - GPIO10 : FSPICS0 (chip select)
+  
+  - GPIO10 : FSPICS0 (chip select1)
   - GPIO11 : FSPID (dual SPI) (MOSI)
   - GPIO12 : FSPICLK (clock)
   - GPIO13 : FSPIQ (quad SPI)(MISO)
-- To build the ESP project you will need to use the command "pio run" from within the /ESP32/ folder.
+  - GPI14 : GPIO14 (chip select2)
+
+  Command list:
+  For ESP Project use base folder /ESP32/ folder:
+- build ESP : "pio run".
+- Build and Upload ESP project : "pio run --target upload"
+- Upload project after build: "pio --target upload"
+- Monitor device through serial: "pio device monitor"
+
+  For ServoDriverST project use base folder /ESP32/waveshare_resources/ST_Servo/ServoDriverST/:
+
 
 ## Important Constraints
 

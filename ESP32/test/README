@@ -1,3 +1,6 @@
+# test/
+
+Tests and test harnesses for this project. Add unit tests or integration tests here.
 
 This directory is intended for PlatformIO Test Runner and project tests.
 
