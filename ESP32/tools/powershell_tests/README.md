@@ -7,15 +7,37 @@ Requirements
 - Device connected on a COM port (adjust scripts to use correct COM port)
 
 Usage
-- Edit the scripts to set the correct `$PortName` (e.g. `COM11`) and optionally the baud rate.
-- Run a script from PowerShell:
-  - `.
-un_gyro_calib.ps1`
-  - `.
-un_accel_calib.ps1`
-  - `.	est_motor_commands.ps1`
-  - `.	est_persistence.ps1`
+- Run a script from PowerShell (example):
+  - `powershell -NoProfile -ExecutionPolicy Bypass -File .\test_motor_commands.ps1 -PortName COM10 -BaudRate 921600`
+
+Ctrl+C and the yellow message
+
+If you see the message printed in yellow:
+
+  Note: Ctrl+C handler registration not supported in this host; the script will rely on PowerShell interrupt to stop immediately.
+
+it means your PowerShell host doesn't allow registering a `CancelKeyPress` handler. This is informational only — the script will still stop on Ctrl+C in a normal console.
+
+`-ForcePoll` option
+
+If you run the scripts in an environment where Ctrl+C does not reliably interrupt (some restricted hosts or editor integrations), you can enable a polling-based detection of Ctrl+C which checks console key events while the script is reading the serial port.
+
+How to enable `-ForcePoll`
+
+- Option A: pass `-ForcePoll` to the test script (recommended):
+
+  ```powershell
+  powershell -NoProfile -ExecutionPolicy Bypass -File .\test_motor_commands.ps1 -PortName COM10 -BaudRate 921600 -ForcePoll
+  ```
+
+- Option B: call `Open-SerialPort` yourself in an interactive session and pass `-ForcePoll`:
+
+  ```powershell
+  . .\serial_helper.ps1
+  $sp = Open-SerialPort -PortName COM10 -BaudRate 921600 -ReadTimeoutMs 200 -ForcePoll
+  ```
 
 Notes
-- The scripts assume the firmware echoes status lines (e.g., `CALIB PROGRESS`, `CALIB DONE`, `motor_driver:` lines).
-- For safety, the `test_motor_commands.ps1` uses moderate values and disables motors at the end. If you switch to the real driver, immobilize the robot before running.
+- Close any other serial monitor (PlatformIO Monitor, other terminal) before running the tests — only one process may open the port at a time.
+- The helper reads any available raw bytes first (via `ReadExisting`) and then attempts `ReadLine()` to capture responses regardless of timing.
+- If you'd like, I can add a `-ForcePoll` switch to the other test scripts as well; tell me which ones you run frequently and I'll add it.
