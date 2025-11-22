@@ -18,9 +18,20 @@ function Open-SerialPort {
     try {
         if (-not $global:__cancelSub) {
             $global:stopRequested = $false
-            $global:__cancelSub = Register-ObjectEvent -InputObject [Console] -EventName 'CancelKeyPress' -Action {
-                $global:stopRequested = $true
+            # Try to register a CancelKeyPress handler; suppress errors on hosts that don't support it
+            $sub = $null
+            try {
+                $sub = Register-ObjectEvent -InputObject [Console] -EventName 'CancelKeyPress' -Action {
+                    $global:stopRequested = $true
                     Write-Host "Ctrl+C pressed - stopping..."
+                } -ErrorAction SilentlyContinue
+            } catch {
+                $sub = $null
+            }
+            if ($sub) {
+                $global:__cancelSub = $sub
+            } else {
+                Write-Host "Note: Ctrl+C handler registration not supported in this host; use Ctrl+C to terminate the script." -ForegroundColor Yellow
             }
         }
     } catch {
