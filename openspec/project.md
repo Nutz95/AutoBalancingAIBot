@@ -95,17 +95,31 @@ No need for complicated workflow, simple commits will do fine. No need for branc
 - A main power switch and a fuse are placed between the LIPO battery and the XH-M609 undervoltage protection board.
 - The ESP32S3 is connected through SPI to the BMI088 Gyro/Accelerometer board.
 - The SPI pins from the ESP32S3 used to drive the BMI088 board are:
-  
-  - GPIO10 : FSPICS0 (chip select1)
-  - GPIO11 : FSPID (dual SPI) (MOSI)
-  - GPIO12 : FSPICLK (clock)
-  - GPIO13 : FSPIQ (quad SPI)(MISO)
-  - GPI14 : GPIO14 (chip select2)
+The SPI pins from the ESP32S3 used to drive the BMI088 board are:
+
+- `GPIO4` : GPIO4 — default chip-select for the accelerometer
+- `GPIO11` : FSPID (dual SPI) — MOSI
+- `GPIO12` : FSPICLK — SPI clock
+- `GPIO13` : FSPIQ — MISO
+- `GPIO14` : default chip-select for the Gyroscope (chip select 2)
+
+### BMI088 driver notes (runtime/debug)
+
+- The project includes recent fixes to the BMI088 driver discovered during hardware testing:
+  - SPI helper now performs a dummy transfer before reading register data to match the 3rd-party library semantics.
+  - Per-chip SPI modes are used: accelerometer accesses use `SPI_MODE0`, gyroscope accesses use `SPI_MODE3`.
+  - WHO_AM_I probes are emitted at startup to confirm mapping; expected IDs are `0x1E` (accel) and `0x0F` (gyro). Some modules may report an alternative gyro ID (observed `0x22`); the driver prints observed IDs to help triage wiring or module differences.
+
+- Debug / validation steps:
+  - Build & upload: `pio run --target clean; pio run --target upload`.
+  - Monitor serial at `921600` baud: `pio device monitor --baud 921600`.
+  - On startup the driver prints WHO_AM_I probe results and a short raw-register dump; verify the accel/gyro mapping and that gravity (~9.8 m/s²) appears on the expected axis when you tilt the robot.
+
 
   Command list:
   For ESP Project use base folder /ESP32/ folder:
 - build ESP : "pio run".
-- Build and Upload ESP project : "pio run --target upload"
+- Build and Upload ESP project : "pio run --target clean; pio run --target upload"
 - Upload project after build: "pio --target upload"
 - Monitor device through serial: "pio device monitor"
 
