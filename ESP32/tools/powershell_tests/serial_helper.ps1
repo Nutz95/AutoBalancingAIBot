@@ -20,7 +20,7 @@ function Open-SerialPort {
             $global:stopRequested = $false
             $global:__cancelSub = Register-ObjectEvent -InputObject [Console] -EventName 'CancelKeyPress' -Action {
                 $global:stopRequested = $true
-                Write-Host "Ctrl+C pressed — stopping..."
+                    Write-Host "Ctrl+C pressed - stopping..."
             }
         }
     } catch {
@@ -66,7 +66,7 @@ function Read-AllAvailable {
                 $entry = $ts + ' RX: ' + $line
                 $entry | Out-File -FilePath $logFile -Append -Encoding utf8
                 Write-Host $line
-                $acc += $line + "`n"
+                $acc += "$line`n"
             }
         } catch [System.TimeoutException] {
             # ReadLine timed out -- continue until overall deadline or stop
