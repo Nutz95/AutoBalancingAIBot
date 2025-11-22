@@ -6,13 +6,23 @@ This change corrects the default chip-select pin assignments for the BMI088 sens
 ## Motivation
 Users reported that accelerometer values corresponded to gyroscope outputs and vice-versa. The root cause is that the default CS pins were inverted. Correcting the defaults avoids misconfiguration for users relying on the scaffolded values.
 
+## Why
+Correct default configuration values reduce user confusion and prevent mis-wiring issues at first-run. During hardware testing we also discovered small SPI helper issues (missing dummy read and per-chip SPI mode usage) that caused intermittent WHO_AM_I misreads; documenting and applying those fixes improves robustness.
+
+## What Changes
+- Update `ESP32/include/BMI088Config.h` defaults for `accel_cs_pin` and `gyro_cs_pin`.
+- Apply small driver fixes: ensure dummy SPI transfer on reads, use `SPI_MODE0` for accel and `SPI_MODE3` for gyro, add WHO_AM_I probes and concise runtime diagnostics.
+- Update OpenSpec deltas and project documentation to reflect the change and provide validation steps.
+
 ## Scope
+
 - Update `ESP32/include/BMI088Config.h` to set `accel_cs_pin = 4` and `gyro_cs_pin = 14`.
 - Add OpenSpec change documents under `openspec/changes/swap-bmi088-cs-pins/` describing the requirement delta and tasks.
- - Apply small driver fixes discovered during debugging:
-	 - Ensure SPI helper performs a dummy transfer before reading registers (matches library semantics).
-	 - Use correct SPI modes for each chip (ACCEL: `SPI_MODE0`, GYRO: `SPI_MODE3`).
-	 - Add WHO_AM_I probes and concise diagnostics to confirm mapping at runtime.
+
+- Apply small driver fixes discovered during debugging:
+  - Ensure SPI helper performs a dummy transfer before reading registers (matches library semantics).
+  - Use correct SPI modes for each chip (ACCEL: `SPI_MODE0`, GYRO: `SPI_MODE3`).
+  - Add WHO_AM_I probes and concise diagnostics to confirm mapping at runtime.
 
 ## Acceptance criteria
 - The code default values are updated and build cleanly.
