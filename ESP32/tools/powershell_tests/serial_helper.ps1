@@ -19,6 +19,8 @@ function Write-LineAndLog {
     $entry = "$ts TX: $line"
     $entry | Out-File -FilePath $logFile -Append -Encoding utf8
     $sp.WriteLine($line)
+    # also echo the transmitted line to console for visibility
+    Write-Host "TX: $line"
 }
 
 function Read-AllAvailable {
@@ -26,16 +28,21 @@ function Read-AllAvailable {
     $end = (Get-Date).AddMilliseconds($timeoutMs)
     $acc = ""
     while((Get-Date) -lt $end) {
-        Start-Sleep -Milliseconds 50
         try {
-            $s = $sp.ReadExisting()
-            if ($s -and $s.Length -gt 0) {
-                $acc += $s
+            # Attempt to read one line (blocks until ReadTimeout)
+            $line = $sp.ReadLine()
+            if ($line -ne $null -and $line.Length -gt 0) {
                 $ts = (Get-Date).ToString('o')
-                ($ts + ' RX: ' + $s) | Out-File -FilePath $logFile -Append -Encoding utf8
+                $entry = $ts + ' RX: ' + $line
+                $entry | Out-File -FilePath $logFile -Append -Encoding utf8
+                Write-Host $line
+                $acc += $line + "`n"
             }
+        } catch [System.TimeoutException] {
+            # ReadLine timed out -- continue until overall deadline
         } catch {
-            # ignore read timeout
+            # Other serial errors: break out
+            break
         }
     }
     return $acc
