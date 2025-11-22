@@ -1,7 +1,7 @@
 // BMI088Driver.h
 #pragma once
 
-#include "BMI088Config.h"
+#include "../config/BMI088Config.h"
 #include <stdint.h>
 #include <Arduino.h>
 #include <SPI.h>

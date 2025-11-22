@@ -86,7 +86,7 @@ No need for complicated workflow, simple commits will do fine. No need for branc
 - The servos are linked to a URT-1 driver board.
 - The id of the servo for the Right wheel is 7.
 - The id of the servo for the Left Wheel is 8.
-- The RX (port U0RX-GPIO44)/TX (port U0TX-GPIO43) pins configured at 1000000 baud.
+- The RX/TX pins used for the SCServo bus are configured by default as: `S_RXD=GPIO18`, `S_TXD=GPIO19` and run at 1000000 baud.
 - These pins will be connected to the TX/RX pins of the URT-1 driver board configured as 3.3V level.
 - The servos will be connected in series and linked to the Driver board G/V1/S pins.
 - The servos will be powered with 12V directly from a LIPO 3S 12V 2200mAh battery.

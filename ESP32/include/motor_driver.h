@@ -1,0 +1,29 @@
+// motor_driver.h
+#pragma once
+
+#include <stdint.h>
+
+namespace abbot {
+namespace motor {
+
+// Initialize motor driver (called at boot). Safe to call multiple times.
+void initMotorDriver();
+
+// Enable/disable motors (disable = safe state; default at boot = disabled)
+void enableMotors();
+void disableMotors();
+bool areMotorsEnabled();
+
+// Send a normalized motor command in range [-1.0, +1.0]
+// `id` must be a motor ID (e.g., LEFT_MOTOR_ID / RIGHT_MOTOR_ID)
+void setMotorCommand(int id, float command);
+
+// Read encoder / position feedback. Returns an integer position or 0 if not available.
+int32_t readEncoder(int id);
+
+// Process a single-line serial command for motor driver. Returns true if the
+// command was recognized and handled.
+bool processSerialCommand(const String &line);
+
+} // namespace motor
+} // namespace abbot

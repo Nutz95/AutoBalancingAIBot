@@ -33,3 +33,18 @@ The system SHALL provide correct default chip-select pin assignments for the BMI
 - Some vendor modules may return an alternative gyro ID (observed `0x22` in a module); the runtime diagnostics report observed IDs to help triage.
 - The driver uses `SPI_MODE0` for accel accesses and `SPI_MODE3` for gyro accesses, and performs a dummy SPI transfer before reading registers to match library semantics.
 
+### Requirement: BMI088 calibration - simple mode
+
+The system SHALL provide a simple IMU calibration routine which:
+
+- Computes and stores a `gyro_bias[3]` using a configurable number of samples while the device is stationary.
+- Computes and stores an `accel_offset[3]` for the tested static position (single-position calibration).
+- Persists calibration parameters in non-volatile storage and reapplies them at boot.
+- Provides a minimal serial UI to start calibration and dump/reset parameters.
+
+#### Scenario: Run quick gyro calibration
+
+- **GIVEN** the device is powered and immobile
+- **WHEN** the operator issues `CALIB START GYRO` over serial
+- **THEN** the device samples the gyro, computes `gyro_bias`, stores it and reports `CALIB DONE` with values
+

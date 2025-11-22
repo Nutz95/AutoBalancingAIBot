@@ -39,6 +39,10 @@ Ce fichier liste les tâches pratiques, leur ordre recommandé, les critères d'
   - Fichier: `ESP32/src/imu_calibration.cpp` (nouveau)
   - Action: calculer bias gyro (N=500..2000 échantillons immobiles) et offsets accel; stocker en flash/EEPROM.
   - Critère: dérive gyro à repos < quelques deg/s; accel statique ≈ ±9.8 m/s² après offset.
+  - Statut: ✅ *Implémenté & validé*
+    - Les routines de calibration sont dans `ESP32/src/imu_calibration.cpp` et `ESP32/include/imu_calibration.h`.
+    - Les valeurs sont persistées en NVS et rechargées au démarrage (`CALIB DUMP` affiche les valeurs chargées).
+    - Critère: dérive gyro à repos < quelques deg/s; accel statique ≈ ±9.8 m/s² après offset.
 
 - **Axis remap layer**
   - Fichier: `ESP32/include/BMI088Config.h` (ajout de flags `remap_x`, `remap_y`, `remap_z`, `swap_xy`, etc.)
@@ -86,6 +90,16 @@ Ce fichier liste les tâches pratiques, leur ordre recommandé, les critères d'
   - Mettre à jour `openspec/project.md`, ajouter `ESP32/README_TUNING.md` et instructions de test.
 
 ---
+
+## Delta: immediate next steps (post-calibration)
+
+- Implementer le squelette `motor_driver` (priorité haute)
+  - Fichiers: `ESP32/src/motor_driver.cpp`, `ESP32/include/motor_driver.h`
+  - But: initialiser la stack SCServo, exposer `enableMotors()`, `disableMotors()`, `setMotorCommand(id,cmd)` et `readEncoder(id)`.
+  - Critère d'acceptation: compilation sans erreur, fonctions stub opérationnelles (logs) et sécurité : `disableMotors()` coupe tout output moteur.
+
+- Raison: la calibration est faite et validée — la suite logique est d'ajouter le driver moteur pour pouvoir démarrer des tests banc et d'intégrer la sécurité matérielle.
+
 
 ## Commandes utiles (PowerShell, depuis `ESP32`)
 

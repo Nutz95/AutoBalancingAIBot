@@ -1,6 +1,6 @@
 #include <Arduino.h>
 // Include BMI088 driver and IMU tasks
-#include "BMI088Config.h"
+#include "../config/BMI088Config.h"
 #include "BMI088Driver.h"
 #include "IMUTasks.h"
 #include "imu_calibration.h"
