@@ -30,16 +30,21 @@ static void imuProducerTask(void *pvParameters) {
 static void imuConsumerTask(void *pvParameters) {
   (void)pvParameters;
   IMUSample sample;
+  uint32_t last_print_ms = 0;
   for (;;) {
     if (imuQueue && xQueueReceive(imuQueue, &sample, portMAX_DELAY) == pdTRUE) {
-      // For now: log sample to Serial for testing
-      Serial.print("IMU ts_ms="); Serial.print(sample.ts_ms);
-      Serial.print(" ax="); Serial.print(sample.ax, 6);
-      Serial.print(" ay="); Serial.print(sample.ay, 6);
-      Serial.print(" az="); Serial.print(sample.az, 6);
-      Serial.print(" gx="); Serial.print(sample.gx, 6);
-      Serial.print(" gy="); Serial.print(sample.gy, 6);
-      Serial.print(" gz="); Serial.println(sample.gz, 6);
+      // Throttle logging to once every 100 ms to avoid flooding the serial
+      uint32_t now = millis();
+      if ((uint32_t)(now - last_print_ms) >= 100u) {
+        last_print_ms = now;
+        Serial.print("IMU ts_ms="); Serial.print(sample.ts_ms);
+        Serial.print(" ax="); Serial.print(sample.ax, 6);
+        Serial.print(" ay="); Serial.print(sample.ay, 6);
+        Serial.print(" az="); Serial.print(sample.az, 6);
+        Serial.print(" gx="); Serial.print(sample.gx, 6);
+        Serial.print(" gy="); Serial.print(sample.gy, 6);
+        Serial.print(" gz="); Serial.println(sample.gz, 6);
+      }
     }
   }
 }
