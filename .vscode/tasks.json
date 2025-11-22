@@ -5,27 +5,63 @@
       "label": "ESP32: Build",
       "type": "shell",
       "command": "pio",
-      "args": ["run"],
-      "options": { "cwd": "${workspaceFolder}/ESP32" },
-      "group": { "kind": "build", "isDefault": true },
-      "presentation": { "panel": "shared", "reveal": "always", "clear": false }
+      "args": [
+        "run"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/ESP32"
+      },
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      },
+      "presentation": {
+        "panel": "shared",
+        "reveal": "always",
+        "clear": false
+      },
+      "problemMatcher": []
     },
     {
       "label": "ESP32: Upload",
       "type": "shell",
       "command": "pio",
-      "args": ["run", "--target", "upload"],
-      "options": { "cwd": "${workspaceFolder}/ESP32" },
-      "presentation": { "panel": "shared", "reveal": "always", "clear": false }
+      "args": [
+        "run",
+        "--target",
+        "upload"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/ESP32"
+      },
+      "presentation": {
+        "panel": "new",
+        "reveal": "always",
+        "focus": true,
+        "clear": false
+      },
+      "problemMatcher": []
     },
     {
       "label": "ESP32: Serial Monitor",
       "type": "shell",
       "command": "pio",
-      "args": ["device", "monitor", "--baud", "921600"],
-      "options": { "cwd": "${workspaceFolder}/ESP32" },
+      "args": [
+        "device",
+        "monitor",
+        "--baud",
+        "115200"
+      ],
+      "options": {
+        "cwd": "${workspaceFolder}/ESP32"
+      },
       "isBackground": true,
-      "presentation": { "panel": "dedicated", "reveal": "always", "focus": true },
+      "presentation": {
+        "panel": "new",
+        "reveal": "always",
+        "focus": true,
+        "clear": false
+      },
       "problemMatcher": []
     }
   ]
