@@ -8,7 +8,7 @@ static abbot::BMI088Config bmi_cfg;
 static abbot::BMI088Driver bmi_driver(bmi_cfg);
 
 void setup() {
-        Serial.begin(115200);
+        Serial.begin(921600);
         // initialize BMI088 driver
         bool ok = bmi_driver.begin();
         if (!ok) {
