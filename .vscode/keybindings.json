@@ -1,0 +1,17 @@
+[
+  {
+    "key": "ctrl+alt+b",
+    "command": "workbench.action.tasks.runTask",
+    "args": "ESP32: Build"
+  },
+  {
+    "key": "ctrl+alt+u",
+    "command": "workbench.action.tasks.runTask",
+    "args": "ESP32: Upload"
+  },
+  {
+    "key": "ctrl+alt+m",
+    "command": "workbench.action.tasks.runTask",
+    "args": "ESP32: Serial Monitor"
+  }
+]
