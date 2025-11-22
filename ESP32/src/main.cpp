@@ -3,12 +3,27 @@
 #include "BMI088Config.h"
 #include "BMI088Driver.h"
 #include "IMUTasks.h"
+#include "imu_calibration.h"
 
 static abbot::BMI088Config bmi_cfg; 
 static abbot::BMI088Driver bmi_driver(bmi_cfg);
 
 void setup() {
         Serial.begin(921600);
+        // Print calibration values if present
+        {
+            abbot::imu_cal::Calibration cal;
+            if (abbot::imu_cal::loadCalibration(cal)) {
+                Serial.print("Calibration loaded: gyro_bias=");
+                Serial.print(cal.gyro_bias[0], 6); Serial.print(','); Serial.print(cal.gyro_bias[1], 6); Serial.print(','); Serial.println(cal.gyro_bias[2], 6);
+                Serial.print("Calibration loaded: accel_offset=");
+                Serial.print(cal.accel_offset[0], 6); Serial.print(','); Serial.print(cal.accel_offset[1], 6); Serial.print(','); Serial.println(cal.accel_offset[2], 6);
+                // Install into the imu_cal module so `CALIB DUMP` reports these values
+                abbot::imu_cal::installCalibration(cal);
+            } else {
+                Serial.println("No IMU calibration found");
+            }
+        }
         // initialize BMI088 driver
         bool ok = bmi_driver.begin();
         if (!ok) {
@@ -27,6 +42,5 @@ void setup() {
 
 void loop() {
         // Main loop can perform other duties. Keep alive message for demo.
-        Serial.println("Hello ESP32-S3!");
         delay(1000);
 }

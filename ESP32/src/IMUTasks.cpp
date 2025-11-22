@@ -1,6 +1,7 @@
 // IMUTasks.cpp
 #include "IMUTasks.h"
 #include "BMI088Driver.h"
+#include "imu_calibration.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
@@ -10,6 +11,10 @@ namespace abbot {
 
 static QueueHandle_t imuQueue = nullptr;
 static BMI088Driver *g_driver = nullptr;
+// Optional calibration queue (single-slot). When non-null the producer will also
+// write each new sample into this queue (xQueueOverwrite) so a calibration routine
+// can block-read exact samples without talking to the driver directly.
+static QueueHandle_t calibQueue = nullptr;
 
 static void imuProducerTask(void *pvParameters) {
   BMI088Driver *driver = reinterpret_cast<BMI088Driver*>(pvParameters);
@@ -20,6 +25,10 @@ static void imuProducerTask(void *pvParameters) {
       // Single-slot overwrite keeps only the latest sample
       if (imuQueue) {
         xQueueOverwrite(imuQueue, &sample);
+      }
+      // If a calibration queue is attached, push sample there as well (non-blocking)
+      if (calibQueue) {
+        xQueueOverwrite(calibQueue, &sample);
       }
     }
     // Short delay to yield; real timing enforced by driver->read
@@ -33,9 +42,12 @@ static void imuConsumerTask(void *pvParameters) {
   uint32_t last_print_ms = 0;
   for (;;) {
     if (imuQueue && xQueueReceive(imuQueue, &sample, portMAX_DELAY) == pdTRUE) {
-      // Throttle logging to once every 100 ms to avoid flooding the serial
+      #if defined(ENABLE_DEBUG_LOGS)
+      // Suppress debug logs while calibration runs
+      if (abbot::imu_cal::isCalibrating()) continue;
+      // Throttle logging to once every 1000 ms to avoid flooding the serial
       uint32_t now = millis();
-      if ((uint32_t)(now - last_print_ms) >= 100u) {
+      if ((uint32_t)(now - last_print_ms) >= 1000u) {
         last_print_ms = now;
         Serial.print("IMU ts_ms="); Serial.print(sample.ts_ms);
         Serial.print(" ax="); Serial.print(sample.ax, 6);
@@ -45,6 +57,7 @@ static void imuConsumerTask(void *pvParameters) {
         Serial.print(" gy="); Serial.print(sample.gy, 6);
         Serial.print(" gz="); Serial.println(sample.gz, 6);
       }
+      #endif
     }
   }
 }
@@ -62,7 +75,18 @@ bool startIMUTasks(BMI088Driver *driver) {
   // Create consumer task (lower priority)
   BaseType_t r2 = xTaskCreate(imuConsumerTask, "IMUConsumer", 4096, nullptr, configMAX_PRIORITIES - 3, nullptr);
 
-  return (r1 == pdPASS) && (r2 == pdPASS);
+  // Create serial command task for calibration UI (low priority)
+  BaseType_t r3 = xTaskCreate(abbot::imu_cal::serialTaskEntry, "IMUSerial", 4096, driver, configMAX_PRIORITIES - 4, nullptr);
+
+  return (r1 == pdPASS) && (r2 == pdPASS) && (r3 == pdPASS);
+}
+
+void attachCalibrationQueue(QueueHandle_t q) {
+  calibQueue = q;
+}
+
+void detachCalibrationQueue() {
+  calibQueue = nullptr;
 }
 
 } // namespace abbot

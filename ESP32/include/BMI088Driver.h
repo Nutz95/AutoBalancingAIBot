@@ -22,6 +22,8 @@ public:
   bool begin();
   // read latest sample from sensor (returns true if sample read)
   bool read(IMUSample &out);
+  // raw immediate read (no timing guard, no calibration applied)
+  bool readRaw(IMUSample &out);
 
 private:
   BMI088Config cfg_;
