@@ -5,8 +5,9 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <freertos/queue.h>
-#include "IMUTasks.h"
+#include "SystemTasks.h"
 #include "motor_control.h"
+#include "motor_driver.h"
 
 namespace abbot {
 namespace imu_cal {
@@ -268,65 +269,7 @@ void installCalibration(const Calibration &cal) {
   g_cal = cal;
 }
 
-// Serial command processing
-static void processSerialOnce(class abbot::BMI088Driver *driver) {
-  if (!driver) return;
-  if (!Serial || Serial.available() == 0) return;
-  String line = Serial.readStringUntil('\n');
-  line.trim();
-  if (line.length() == 0) return;
-  // tokenise command using strtok on an uppercase copy
-  String up = line;
-  up.toUpperCase();
-  char buf[128];
-  up.toCharArray(buf, sizeof(buf));
-  char *tk = strtok(buf, " \t\r\n");
-  if (!tk) return;
-  if (strcmp(tk, "CALIB") == 0) {
-    char *t2 = strtok(NULL, " \t\r\n");
-    if (!t2) return;
-    if (strcmp(t2, "START") == 0) {
-      char *what = strtok(NULL, " \t\r\n");
-      if (!what) return;
-      int sampleCount = 2000;
-      char *nstr = strtok(NULL, " \t\r\n");
-      if (nstr) {
-        int v = atoi(nstr);
-        if (v > 0) sampleCount = v;
-      }
-      if (strcmp(what, "GYRO") == 0) {
-        if (!g_is_calibrating) startGyroCalibration(*driver, sampleCount);
-        return;
-      } else if (strcmp(what, "ACCEL") == 0) {
-        if (!g_is_calibrating) startAccelCalibration(*driver, sampleCount);
-        return;
-      }
-    } else if (strcmp(t2, "DUMP") == 0) {
-      dumpCalibration();
-      return;
-    } else if (strcmp(t2, "RESET") == 0) {
-      resetCalibration();
-      return;
-    }
-  }
-  if (line.equalsIgnoreCase("CALIB DUMP")) {
-    dumpCalibration();
-    return;
-  }
-  if (line.equalsIgnoreCase("CALIB RESET")) {
-    resetCalibration();
-    return;
-  }
-  Serial.print("Unknown command: "); Serial.println(line);
-}
-
-void serialTaskEntry(void *pvParameters) {
-  abbot::BMI088Driver *driver = reinterpret_cast<abbot::BMI088Driver*>(pvParameters);
-  for (;;) {
-    processSerialOnce(driver);
-    vTaskDelay(pdMS_TO_TICKS(100));
-  }
-}
+// Serial command processing was moved to serial_commands.cpp
 
 } // namespace imu_cal
 } // namespace abbot

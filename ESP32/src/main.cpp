@@ -2,7 +2,7 @@
 // Include BMI088 driver and IMU tasks
 #include "../config/BMI088Config.h"
 #include "BMI088Driver.h"
-#include "IMUTasks.h"
+#include "SystemTasks.h"
 #include "imu_calibration.h"
 
 static abbot::BMI088Config bmi_cfg; 

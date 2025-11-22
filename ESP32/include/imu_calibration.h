@@ -38,8 +38,6 @@ void resetCalibration();
 // State
 bool isCalibrating();
 
-// Serial task entry (FreeRTOS task) -- pass a pointer to BMI088Driver as pv
-void serialTaskEntry(void *pvParameters);
 
 } // namespace imu_cal
 } // namespace abbot
