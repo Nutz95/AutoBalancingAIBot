@@ -72,6 +72,7 @@ static void processSerialOnce(class abbot::BMI088Driver *driver) {
     Serial.println("      Normalized values are mapped to servo units using SC_SERVO_MAX_SPEED (default 7000). Use small values first (e.g. 0.05)");
     Serial.println("  MOTOR SET <LEFT|RIGHT|ID> RAW <value> - send raw signed servo speed units (bypasses normalization)");
     Serial.println("      RAW is useful for precise tuning (e.g. RAW 2000). Use short pulses and be careful.");
+    Serial.println("  MOTOR PARAMS <LEFT|RIGHT|ID> - read and print servo EEPROM/SRAM parameters and present status");
     Serial.println("  HELP or ?              - print this help text");
     return;
   }

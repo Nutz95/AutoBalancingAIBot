@@ -231,6 +231,60 @@ bool processSerialCommand(const String &line) {
     Serial.print("motor_driver: encoder id="); Serial.print(id); Serial.print(" val="); Serial.println(val);
     return true;
   }
+  if (strcmp(cmd, "PARAMS") == 0) {
+    char *arg = strtok(NULL, " \t\r\n");
+    if (!arg) return false;
+    int id = -1;
+    if (strcmp(arg, "LEFT") == 0) id = LEFT_MOTOR_ID;
+    else if (strcmp(arg, "RIGHT") == 0) id = RIGHT_MOTOR_ID;
+    else id = atoi(arg);
+#if MOTOR_DRIVER_REAL
+    if (!s_servoInitialized) {
+      Serial.println("motor_driver: PARAMS requested but servo bus not initialized");
+      return true;
+    }
+    Serial.print("motor_driver: params id="); Serial.println(id);
+    // Read a selection of EEPROM/SRAM registers defined by SMS_STS
+    int model = s_servoBus.readWord(id, SMS_STS_MODEL_L);
+    Serial.print("  model=0x"); Serial.println(model, HEX);
+    int vid = s_servoBus.readByte(id, SMS_STS_ID);
+    Serial.print("  id="); Serial.println(vid);
+    int min_angle = s_servoBus.readWord(id, SMS_STS_MIN_ANGLE_LIMIT_L);
+    int max_angle = s_servoBus.readWord(id, SMS_STS_MAX_ANGLE_LIMIT_L);
+    Serial.print("  min_angle="); Serial.print(min_angle); Serial.print(" max_angle="); Serial.println(max_angle);
+    int cw_dead = s_servoBus.readByte(id, SMS_STS_CW_DEAD);
+    int ccw_dead = s_servoBus.readByte(id, SMS_STS_CCW_DEAD);
+    Serial.print("  cw_dead="); Serial.print(cw_dead); Serial.print(" ccw_dead="); Serial.println(ccw_dead);
+    int ofs = s_servoBus.readWord(id, SMS_STS_OFS_L);
+    Serial.print("  offset="); Serial.println(ofs);
+    int mode = s_servoBus.readByte(id, SMS_STS_MODE);
+    Serial.print("  mode="); Serial.println(mode);
+    int torque_en = s_servoBus.readByte(id, SMS_STS_TORQUE_ENABLE);
+    Serial.print("  torque_enable="); Serial.println(torque_en);
+    int acc = s_servoBus.readByte(id, SMS_STS_ACC);
+    Serial.print("  acc="); Serial.println(acc);
+    int torque_limit = s_servoBus.readWord(id, SMS_STS_TORQUE_LIMIT_L);
+    Serial.print("  torque_limit="); Serial.println(torque_limit);
+    int lock = s_servoBus.readByte(id, SMS_STS_LOCK);
+    Serial.print("  lock="); Serial.println(lock);
+    // Present status
+    int pos = s_servoBus.readWord(id, SMS_STS_PRESENT_POSITION_L);
+    int speed = s_servoBus.readWord(id, SMS_STS_PRESENT_SPEED_L);
+    int load = s_servoBus.readWord(id, SMS_STS_PRESENT_LOAD_L);
+    int volt = s_servoBus.readByte(id, SMS_STS_PRESENT_VOLTAGE);
+    int temp = s_servoBus.readByte(id, SMS_STS_PRESENT_TEMPERATURE);
+    int moving = s_servoBus.readByte(id, SMS_STS_MOVING);
+    int current = s_servoBus.readWord(id, SMS_STS_PRESENT_CURRENT_L);
+    Serial.print("  present_pos="); Serial.print(pos); Serial.print(" speed="); Serial.print(speed);
+    Serial.print(" load="); Serial.print(load); Serial.print(" volt="); Serial.print(volt);
+    Serial.print(" temp="); Serial.print(temp); Serial.print(" moving="); Serial.print(moving);
+    Serial.print(" current="); Serial.println(current);
+    return true;
+#else
+    Serial.println("motor_driver: PARAMS only supported in real mode");
+    return true;
+#endif
+  }
   if (strcmp(cmd, "DUMP") == 0) {
     Serial.print("motor_driver: config LEFT_ID="); Serial.print(LEFT_MOTOR_ID); Serial.print(" RIGHT_ID="); Serial.println(RIGHT_MOTOR_ID);
     Serial.print("motor_driver: pins S_TXD="); Serial.print(SC_SERVO_TX_PIN); Serial.print(" S_RXD="); Serial.println(SC_SERVO_RX_PIN);
