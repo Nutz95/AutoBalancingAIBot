@@ -56,6 +56,26 @@ static void processSerialOnce(class abbot::BMI088Driver *driver) {
     }
   }
 
+  // HELP command: print list of available serial commands
+  if (up == "HELP" || up == "?" || up.startsWith("HELP ")) {
+    Serial.println("Available commands:");
+    Serial.println("  CALIB START GYRO [N]   - start gyro calibration (N samples, default 2000)");
+    Serial.println("  CALIB START ACCEL [N]  - start accel calibration (N samples, default 2000)");
+    Serial.println("  CALIB DUMP             - show current calibration values (gyro_bias, accel_offset)");
+    Serial.println("  CALIB RESET            - reset stored calibration (clear NVS)");
+    Serial.println("  MOTOR ENABLE           - enable motors (initializes servo bus on-demand and enables torque)");
+    Serial.println("  MOTOR DISABLE          - disable motors (torque off)");
+    Serial.println("  MOTOR STATUS           - print motor enabled state and IDs");
+    Serial.println("  MOTOR DUMP             - dump motor config (pins, IDs)");
+    Serial.println("  MOTOR READ <LEFT|RIGHT|ID>     - read encoder/position from servo");
+    Serial.println("  MOTOR SET <LEFT|RIGHT|ID> <v>  - set motor command normalized in [-1.0..1.0]");
+    Serial.println("      Normalized values are mapped to servo units using SC_SERVO_MAX_SPEED (default 7000). Use small values first (e.g. 0.05)");
+    Serial.println("  MOTOR SET <LEFT|RIGHT|ID> RAW <value> - send raw signed servo speed units (bypasses normalization)");
+    Serial.println("      RAW is useful for precise tuning (e.g. RAW 2000). Use short pulses and be careful.");
+    Serial.println("  HELP or ?              - print this help text");
+    return;
+  }
+
   // Forward to motor driver processor
   if (abbot::motor::processSerialCommand(line)) return;
 

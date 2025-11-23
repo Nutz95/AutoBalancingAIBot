@@ -5,7 +5,7 @@
 param(
   [string]$PortName = 'COM11',
   [int]$BaudRate = 921600,
-  [int]$Samples = 500,
+  [int]$Samples = 2000,
   [int]$TimeoutSec = 60
 )
 
