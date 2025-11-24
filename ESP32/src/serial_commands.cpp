@@ -10,7 +10,7 @@
 namespace abbot {
 namespace serialcmds {
 
-static void processSerialOnce(class abbot::BMI088Driver *driver) {
+void processSerialOnce(class abbot::BMI088Driver *driver) {
   if (!driver) return;
   if (!Serial || Serial.available() == 0) return;
   String line = Serial.readStringUntil('\n');
