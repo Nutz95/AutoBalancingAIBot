@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <string>
 #include <limits>
+#include "../config/FusionConfig.h"
 #include "../include/imu_fusion.h"
 
 using namespace abbot::fusion;

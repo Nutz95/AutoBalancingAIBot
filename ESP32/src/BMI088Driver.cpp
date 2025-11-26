@@ -1,6 +1,7 @@
 // BMI088Driver.cpp
 #include "BMI088Driver.h"
 #include "imu_calibration.h"
+#include "logging.h"
 
 namespace abbot {
 
@@ -10,19 +11,18 @@ BMI088Driver::BMI088Driver(const BMI088Config &cfg) : cfg_(cfg), imu_(SPI, cfg.a
 bool BMI088Driver::begin() {
   // Initialize SPI and sensor
   SPI.begin();
-  Serial.print("BMI088: accel_cs="); Serial.print(cfg_.accel_cs_pin);
-  Serial.print(" gyro_cs="); Serial.println(cfg_.gyro_cs_pin);
+  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI088: accel_cs=%d gyro_cs=%d\n", cfg_.accel_cs_pin, cfg_.gyro_cs_pin);
   int rc = imu_.begin();
   // The underlying library returns >0 on success (1), and negative codes on failures.
   if (rc <= 0) {
-    Serial.print("BMI088: imu_.begin() returned rc="); Serial.println(rc);
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI088: imu_.begin() returned rc=%d\n", rc);
     // Provide a hint about common failure ranges from the underlying library
     if (rc < 0 && rc > -1000) {
-      Serial.println("BMI088: accel init failed (check accel CS pin/wiring)");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088: accel init failed (check accel CS pin/wiring)");
     } else if (rc <= -1000 && rc > -2000) {
-      Serial.println("BMI088: gyro init failed (check gyro CS pin/wiring)");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088: gyro init failed (check gyro CS pin/wiring)");
     } else {
-      Serial.println("BMI088: feature/config upload or post-init failed");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088: feature/config upload or post-init failed");
     }
     return false;
   }
@@ -35,10 +35,17 @@ bool BMI088Driver::begin() {
 bool BMI088Driver::read(IMUSample &out) {
   unsigned long now = millis();
   unsigned long interval = cfg_.sampling_interval_ms();
-  if (interval == 0) return false;
-  if ((now - last_read_ms_) < interval) return false; // not time yet
+  if (interval == 0) {
+    return false;
+  }
+
+  if ((now - last_read_ms_) < interval) {
+    return false; // not time yet
+  }
   // Use the raw read helper to avoid duplicating sensor access logic
-  if (!readRaw(out)) return false;
+  if (!readRaw(out)) {
+    return false;
+  }
   out.ts_ms = now;
   last_read_ms_ = now;
   // apply calibration if available

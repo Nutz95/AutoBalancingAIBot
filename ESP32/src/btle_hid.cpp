@@ -1,15 +1,19 @@
 // Clean NimBLE HID gamepad reader
 #include "btle_hid.h"
+#include "SystemTasks.h"
 #include <NimBLEDevice.h>
 #include "motor_driver.h" // auto-enable motors when controller active
 #include "../config/motor_config.h" // LEFT_MOTOR_ID / RIGHT_MOTOR_ID
+#include "logging.h"
+#include "btle_callbacks.h"
 
-static NimBLEClient* g_client = nullptr;
-static NimBLEAdvertisedDevice* g_targetDevice = nullptr;
-static volatile bool g_connected = false;
-
-static void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
-  if(length < 4) return;
+NimBLEClient* g_client = nullptr;
+NimBLEAdvertisedDevice* g_targetDevice = nullptr;
+volatile bool g_connected = false;
+void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+  if (length < 4) {
+    return;
+  }
   
   // Xbox controller HID format (16 bytes):
   // Bytes 0-1: Left stick X (little-endian, unsigned 16-bit)
@@ -57,168 +61,114 @@ static void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, si
   if(rightMotor < -1.0f) rightMotor = -1.0f;
   
   // Auto-enable motors on first meaningful stick movement
-  if(!abbot::motor::areMotorsEnabled() && (fabs(x) > 0.01f || fabs(y) > 0.01f)) {
-    Serial.println("motor_driver: auto-enable due to controller input");
+  if (!abbot::motor::areMotorsEnabled() && (fabs(x) > 0.01f || fabs(y) > 0.01f)) {
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: auto-enable due to controller input");
     abbot::motor::enableMotors();
   }
 
   // Only print and send if stick moved significantly
   static float lastLeft = 0, lastRight = 0;
-  if(fabs(leftMotor - lastLeft) > 0.05f || fabs(rightMotor - lastRight) > 0.05f) {
-    Serial.print("\n>>> Stick X:"); Serial.print(x, 2);
-    Serial.print(" Y:"); Serial.print(y, 2);
-    Serial.print(" -> L:"); Serial.print(leftMotor, 2);
-    Serial.print(" R:"); Serial.println(rightMotor, 2);
-    
+  if (fabs(leftMotor - lastLeft) > 0.05f || fabs(rightMotor - lastRight) > 0.05f) {
+    LOG_PRINTF(abbot::log::CHANNEL_BLE, "\n>>> Stick X:%.2f Y:%.2f -> L:%.2f R:%.2f\n", x, y, leftMotor, rightMotor);
+
     // Direct motor driver invocation (avoid loopback via Serial)
     if (abbot::motor::areMotorsEnabled()) {
       abbot::motor::setMotorCommand(LEFT_MOTOR_ID, leftMotor);
       abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, rightMotor);
     } else {
-      Serial.println("motor_driver: movement ignored (motors disabled)");
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: movement ignored (motors disabled)");
     }
     // Keep logging for debug
-    Serial.print("MOTOR DBG LEFT "); Serial.println(leftMotor,3);
-    Serial.print("MOTOR DBG RIGHT "); Serial.println(rightMotor,3);
-    
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "MOTOR DBG LEFT %.3f\n", leftMotor);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "MOTOR DBG RIGHT %.3f\n", rightMotor);
+
     lastLeft = leftMotor;
     lastRight = rightMotor;
   }
 }
 
-class ClientCallbacks : public NimBLEClientCallbacks {
-  void onConnect(NimBLEClient* pClient) {
-    g_connected = true;
-    Serial.println(">>> BLE: Connected callback fired");
-    pClient->updateConnParams(12, 24, 0, 60);
-  }
-  
-  void onDisconnect(NimBLEClient* pClient) {
-    g_connected = false;
-    Serial.println(">>> BLE: Disconnected");
-    // Auto-disable motors when controller link is lost
-    if (abbot::motor::areMotorsEnabled()) {
-      Serial.println("motor_driver: auto-disable due to controller disconnect");
-      abbot::motor::disableMotors();
-    }
-  }
-  
-  void onAuthenticationComplete(ble_gap_conn_desc* desc) {
-    Serial.print(">>> AUTH complete - encrypted: ");
-    Serial.println(desc->sec_state.encrypted ? "YES" : "NO");
-    if(desc->sec_state.encrypted) {
-      Serial.println(">>> Link is now encrypted, data should flow!");
-    }
-  }
-  
-  bool onConfirmPIN(uint32_t pin) {
-    Serial.print(">>> Confirm PIN: "); Serial.println(pin);
-    return true;
-  }
-};
-
-class AdvCallbacks : public NimBLEAdvertisedDeviceCallbacks {
-  void onResult(NimBLEAdvertisedDevice* advertisedDevice) {
-    Serial.print("Found: ");
-    Serial.print(advertisedDevice->getName().c_str());
-    Serial.print(" [");
-    Serial.print(advertisedDevice->getAddress().toString().c_str());
-    Serial.print("]");
-    
-    if(advertisedDevice->isAdvertisingService(NimBLEUUID((uint16_t)0x1812))) {
-      Serial.println(" -> HID");
-      g_targetDevice = advertisedDevice;
-      NimBLEDevice::getScan()->stop();
-    } else {
-      Serial.println();
-    }
-  }
-};
-
 void abbot::btle_hid::begin() {
-  Serial.println("\n=== NimBLE HID Scanner ===");
-  
+  LOG_PRINTLN(abbot::log::CHANNEL_BLE, "\n=== NimBLE HID Scanner ===");
+
   NimBLEDevice::init("");
   NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-  
+
   // Configure security for pairing
   NimBLEDevice::setSecurityAuth(true, true, true); // bond, MITM, SC
   NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT); // No PIN needed
-  
-  Serial.println(">>> Security configured: bonding enabled, no PIN");
-  
+
+  LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Security configured: bonding enabled, no PIN");
+
   NimBLEScan* pScan = NimBLEDevice::getScan();
   pScan->setAdvertisedDeviceCallbacks(new AdvCallbacks());
   pScan->setActiveScan(true);
   pScan->setInterval(100);
   pScan->setWindow(99);
-  
-  while(true) {
-    if(!g_connected) {
-      g_targetDevice = nullptr;
-      Serial.println("Scanning for HID devices (10s)...");
-      pScan->start(10, false);
+
+  for (;;) {
+      if (!g_connected) {
+        g_targetDevice = nullptr;
+        LOG_PRINTLN(abbot::log::CHANNEL_BLE, "Scanning for HID devices (10s)...");
       
-      if(g_targetDevice) {
-        Serial.println(">>> Found target, connecting...");
-        
+      pScan->start(10, false);
+
+      if (g_targetDevice) {
+        LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Found target, connecting...");
+
         g_client = NimBLEDevice::createClient();
         g_client->setClientCallbacks(new ClientCallbacks());
         g_client->setConnectTimeout(5);
-        
-        if(g_client->connect(g_targetDevice)) {
-          Serial.println(">>> connect() returned true, discovering services...");
-          
+
+        if (g_client->connect(g_targetDevice)) {
+          LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> connect() returned true, discovering services...");
+
           // Wait a bit for connection to stabilize
           delay(500);
-          
+
           // Initiate pairing/encryption
-          Serial.println(">>> Initiating secure connection...");
+          LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Initiating secure connection...");
           g_client->secureConnection();
           delay(1000); // Wait for pairing to complete
-          
+
           NimBLERemoteService* pService = g_client->getService(NimBLEUUID((uint16_t)0x1812));
-          if(pService) {
-            Serial.println(">>> Found HID service");
-            
+          if (pService) {
+            LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Found HID service");
+
             std::vector<NimBLERemoteCharacteristic*>* pCharacteristics = pService->getCharacteristics(true);
-            Serial.print(">>> Characteristics: "); Serial.println(pCharacteristics->size());
-            
-            for(auto pChar : *pCharacteristics) {
-              Serial.print("  ");
-              Serial.print(pChar->getUUID().toString().c_str());
-              Serial.print(" - R:");
-              Serial.print(pChar->canRead() ? "Y" : "N");
-              Serial.print(" W:");
-              Serial.print(pChar->canWrite() ? "Y" : "N");
-              Serial.print(" N:");
-              Serial.println(pChar->canNotify() ? "Y" : "N");
-              
+            LOG_PRINTF(abbot::log::CHANNEL_BLE, ">>> Characteristics: %u\n", (unsigned)pCharacteristics->size());
+
+            for (auto pChar : *pCharacteristics) {
+              LOG_PRINTF(abbot::log::CHANNEL_BLE, "  %s - R:%s W:%s N:%s\n",
+                         pChar->getUUID().toString().c_str(),
+                         pChar->canRead() ? "Y" : "N",
+                         pChar->canWrite() ? "Y" : "N",
+                         pChar->canNotify() ? "Y" : "N");
+
               // Subscribe to Input Report (0x2A4D) with notify
-              if(pChar->getUUID() == NimBLEUUID((uint16_t)0x2A4D) && pChar->canNotify()) {
-                Serial.println("    -> Subscribing to Input Report...");
-                if(pChar->subscribe(true, notifyCallback)) {
-                  Serial.println("    -> Subscribe SUCCESS!");
+              if (pChar->getUUID() == NimBLEUUID((uint16_t)0x2A4D) && pChar->canNotify()) {
+                LOG_PRINTLN(abbot::log::CHANNEL_BLE, "    -> Subscribing to Input Report...");
+                if (pChar->subscribe(true, notifyCallback)) {
+                  LOG_PRINTLN(abbot::log::CHANNEL_BLE, "    -> Subscribe SUCCESS!");
                 } else {
-                  Serial.println("    -> Subscribe FAILED!");
+                  LOG_PRINTLN(abbot::log::CHANNEL_BLE, "    -> Subscribe FAILED!");
                 }
               }
             }
           } else {
-            Serial.println(">>> HID service NOT found!");
+            LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> HID service NOT found!");
           }
         } else {
-          Serial.println(">>> connect() returned FALSE!");
+          LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> connect() returned FALSE!");
         }
       } else {
-        Serial.println(">>> No HID device found, retrying...");
+        LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> No HID device found, retrying...");
       }
-      
+
       delay(2000);
-    } else {
-      // Connected, just wait
-      delay(1000);
-      Serial.print(".");
-    }
+      } else {
+        // Connected, just wait
+        delay(1000);
+        LOG_PRINT(abbot::log::CHANNEL_BLE, ".");
+      }
   }
 }

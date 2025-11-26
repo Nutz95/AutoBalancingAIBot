@@ -8,6 +8,7 @@
 #include "SystemTasks.h"
 #include "motor_control.h"
 #include "motor_driver.h"
+#include "logging.h"
 
 namespace abbot {
 namespace imu_cal {
@@ -65,9 +66,9 @@ static void computeMeanStd(const float *samples, int n, double &mean, double &st
 bool startGyroCalibration(class abbot::BMI088Driver &driver, int nSamples) {
   if (nSamples <= 0) return false;
   g_is_calibrating = true;
-  Serial.print("CALIB START GYRO: sampling "); Serial.print(nSamples); Serial.println(" samples...");
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB START GYRO: sampling %d samples...\n", nSamples);
   unsigned long startMs = millis();
-  Serial.print("CALIB TIME START ms="); Serial.println(startMs);
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB TIME START ms=%lu\n", startMs);
 
   // Use Welford's online algorithm to compute mean and variance without large allocations
   double mean_x = 0.0, mean_y = 0.0, mean_z = 0.0;
@@ -81,7 +82,7 @@ bool startGyroCalibration(class abbot::BMI088Driver &driver, int nSamples) {
   // each new sample as it's produced (no direct driver reads from this task).
   QueueHandle_t q = xQueueCreate(1, sizeof(abbot::IMUSample));
   if (!q) {
-    Serial.println("CALIB FAIL: cannot create queue");
+    LOG_PRINTLN(abbot::log::CHANNEL_IMU, "CALIB FAIL: cannot create queue");
     g_is_calibrating = false;
     return false;
   }
@@ -105,11 +106,11 @@ bool startGyroCalibration(class abbot::BMI088Driver &driver, int nSamples) {
       if ((count % progressInterval) == 0) {
         int pct = (count * 100) / nSamples;
         if (pct > 100) pct = 100;
-        Serial.print("CALIB PROGRESS GYRO "); Serial.print(pct); Serial.print("% ("); Serial.print(count); Serial.print("/"); Serial.print(nSamples); Serial.println(")");
+        LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB PROGRESS GYRO %d%% (%d/%d)\n", pct, count, nSamples);
       }
     } else {
       // unexpected timeout; abort
-      Serial.println("CALIB FAIL: queue timeout");
+      LOG_PRINTLN(abbot::log::CHANNEL_IMU, "CALIB FAIL: queue timeout");
       detachCalibrationQueue();
       vQueueDelete(q);
       if (motor_was_enabled) abbot::motor_control::enableMotors();
@@ -123,10 +124,9 @@ bool startGyroCalibration(class abbot::BMI088Driver &driver, int nSamples) {
   double std_z = (count > 1) ? sqrt(m2_z / (count - 1)) : 0.0;
 
   if (std_x > GYRO_STD_THRESHOLD || std_y > GYRO_STD_THRESHOLD || std_z > GYRO_STD_THRESHOLD) {
-    Serial.print("CALIB FAIL gyro unstable: std=(");
-    Serial.print(std_x,6); Serial.print(","); Serial.print(std_y,6); Serial.print(","); Serial.print(std_z,6); Serial.println(")");
+    LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB FAIL gyro unstable: std=(%.6f,%.6f,%.6f)\n", std_x, std_y, std_z);
     unsigned long endMs = millis();
-    Serial.print("CALIB TIME END ms="); Serial.print(endMs); Serial.print(" elapsed_ms="); Serial.println(endMs - startMs);
+    LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB TIME END ms=%lu elapsed_ms=%lu\n", endMs, (endMs - startMs));
     detachCalibrationQueue();
     vQueueDelete(q);
     if (motor_was_enabled) abbot::motor_control::enableMotors();
@@ -140,10 +140,9 @@ bool startGyroCalibration(class abbot::BMI088Driver &driver, int nSamples) {
   g_cal.valid = true;
   g_cal.version++;
   bool saved = saveCalibration(g_cal);
-  Serial.print("CALIB DONE gyro_bias=");
-  Serial.print(g_cal.gyro_bias[0],6); Serial.print(","); Serial.print(g_cal.gyro_bias[1],6); Serial.print(","); Serial.println(g_cal.gyro_bias[2],6);
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB DONE gyro_bias=%.6f,%.6f,%.6f\n", g_cal.gyro_bias[0], g_cal.gyro_bias[1], g_cal.gyro_bias[2]);
   unsigned long endMs = millis();
-  Serial.print("CALIB TIME END ms="); Serial.print(endMs); Serial.print(" elapsed_ms="); Serial.println(endMs - startMs);
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB TIME END ms=%lu elapsed_ms=%lu\n", endMs, (endMs - startMs));
   detachCalibrationQueue();
   vQueueDelete(q);
   if (motor_was_enabled) abbot::motor_control::enableMotors();
@@ -154,9 +153,9 @@ bool startGyroCalibration(class abbot::BMI088Driver &driver, int nSamples) {
 bool startAccelCalibration(class abbot::BMI088Driver &driver, int nSamples) {
   if (nSamples <= 0) return false;
   g_is_calibrating = true;
-  Serial.print("CALIB START ACCEL: sampling "); Serial.print(nSamples); Serial.println(" samples...");
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB START ACCEL: sampling %d samples...\n", nSamples);
   unsigned long startMs = millis();
-  Serial.print("CALIB TIME START ms="); Serial.println(startMs);
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB TIME START ms=%lu\n", startMs);
 
   // Online mean/variance for accel axes
   double mean_x = 0.0, mean_y = 0.0, mean_z = 0.0;
@@ -167,7 +166,7 @@ bool startAccelCalibration(class abbot::BMI088Driver &driver, int nSamples) {
   // each new sample as it's produced (no direct driver reads from this task).
   QueueHandle_t q = xQueueCreate(1, sizeof(abbot::IMUSample));
   if (!q) {
-    Serial.println("CALIB FAIL: cannot create queue");
+    LOG_PRINTLN(abbot::log::CHANNEL_IMU, "CALIB FAIL: cannot create queue");
     g_is_calibrating = false;
     return false;
   }
@@ -193,10 +192,10 @@ bool startAccelCalibration(class abbot::BMI088Driver &driver, int nSamples) {
       if ((count % progressIntervalA) == 0) {
         int pct = (count * 100) / nSamples;
         if (pct > 100) pct = 100;
-        Serial.print("CALIB PROGRESS ACCEL "); Serial.print(pct); Serial.print("% ("); Serial.print(count); Serial.print("/"); Serial.print(nSamples); Serial.println(")");
+        LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB PROGRESS ACCEL %d%% (%d/%d)\n", pct, count, nSamples);
       }
     } else {
-      Serial.println("CALIB FAIL: queue timeout");
+      LOG_PRINTLN(abbot::log::CHANNEL_IMU, "CALIB FAIL: queue timeout");
       detachCalibrationQueue();
       vQueueDelete(q);
       if (motor_was_enabled) abbot::motor_control::enableMotors();
@@ -211,10 +210,9 @@ bool startAccelCalibration(class abbot::BMI088Driver &driver, int nSamples) {
   double std_z = (count > 1) ? sqrt(m2_z / (count - 1)) : 0.0;
 
   if (std_x > ACCEL_STD_THRESHOLD || std_y > ACCEL_STD_THRESHOLD || std_z > ACCEL_STD_THRESHOLD) {
-    Serial.print("CALIB FAIL accel unstable: std=(");
-    Serial.print(std_x,6); Serial.print(","); Serial.print(std_y,6); Serial.print(","); Serial.print(std_z,6); Serial.println(")");
+    LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB FAIL accel unstable: std=(%.6f,%.6f,%.6f)\n", std_x, std_y, std_z);
     unsigned long endMs = millis();
-    Serial.print("CALIB TIME END ms="); Serial.print(endMs); Serial.print(" elapsed_ms="); Serial.println(endMs - startMs);
+    LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB TIME END ms=%lu elapsed_ms=%lu\n", endMs, (endMs - startMs));
     detachCalibrationQueue();
     vQueueDelete(q);
     if (motor_was_enabled) abbot::motor_control::enableMotors();
@@ -231,10 +229,9 @@ bool startAccelCalibration(class abbot::BMI088Driver &driver, int nSamples) {
   g_cal.valid = true;
   g_cal.version++;
   bool saved = saveCalibration(g_cal);
-  Serial.print("CALIB DONE accel_offset=");
-  Serial.print(g_cal.accel_offset[0],6); Serial.print(","); Serial.print(g_cal.accel_offset[1],6); Serial.print(","); Serial.println(g_cal.accel_offset[2],6);
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB DONE accel_offset=%.6f,%.6f,%.6f\n", g_cal.accel_offset[0], g_cal.accel_offset[1], g_cal.accel_offset[2]);
   unsigned long endMs = millis();
-  Serial.print("CALIB TIME END ms="); Serial.print(endMs); Serial.print(" elapsed_ms="); Serial.println(endMs - startMs);
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB TIME END ms=%lu elapsed_ms=%lu\n", endMs, (endMs - startMs));
   detachCalibrationQueue();
   vQueueDelete(q);
   if (motor_was_enabled) abbot::motor_control::enableMotors();
@@ -244,13 +241,11 @@ bool startAccelCalibration(class abbot::BMI088Driver &driver, int nSamples) {
 
 void dumpCalibration() {
   if (!g_cal.valid) {
-    Serial.println("CALIB: none");
+    LOG_PRINTLN(abbot::log::CHANNEL_IMU, "CALIB: none");
     return;
   }
-  Serial.print("CALIB DUMP gyro_bias=");
-  Serial.print(g_cal.gyro_bias[0],6); Serial.print(","); Serial.print(g_cal.gyro_bias[1],6); Serial.print(","); Serial.println(g_cal.gyro_bias[2],6);
-  Serial.print("CALIB DUMP accel_offset=");
-  Serial.print(g_cal.accel_offset[0],6); Serial.print(","); Serial.print(g_cal.accel_offset[1],6); Serial.print(","); Serial.println(g_cal.accel_offset[2],6);
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB DUMP gyro_bias=%.6f,%.6f,%.6f\n", g_cal.gyro_bias[0], g_cal.gyro_bias[1], g_cal.gyro_bias[2]);
+  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB DUMP accel_offset=%.6f,%.6f,%.6f\n", g_cal.accel_offset[0], g_cal.accel_offset[1], g_cal.accel_offset[2]);
 }
 
 void resetCalibration() {
@@ -260,7 +255,7 @@ void resetCalibration() {
     prefs.end();
   }
   g_cal = {{0,0,0},{0,0,0},1,false};
-  Serial.println("CALIB RESET");
+  LOG_PRINTLN(abbot::log::CHANNEL_IMU, "CALIB RESET");
 }
 
 bool isCalibrating() { return g_is_calibrating; }

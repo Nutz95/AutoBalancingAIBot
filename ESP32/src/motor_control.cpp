@@ -1,24 +1,25 @@
-// motor_control.cpp (stub implementation)
+// motor_control.cpp
+// Thin compatibility wrapper that forwards to the canonical motor driver API.
 #include "motor_control.h"
-#include <Arduino.h>
+#include "motor_driver.h"
+#include "logging.h"
 
 namespace abbot {
 namespace motor_control {
 
-static bool g_enabled = false;
-
 void disableMotors() {
-  // Default stub: just flip flag. Replace with SCServo calls if available.
-  g_enabled = false;
-  Serial.println("motor_control: motors disabled (stub)");
+  abbot::motor::disableMotors();
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "motor_control: forwarded disableMotors() to motor driver");
 }
 
 void enableMotors() {
-  g_enabled = true;
-  Serial.println("motor_control: motors enabled (stub)");
+  abbot::motor::enableMotors();
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "motor_control: forwarded enableMotors() to motor driver");
 }
 
-bool areMotorsEnabled() { return g_enabled; }
+bool areMotorsEnabled() {
+  return abbot::motor::areMotorsEnabled();
+}
 
 } // namespace motor_control
 } // namespace abbot

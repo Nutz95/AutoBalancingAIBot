@@ -25,6 +25,9 @@ public:
   // raw immediate read (no timing guard, no calibration applied)
   bool readRaw(IMUSample &out);
 
+  // Accessor for configured sampling frequency (Hz)
+  uint16_t getSamplingHz() const { return cfg_.sampling_hz; }
+
 private:
   BMI088Config cfg_;
   Bmi088 imu_ = Bmi088(SPI, 0, 0); // placeholder will be reinitialized in begin()

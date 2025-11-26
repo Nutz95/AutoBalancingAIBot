@@ -6,9 +6,9 @@
 - [x] 1.3 Create `openspec/changes/add-imufusion-madgwick/specs/imu-fusion/spec.md`
 
 ## 2. API and Implementation (scoped)
-- [ ] 2.1 Add `ESP32/include/imu_fusion.h` with public API (init, reset, update, getters)
-- [ ] 2.2 Add `ESP32/src/imu_fusion.cpp` implementing Madgwick (gyro+accel)
-- [ ] 2.3 Add unit-style test harness (optional) / sample usage in IMU task
+- [x] 2.1 Add `ESP32/include/imu_fusion.h` with public API (init, reset, update, getters)
+- [x] 2.2 Add `ESP32/src/imu_fusion.cpp` implementing Madgwick (gyro+accel)
+- [x] 2.3 Add unit-style test harness (optional) / sample usage in IMU task
 
 ## 3. Integration
 - [ ] 3.1 Integrate `fusion.update` into IMU task loop at 200Hz

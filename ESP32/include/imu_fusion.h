@@ -1,13 +1,8 @@
 #pragma once
-#include <cstdint>
+#include "../config/FusionConfig.h"
 
 namespace abbot {
 namespace fusion {
-
-struct FusionConfig {
-    float beta = 0.1f;        // Madgwick gain
-    float sample_rate = 200.0f; // Hz
-};
 
 class Madgwick {
 public:

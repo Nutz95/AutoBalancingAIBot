@@ -19,6 +19,9 @@ bool areMotorsEnabled();
 // `id` must be a motor ID (e.g., LEFT_MOTOR_ID / RIGHT_MOTOR_ID)
 void setMotorCommand(int id, float command);
 
+// Read last sent normalized motor command for an id. If never set, returns 0.0f
+float getLastMotorCommand(int id);
+
 // Send a raw servo-speed command directly (servo units, signed). This bypasses
 // normalization and sends the value as-is to the servo's speed register.
 void setMotorCommandRaw(int id, int16_t rawSpeed);

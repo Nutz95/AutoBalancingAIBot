@@ -7,6 +7,7 @@
 #include "motor_driver.h"
 #include "btle_hid.h"
 #include "serial_commands.h"
+#include "logging.h"
 #include "../config/motor_config.h"
 
 static abbot::BMI088Config bmi_cfg; 
@@ -18,45 +19,43 @@ void setup() {
         {
             abbot::imu_cal::Calibration cal;
             if (abbot::imu_cal::loadCalibration(cal)) {
-                Serial.print("Calibration loaded: gyro_bias=");
-                Serial.print(cal.gyro_bias[0], 6); Serial.print(','); Serial.print(cal.gyro_bias[1], 6); Serial.print(','); Serial.println(cal.gyro_bias[2], 6);
-                Serial.print("Calibration loaded: accel_offset=");
-                Serial.print(cal.accel_offset[0], 6); Serial.print(','); Serial.print(cal.accel_offset[1], 6); Serial.print(','); Serial.println(cal.accel_offset[2], 6);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "Calibration loaded: gyro_bias=%.6f,%.6f,%.6f\n", cal.gyro_bias[0], cal.gyro_bias[1], cal.gyro_bias[2]);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "Calibration loaded: accel_offset=%.6f,%.6f,%.6f\n", cal.accel_offset[0], cal.accel_offset[1], cal.accel_offset[2]);
                 // Install into the imu_cal module so `CALIB DUMP` reports these values
                 abbot::imu_cal::installCalibration(cal);
             } else {
-                Serial.println("No IMU calibration found");
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No IMU calibration found");
             }
         }
         // initialize BMI088 driver
         bool ok = bmi_driver.begin();
         if (!ok) {
-            Serial.println("BMI088 init failed");
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088 init failed");
         } else {
-            Serial.println("BMI088 initialized");
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088 initialized");
         }
 
         // start IMU producer/consumer tasks for demo
         // initialize motor driver early so the servo bus is ready for serial commands
         abbot::motor::initMotorDriver();
         // Log motor driver status and attempt to read encoder/status for both motors
-        Serial.print("motor_driver: enabled="); Serial.println(abbot::motor::areMotorsEnabled() ? "YES" : "NO");
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: enabled=%s\n", abbot::motor::areMotorsEnabled() ? "YES" : "NO");
     #if MOTOR_DRIVER_REAL
         {
             int32_t left_pos = abbot::motor::readEncoder(LEFT_MOTOR_ID);
             int32_t right_pos = abbot::motor::readEncoder(RIGHT_MOTOR_ID);
-            Serial.print("motor_driver: encoder LEFT_ID="); Serial.print(LEFT_MOTOR_ID); Serial.print(" pos="); Serial.println(left_pos);
-            Serial.print("motor_driver: encoder RIGHT_ID="); Serial.print(RIGHT_MOTOR_ID); Serial.print(" pos="); Serial.println(right_pos);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: encoder LEFT_ID=%d pos=%ld\n", LEFT_MOTOR_ID, left_pos);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: encoder RIGHT_ID=%d pos=%ld\n", RIGHT_MOTOR_ID, right_pos);
         }
     #endif
 
         if (abbot::startIMUTasks(&bmi_driver)) {
-            Serial.println("IMU tasks started");
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "IMU tasks started");
         } else {
-            Serial.println("Failed to start IMU tasks");
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Failed to start IMU tasks");
         }
         // Diagnostic heartbeat to verify serial output during boot
-        Serial.println("BOOT DEBUG: setup complete, entering main loop");
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BOOT DEBUG: setup complete, entering main loop");
         // Start BLE HID client (Xbox / BLE HID controllers)
         abbot::btle_hid::begin();
 }

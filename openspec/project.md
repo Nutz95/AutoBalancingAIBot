@@ -55,6 +55,45 @@ After each complete OpenSpec iteration (spec application and code generation), u
 - Create a Log class to handle Info/Debug/Error log to Serial output (ESP32S3 WROOM Dev kit has a special USB Serial Output for that purpose. Use it.)
 - The log level will be configurable via a constant (e.g., LOG_LEVEL), and the Log class will provide functions for each log type (Info, Debug, Error).
 
+### Logging system (recent change)
+
+We added a centralized, channel-based logging system to better control and filter serial output (this preserves the integrity of the tuning CSV stream).
+
+- Overview: logging is organized into channels (a bitmask). Primary channels are `CHANNEL_DEFAULT`, `CHANNEL_IMU`, `CHANNEL_MOTOR`, `CHANNEL_BLE`, and `CHANNEL_TUNING`.
+- API: macros `LOG_PRINT`, `LOG_PRINTLN`, and `LOG_PRINTF` are provided; they check whether the channel is enabled before evaluating arguments, avoiding unnecessary cost when a channel is disabled.
+- Thread-safety: serial output is serialized using a FreeRTOS mutex (`g_log_mutex`) — helpers like `lockedPrint` and `lockedPrintf` ensure atomic, non-interleaved messages.
+- Serial commands: the serial command shell now exposes commands to control channels and the tuning mode:
+  - `LOG ENABLE <channel>` / `LOG DISABLE <channel>` / `LOG LIST` to manage channels at runtime.
+  - `TUNING START` / `TUNING STOP` to enable/disable the tuning CSV stream (routed on `CHANNEL_TUNING`).
+- Tuning telemetry: when `CHANNEL_TUNING` is enabled the IMU task emits a CSV header and structured CSV lines (e.g. `timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,left_cmd,right_cmd`) so external tools can consume a clean telemetry stream.
+- Key files added/modified:
+  - `ESP32/include/logging.h`: declarations for channels, macros and public API.
+  - `ESP32/src/logging.cpp`: implementation of channel manager, mutex and `lockedPrintf` helper.
+  - `ESP32/src/serial_commands.cpp`: extended serial commands (`LOG`, `TUNING`).
+  - `ESP32/src/SystemTasks.cpp`: tuning CSV emission (via `LOG_PRINTF` on `CHANNEL_TUNING`) and IMU logging on `CHANNEL_IMU`.
+  - `ESP32/src/btle_hid.cpp` and `ESP32/src/btle_callbacks.cpp`: BLE/MOTOR logging replaced with `LOG_*` calls on appropriate channels.
+  - `ESP32/src/BMI088Driver.cpp`, `ESP32/src/imu_calibration.cpp`, `ESP32/src/motor_driver.cpp`, `ESP32/src/main.cpp`, `ESP32/src/motor_control.cpp`: replaced `Serial` -> `LOG_*` and applied the braces rule.
+- Important note: `ESP32/src/logging.cpp` is the low-level writer which still uses `Serial.print/println` directly — other modules should use the `LOG_*` macros which call these helpers.
+
+Developer guidance:
+- Prefer `LOG_PRINTF(channel, ...)` / `LOG_PRINTLN(channel, ...)` instead of `Serial.print` in application code.
+- Do not add `if (!abbot::isTuningStreamActive())` guards around `LOG_*` calls: the channel-filtering mechanism already handles suppression and avoids argument evaluation.
+- Reserve `CHANNEL_DEFAULT` for boot/startup and general diagnostics; `CHANNEL_IMU` for IMU traces; `CHANNEL_MOTOR` for motor info/errors; `CHANNEL_BLE` for BLE events; and `CHANNEL_TUNING` for the tuning CSV stream.
+
+
+Coding style note:
+- Always use braces for conditional and loop bodies, even for single-line statements. Example:
+  - Good:
+    ```cpp
+    if (cond) {
+        doSomething();
+    }
+    ```
+  - Avoid:
+    ```cpp
+    if (cond) doSomething();
+    ```
+
 ### Architecture Patterns
 
 - The code for the ESP32S3 will be located in the /ESP32/ folder and its subfolders.
