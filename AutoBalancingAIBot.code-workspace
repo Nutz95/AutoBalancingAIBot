@@ -1,0 +1,19 @@
+{
+	"folders": [
+		{
+			"path": "."
+		},
+		{
+			"path": "../bmi088-arduino"
+		},
+		{
+			"path": "../MaixCDK"
+		},
+		{
+			"path": "../MaixPy"
+		}
+	],
+	"settings": {
+		"powershell.cwd": "AutoBalancingAIBot"
+	}
+}

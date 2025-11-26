@@ -79,4 +79,28 @@ Safety notes:
 - Start with low speeds and short pulses for `RAW` commands.
 - `LEFT_MOTOR_INVERT` and `RIGHT_MOTOR_INVERT` are available in `ESP32/config/motor_config.h` to correct direction.
 
+Testing on host (MSYS2 / PowerShell)
+-----------------------------------
+
+The project now provides a comprehensive host-side test suite for the IMU fusion algorithm in
+`ESP32/test/imu_fusion_tests.cpp`. This suite covers the original lightweight unit test plus
+additional robustness and fuzz tests.
+
+Follow `ESP32/test/README_MSYS2.md` for MSYS2-based build instructions. You can run the provided
+PowerShell helper to compile and run the full test suite:
+
+```powershell
+cd 'I:\GIT\AutoBalancingAIBot\ESP32\test'
+.\build_test.ps1
+```
+
+By default the test binary executes two groups for the magnetometer-dependent cases:
+- a non-strict pass that prints "EXPECTED FAIL (no magnetometer)" (does not count as a failure),
+- a strict pass that is intended to be run when a magnetometer (or a simulated heading) is available
+	— this strict phase is skipped by default for robots without a magnetometer.
+
+To change strict behavior see `ESP32/test/imu_fusion_tests.cpp` (there is a `RUN_STRICT_MAG`
+toggle near the top of the file) or use the compile-time macro `-DRUN_STRICT_MAG=1` when
+compiling manually.
+
 
