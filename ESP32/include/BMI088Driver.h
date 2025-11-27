@@ -12,6 +12,7 @@ namespace abbot {
 struct IMUSample {
   float ax, ay, az; // m/s^2
   float gx, gy, gz; // rad/s
+  float temp_C; // sensor temperature Celsius (from accel temp register)
   uint64_t time_ps; // sensor timestamp in picoseconds (if available)
   unsigned long ts_ms; // host timestamp (millis)
 };

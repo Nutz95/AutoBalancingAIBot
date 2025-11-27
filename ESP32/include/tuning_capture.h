@@ -19,7 +19,15 @@ void startCapture(uint32_t nSamples, bool streamCsv=true, bool statsOnly=false);
 void stopCapture();
 
 // Called by SystemTasks or IMU loop to submit the latest sample (pitch_deg, pitch_rate_deg, left_cmd, right_cmd, ts_ms)
-void submitSample(uint32_t ts_ms, float pitch_deg, float pitch_rad, float pitch_rate_deg, float pitch_rate_rad, float left_cmd, float right_cmd);
+void submitSample(uint32_t ts_ms,
+				  float pitch_deg,
+				  float pitch_rad,
+				  float pitch_rate_deg,
+				  float pitch_rate_rad,
+				  float ax, float ay, float az,
+				  float gx, float gy, float gz,
+				  float temp_C,
+				  float left_cmd, float right_cmd);
 
 // Query whether a capture is active
 bool isCapturing();

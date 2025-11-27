@@ -36,7 +36,8 @@ void startCapture(uint32_t nSamples, bool streamCsv, bool statsOnly) {
   pitch_mean = pitch_M2 = pr_mean = pr_M2 = 0.0f;
   if (g_stream) {
     // Print CSV header for consumers (should be gated by current mask)
-    LOG_PRINTLN(abbot::log::CHANNEL_TUNING, "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,left_cmd,right_cmd");
+    // New columns: ax,ay,az (m/s^2), gx,gy,gz (rad/s), temp_C
+    LOG_PRINTLN(abbot::log::CHANNEL_TUNING, "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd");
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: capture started (stream)");
   } else if (g_stats_only) {
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: capture started (stats-only)");
@@ -82,19 +83,30 @@ void stopCapture() {
   }
 }
 
-void submitSample(uint32_t ts_ms, float pitch_deg, float /*pitch_rad*/, float pitch_rate_deg, float /*pitch_rate_rad*/, float left_cmd, float right_cmd) {
+void submitSample(uint32_t ts_ms,
+                  float pitch_deg,
+                  float /*pitch_rad*/,
+                  float pitch_rate_deg,
+                  float /*pitch_rate_rad*/,
+                  float ax, float ay, float az,
+                  float gx, float gy, float gz,
+                  float temp_C,
+                  float left_cmd, float right_cmd) {
   if (!g_active) {
     return;
   }
 
   // Emit CSV if requested (we emit on CHANNEL_TUNING; caller should have enabled mask)
   if (g_stream && abbot::log::isChannelEnabled(abbot::log::CHANNEL_TUNING)) {
-    LOG_PRINTF(abbot::log::CHANNEL_TUNING, "%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f\n",
+    LOG_PRINTF(abbot::log::CHANNEL_TUNING, "%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.3f,%.6f,%.6f\n",
                ts_ms,
                pitch_deg,
                pitch_deg * 3.14159265f / 180.0f,
                pitch_rate_deg,
                pitch_rate_deg * 3.14159265f / 180.0f,
+               ax, ay, az,
+               gx, gy, gz,
+               temp_C,
                left_cmd,
                right_cmd);
   }

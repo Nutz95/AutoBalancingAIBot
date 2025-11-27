@@ -5,8 +5,8 @@ namespace abbot {
 namespace fusion {
 
 struct FusionConfig {
-    float beta = 0.1f;        // Madgwick gain
-    float sample_rate = 200.0f; // Hz
+    float beta = 0.084f;        // Madgwick gain (default tuned from capture)
+    float sample_rate = 166.66667f; // Hz (measured sample rate)
 };
 
 } // namespace fusion

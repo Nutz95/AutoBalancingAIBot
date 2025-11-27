@@ -96,16 +96,29 @@ static void imuConsumerTask(void *pvParameters) {
 
       if (abbot::tuning::isCapturing()) {
         // In capture mode the helper is responsible for CSV emission and statistics
-        abbot::tuning::submitSample(sample.ts_ms, pitch_deg, pitch_rad, pitch_rate_dps, pitch_rate_rads, left_cmd, right_cmd);
+        abbot::tuning::submitSample(sample.ts_ms,
+                                    pitch_deg,
+                                    pitch_rad,
+                                    pitch_rate_dps,
+                                    pitch_rate_rads,
+                                    sample.ax, sample.ay, sample.az,
+                                    sample.gx, sample.gy, sample.gz,
+                                    // BMI088 temp from accel
+                                    sample.temp_C,
+                                    left_cmd, right_cmd);
+        
       } else if (abbot::log::isChannelEnabled(abbot::log::CHANNEL_TUNING)) {
         // Stream mode: print CSV here
         LOG_PRINTF(abbot::log::CHANNEL_TUNING,
-                   "%lu,%.4f,%.6f,%.4f,%.6f,%.4f,%.4f\n",
+                   "%lu,%.4f,%.6f,%.4f,%.6f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.3f,%.4f,%.4f\n",
                    sample.ts_ms,
                    pitch_deg,
                    pitch_rad,
                    pitch_rate_dps,
                    pitch_rate_rads,
+                   sample.ax, sample.ay, sample.az,
+                   sample.gx, sample.gy, sample.gz,
+                   sample.temp_C,
                    left_cmd,
                    right_cmd);
       }
@@ -202,8 +215,8 @@ float getFusedPitchRate() {
 void startTuningStream() {
   // enable logging channel and print CSV header
   abbot::log::enableChannel(abbot::log::CHANNEL_TUNING);
-  // Print CSV header for consumers
-  LOG_PRINTLN(abbot::log::CHANNEL_TUNING, "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,left_cmd,right_cmd");
+  // Print CSV header for consumers (include raw accel/gyro and temp)
+  LOG_PRINTLN(abbot::log::CHANNEL_TUNING, "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd");
 }
 
 void stopTuningStream() {

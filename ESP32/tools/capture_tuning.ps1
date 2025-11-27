@@ -19,7 +19,7 @@ if (-not $outfile) {
 # If no command provided, default to a sensible auto-start command
 if (-not $command -or $command.Trim().Length -eq 0) {
     Write-Host "No -command provided. Using default: 'TUNING START 2000'"
-    $command = 'TUNING START 2000'
+    $command = 'TUNING START 10000'
 }
 
 $port = 'COM10'
@@ -57,7 +57,22 @@ if ($UsePython -or $pythonExe) {
 
         Write-Host "Running: $pythonExe $($args -join ' ')"
         & $pythonExe @args
-        exit $LASTEXITCODE
+        $captureExit = $LASTEXITCODE
+
+        # If available, run the analysis script on the saved file
+        $analyzePath = Join-Path (Split-Path -Parent $MyInvocation.MyCommand.Path) 'analyze_tuning_capture.py'
+        if ((Test-Path $analyzePath) -and $pythonExe) {
+            Write-Host "Running analysis: $pythonExe $analyzePath $outfile"
+            & $pythonExe $analyzePath $outfile
+            $analysisExit = $LASTEXITCODE
+            if ($analysisExit -ne 0) {
+                Write-Warning "Analysis script exited with code $analysisExit"
+            }
+        } else {
+            Write-Host "Analysis script not found or no Python executable; skipping analysis."
+        }
+
+        exit $captureExit
     }
 }
 

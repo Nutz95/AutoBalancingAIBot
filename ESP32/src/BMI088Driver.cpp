@@ -62,6 +62,7 @@ bool BMI088Driver::readRaw(IMUSample &out) {
   out.gx = imu_.getGyroX_rads();
   out.gy = imu_.getGyroY_rads();
   out.gz = imu_.getGyroZ_rads();
+  out.temp_C = imu_.getTemperature_C();
   out.time_ps = imu_.getTime_ps();
   out.ts_ms = millis();
   return true;
