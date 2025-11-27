@@ -103,4 +103,20 @@ To change strict behavior see `ESP32/test/imu_fusion_tests.cpp` (there is a `RUN
 toggle near the top of the file) or use the compile-time macro `-DRUN_STRICT_MAG=1` when
 compiling manually.
 
+## Interactive Serial Menu (numeric)
+
+This project includes a small interactive numeric serial menu used by the `HELP` command.
+
+- Location: `ESP32/src/serial_menu.cpp` and `ESP32/include/serial_menu.h`.
+- Behavior: type `HELP` (or `?`) in the serial monitor to enter the menu. Use numeric choices
+	to navigate and run commands. `0` goes back or exits the menu.
+- Pattern: the menu is a small registration-style builder — entries and submenus are added
+	by calling `addEntry(id, label, handler)` or `addSubmenu(id, label, submenu)` where handlers
+	are `std::function<void(const String& param)>` that receive the remainder of the input line
+	as a parameter (so `5 LEFT 0.05` will call the handler for entry `5` with parameter
+	`LEFT 0.05`). The root menu is constructed lazily on first use in `serial_commands.cpp`.
+
+This keeps interactive flows simple while reusing the existing serial command handlers
+for the actual operations (calibration, motor control, tuning).
+
 

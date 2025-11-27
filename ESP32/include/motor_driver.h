@@ -33,5 +33,11 @@ int32_t readEncoder(int id);
 // command was recognized and handled.
 bool processSerialCommand(const String &line);
 
+// Print current motor status information to the motor log channel.
+void printStatus();
+
+// Dump motor config (IDs, pins) to the motor log channel.
+void dumpConfig();
+
 } // namespace motor
 } // namespace abbot

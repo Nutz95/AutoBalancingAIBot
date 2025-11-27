@@ -6,6 +6,37 @@
 #include "../config/motor_config.h" // LEFT_MOTOR_ID / RIGHT_MOTOR_ID
 #include "logging.h"
 #include "btle_callbacks.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
+
+// Helper: wait for the NimBLE client to report connected state (with timeout).
+// Returns the number of milliseconds actually waited.
+static uint32_t waitForClientConnected(NimBLEClient* client, uint32_t timeout_ms, uint32_t step_ms = 50) {
+  uint32_t waited = 0;
+  while (waited < timeout_ms) {
+    if (client && client->isConnected() && g_connected) {
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(step_ms));
+    waited += step_ms;
+  }
+  return waited;
+}
+
+// Helper: after requesting secure connection, wait until connection stabilises
+// or until a timeout/ disconnect occurs. Returns milliseconds waited.
+static uint32_t waitForStableAfterSecure(NimBLEClient* client, uint32_t timeout_ms, uint32_t step_ms = 50) {
+  uint32_t waited = 0;
+  while (waited < timeout_ms) {
+    if (!client || !client->isConnected() || !g_connected) {
+      // disconnected -> stop waiting
+      break;
+    }
+    vTaskDelay(pdMS_TO_TICKS(step_ms));
+    waited += step_ms;
+  }
+  return waited;
+}
 
 NimBLEClient* g_client = nullptr;
 NimBLEAdvertisedDevice* g_targetDevice = nullptr;
@@ -87,18 +118,9 @@ void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t le
   }
 }
 
-void abbot::btle_hid::begin() {
-  LOG_PRINTLN(abbot::log::CHANNEL_BLE, "\n=== NimBLE HID Scanner ===");
-
-  NimBLEDevice::init("");
-  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
-
-  // Configure security for pairing
-  NimBLEDevice::setSecurityAuth(true, true, true); // bond, MITM, SC
-  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT); // No PIN needed
-
-  LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Security configured: bonding enabled, no PIN");
-
+// Background BLE task: performs scanning and connection loops. Runs as FreeRTOS task.
+static void btleTask(void *pvParameters) {
+  (void)pvParameters;
   NimBLEScan* pScan = NimBLEDevice::getScan();
   pScan->setAdvertisedDeviceCallbacks(new AdvCallbacks());
   pScan->setActiveScan(true);
@@ -106,10 +128,9 @@ void abbot::btle_hid::begin() {
   pScan->setWindow(99);
 
   for (;;) {
-      if (!g_connected) {
-        g_targetDevice = nullptr;
-        LOG_PRINTLN(abbot::log::CHANNEL_BLE, "Scanning for HID devices (10s)...");
-      
+    if (!g_connected) {
+      g_targetDevice = nullptr;
+      LOG_PRINTLN(abbot::log::CHANNEL_BLE, "Scanning for HID devices (10s)...");
       pScan->start(10, false);
 
       if (g_targetDevice) {
@@ -122,29 +143,33 @@ void abbot::btle_hid::begin() {
         if (g_client->connect(g_targetDevice)) {
           LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> connect() returned true, discovering services...");
 
-          // Wait a bit for connection to stabilize
-          delay(500);
+          // Wait up to 500ms for the client to report connected state.
+          {
+            const uint32_t waited = waitForClientConnected(g_client, 500);
+            LOG_PRINTF(abbot::log::CHANNEL_BLE, ">>> waited %ums for connection state\n", waited);
+          }
 
-          // Initiate pairing/encryption
           LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Initiating secure connection...");
           g_client->secureConnection();
-          delay(1000); // Wait for pairing to complete
+
+          // After requesting secure connection, wait up to 1000ms for the
+          // link to stabilise. Bail out early if the client disconnects.
+          {
+            const uint32_t waited = waitForStableAfterSecure(g_client, 1000);
+            LOG_PRINTF(abbot::log::CHANNEL_BLE, ">>> waited %ums after secureConnection\n", waited);
+          }
 
           NimBLERemoteService* pService = g_client->getService(NimBLEUUID((uint16_t)0x1812));
           if (pService) {
             LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Found HID service");
-
             std::vector<NimBLERemoteCharacteristic*>* pCharacteristics = pService->getCharacteristics(true);
             LOG_PRINTF(abbot::log::CHANNEL_BLE, ">>> Characteristics: %u\n", (unsigned)pCharacteristics->size());
-
             for (auto pChar : *pCharacteristics) {
               LOG_PRINTF(abbot::log::CHANNEL_BLE, "  %s - R:%s W:%s N:%s\n",
                          pChar->getUUID().toString().c_str(),
                          pChar->canRead() ? "Y" : "N",
                          pChar->canWrite() ? "Y" : "N",
                          pChar->canNotify() ? "Y" : "N");
-
-              // Subscribe to Input Report (0x2A4D) with notify
               if (pChar->getUUID() == NimBLEUUID((uint16_t)0x2A4D) && pChar->canNotify()) {
                 LOG_PRINTLN(abbot::log::CHANNEL_BLE, "    -> Subscribing to Input Report...");
                 if (pChar->subscribe(true, notifyCallback)) {
@@ -164,11 +189,31 @@ void abbot::btle_hid::begin() {
         LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> No HID device found, retrying...");
       }
 
-      delay(2000);
-      } else {
-        // Connected, just wait
-        delay(1000);
-        LOG_PRINT(abbot::log::CHANNEL_BLE, ".");
-      }
+      vTaskDelay(pdMS_TO_TICKS(2000));
+    } else {
+      // Connected, just wait
+      vTaskDelay(pdMS_TO_TICKS(1000));
+      LOG_PRINT(abbot::log::CHANNEL_BLE, ".");
+    }
+  }
+}
+
+void abbot::btle_hid::begin() {
+  LOG_PRINTLN(abbot::log::CHANNEL_BLE, "\n=== NimBLE HID Scanner ===");
+
+  NimBLEDevice::init("");
+  NimBLEDevice::setPower(ESP_PWR_LVL_P9);
+
+  // Configure security for pairing
+  NimBLEDevice::setSecurityAuth(true, true, true); // bond, MITM, SC
+  NimBLEDevice::setSecurityIOCap(BLE_HS_IO_NO_INPUT_OUTPUT); // No PIN needed
+
+  LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Security configured: bonding enabled, no PIN");
+
+  // Create a background FreeRTOS task to run the BLE scan/connect loop so
+  // `begin()` returns quickly and does not block `setup()`.
+  BaseType_t r = xTaskCreate(btleTask, "BTLETask", 8192, nullptr, configMAX_PRIORITIES - 5, nullptr);
+  if (r != pdPASS) {
+    LOG_PRINTLN(abbot::log::CHANNEL_BLE, "Failed to create BTLE task");
   }
 }

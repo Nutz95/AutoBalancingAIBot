@@ -36,12 +36,18 @@ void enableChannel(Channel c);
 void disableChannel(Channel c);
 bool isChannelEnabled(Channel c);
 
+// Toggle the channel state and return the new state (true = enabled)
+bool toggleChannel(Channel c);
+
 // Utility: parse channel name (case-insensitive). Returns 0 on failure.
 Channel channelFromString(const char *name);
 
 // Return a comma-separated list of enabled channel names into provided buffer.
 // bufLen should be large enough; function returns number of bytes written.
 size_t listEnabledChannels(char *buf, size_t bufLen);
+
+// Return the canonical name for a channel (literal string, do not free)
+const char* channelName(Channel c);
 
 // Print helpers (macros): avoid evaluating arguments when channel disabled.
 // These macros call the locked helpers in `abbot::log` so prints are

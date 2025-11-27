@@ -157,6 +157,21 @@ The SPI pins from the ESP32S3 used to drive the BMI088 board are:
 
   Command list:
   For ESP Project use base folder /ESP32/ folder:
+
+### Interactive Serial Menu Pattern
+
+The codebase includes a small numeric interactive menu used by the `HELP` command.
+
+- Files: `ESP32/include/serial_menu.h`, `ESP32/src/serial_menu.cpp`, `ESP32/src/serial_commands.cpp`.
+- Pattern: a lightweight registration builder where menus are constructed by adding
+  entries or submenus with `addEntry(id, label, handler)` and `addSubmenu(id, label, submenu)`.
+- Handlers are `std::function<void(const String& param)>` — the parameter is the remainder
+  of the input line after the numeric selection, letting callers pass extra arguments.
+- Navigation: numeric selection, `0` to go back/exit. The root menu is constructed
+  lazily on first use to avoid static init order issues.
+
+This approach centralizes interactive serial UI behavior and keeps command parsing logic
+reusable by delegating to existing command handlers when possible.
 - build ESP : "pio run".
 - Build and Upload ESP project : "pio run --target clean; pio run --target upload"
 - Upload project after build: "pio --target upload"

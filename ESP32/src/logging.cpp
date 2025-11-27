@@ -32,6 +32,17 @@ bool isChannelEnabled(Channel c) {
     return (g_enabled & static_cast<uint32_t>(c)) != 0;
 }
 
+bool toggleChannel(Channel c) {
+    uint32_t mask = static_cast<uint32_t>(c);
+    if ((g_enabled & mask) != 0) {
+        g_enabled &= ~mask;
+        return false;
+    } else {
+        g_enabled |= mask;
+        return true;
+    }
+}
+
 static bool iequals(const char *a, const char *b) {
     while (*a && *b) {
         if (std::toupper((unsigned char)*a) != std::toupper((unsigned char)*b)) {
@@ -97,6 +108,17 @@ size_t listEnabledChannels(char *buf, size_t bufLen) {
         buf[pos] = '\0';
     }
     return pos;
+}
+
+const char* channelName(Channel c) {
+    switch (c) {
+        case CHANNEL_TUNING: return "TUNING";
+        case CHANNEL_BLE: return "BLE";
+        case CHANNEL_IMU: return "IMU";
+        case CHANNEL_MOTOR: return "MOTOR";
+        case CHANNEL_DEFAULT: return "DEFAULT";
+        default: return "UNKNOWN";
+    }
 }
 
 // Locked/serialized printing helpers

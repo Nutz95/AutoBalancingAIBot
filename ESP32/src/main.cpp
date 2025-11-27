@@ -15,6 +15,10 @@ static abbot::BMI088Driver bmi_driver(bmi_cfg);
 
 void setup() {
         Serial.begin(921600);
+        // Initialize logging subsystem early so boot-time LOG_* calls are effective
+        abbot::log::init();
+        // Ensure tuning stream is off by default at boot
+        abbot::log::disableChannel(abbot::log::CHANNEL_TUNING);
         // Print calibration values if present
         {
             abbot::imu_cal::Calibration cal;
@@ -56,7 +60,11 @@ void setup() {
         }
         // Diagnostic heartbeat to verify serial output during boot
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BOOT DEBUG: setup complete, entering main loop");
-        // Start BLE HID client (Xbox / BLE HID controllers)
+        
+        // Show interactive serial menu at boot
+        abbot::serialcmds::startInteractiveMenu(&bmi_driver);
+
+        // Start BLE HID client (Xbox / BLE HID controllers). warning: blocking call
         abbot::btle_hid::begin();
 }
 

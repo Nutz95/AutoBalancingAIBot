@@ -90,6 +90,18 @@ void disableMotors() {
 bool areMotorsEnabled() {
   return s_motors_enabled;
 }
+
+void printStatus() {
+  LOG_PRINT(abbot::log::CHANNEL_MOTOR, "motor_driver: status enabled=");
+  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, areMotorsEnabled() ? "YES" : "NO");
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: LEFT_ID=%d RIGHT_ID=%d\n", LEFT_MOTOR_ID, RIGHT_MOTOR_ID);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: LEFT_INVERT=%d RIGHT_INVERT=%d\n", LEFT_MOTOR_INVERT, RIGHT_MOTOR_INVERT);
+}
+
+void dumpConfig() {
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: config LEFT_ID=%d RIGHT_ID=%d\n", LEFT_MOTOR_ID, RIGHT_MOTOR_ID);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: pins S_TXD=%d S_RXD=%d\n", SC_SERVO_TX_PIN, SC_SERVO_RX_PIN);
+}
  
 void setMotorCommand(int id, float command) {
   // clamp
@@ -225,17 +237,17 @@ bool processSerialCommand(const String &line) {
   }
 
   if (strcmp(cmd, "ENABLE") == 0) {
-    LOG_PRINT(abbot::log::CHANNEL_MOTOR, "motor_driver: status enabled="); LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, areMotorsEnabled() ? "YES" : "NO");
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: LEFT_ID=%d RIGHT_ID=%d\n", LEFT_MOTOR_ID, RIGHT_MOTOR_ID);
+    // Enable motors on request
+    enableMotors();
+    printStatus();
+    return true;
   }
   if (strcmp(cmd, "DISABLE") == 0) {
     disableMotors();
     return true;
   }
   if (strcmp(cmd, "STATUS") == 0) {
-    LOG_PRINT(abbot::log::CHANNEL_MOTOR, "motor_driver: status enabled="); LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, areMotorsEnabled() ? "YES" : "NO");
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: LEFT_ID=%d RIGHT_ID=%d\n", LEFT_MOTOR_ID, RIGHT_MOTOR_ID);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: LEFT_INVERT=%d RIGHT_INVERT=%d\n", LEFT_MOTOR_INVERT, RIGHT_MOTOR_INVERT);
+    printStatus();
     return true;
   }
   if (strcmp(cmd, "SET") == 0) {
@@ -332,8 +344,7 @@ bool processSerialCommand(const String &line) {
 #endif
   }
   if (strcmp(cmd, "DUMP") == 0) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: config LEFT_ID=%d RIGHT_ID=%d\n", LEFT_MOTOR_ID, RIGHT_MOTOR_ID);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: pins S_TXD=%d S_RXD=%d\n", SC_SERVO_TX_PIN, SC_SERVO_RX_PIN);
+    dumpConfig();
     return true;
   }
 

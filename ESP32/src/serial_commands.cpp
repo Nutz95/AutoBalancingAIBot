@@ -2,22 +2,167 @@
 #include "serial_commands.h"
 #include "imu_calibration.h"
 #include "motor_driver.h"
+#include "../config/motor_config.h"
 #include "BMI088Driver.h"
 #include "logging.h"
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "SystemTasks.h"
+#include "serial_menu.h"
 
 namespace abbot {
 namespace serialcmds {
 
+// forward-declare startInteractiveMenu (implemented after ensureMenus)
+void startInteractiveMenu(abbot::BMI088Driver *driver);
+
+// Interactive menu instance (constructed on first use)
+static SerialMenu *g_rootMenu = nullptr;
+static SerialMenu *g_calibMenu = nullptr;
+static SerialMenu *g_motorMenu = nullptr;
+static SerialMenu *g_tuningMenu = nullptr;
+static SerialMenu *g_logMenu = nullptr;
+static bool g_menuActive = false;
+static SerialMenu* g_currentMenu = nullptr;
+
+static void ensureMenus(abbot::BMI088Driver *driver) {
+  if (g_rootMenu) {
+    return;
+  }
+  g_rootMenu = new SerialMenu("Main Menu");
+
+  // Calibration submenu
+  g_calibMenu = new SerialMenu("Calibration Commands");
+  g_calibMenu->addEntry(1, "CALIB START GYRO [N]", [driver](const String& p){
+    int n = 2000;
+    if (p.length()) {
+      n = p.toInt();
+    }
+    if (!abbot::imu_cal::isCalibrating()) {
+      abbot::imu_cal::startGyroCalibration(*driver, n);
+    }
+  });
+  g_calibMenu->addEntry(2, "CALIB START ACCEL [N]", [driver](const String& p){
+    int n = 2000;
+    if (p.length()) {
+      n = p.toInt();
+    }
+    if (!abbot::imu_cal::isCalibrating()) {
+      abbot::imu_cal::startAccelCalibration(*driver, n);
+    }
+  });
+  g_calibMenu->addEntry(3, "CALIB DUMP", [](const String&){ abbot::imu_cal::dumpCalibration(); });
+  g_calibMenu->addEntry(4, "CALIB RESET", [](const String&){ abbot::imu_cal::resetCalibration(); });
+
+  // Motor submenu
+  g_motorMenu = new SerialMenu("Motor Commands");
+  g_motorMenu->addEntry(1, "MOTOR ENABLE", [](const String&){ abbot::motor::enableMotors(); });
+  g_motorMenu->addEntry(2, "MOTOR DISABLE", [](const String&){ abbot::motor::disableMotors(); });
+  g_motorMenu->addEntry(3, "MOTOR STATUS", [](const String&){ abbot::motor::printStatus(); });
+  g_motorMenu->addEntry(4, "MOTOR DUMP", [](const String&){ abbot::motor::dumpConfig(); });
+  g_motorMenu->addEntry(5, "MOTOR SET <LEFT|RIGHT|ID> <v>", [](const String& p){
+    // Expect: <side> <value>
+    String s = p; s.trim();
+    int sp = s.indexOf(' ');
+    if (sp == -1) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: <side> <value>");
+      return;
+    }
+    String side = s.substring(0, sp); String val = s.substring(sp+1);
+    side.toUpperCase(); float v = val.toFloat();
+    if (side == "LEFT") {
+      abbot::motor::setMotorCommand(LEFT_MOTOR_ID, v);
+    } else if (side == "RIGHT") {
+      abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, v);
+    }
+    else { int id = side.toInt(); abbot::motor::setMotorCommandRaw(id, (int)val.toInt()); }
+  });
+
+  // Tuning submenu
+  g_tuningMenu = new SerialMenu("Tuning (Madgwick)");
+  g_tuningMenu->addEntry(1, "TUNING START", [](const String&){ abbot::startTuningStream(); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started"); });
+  g_tuningMenu->addEntry(2, "TUNING STOP", [](const String&){ abbot::stopTuningStream(); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: stopped"); });
+
+  // Log channels submenu: dynamically rebuild entries on enter so each
+  // channel appears with its current ON/OFF state and selecting an item
+  // toggles the channel.
+  g_logMenu = new SerialMenu("Log Channels");
+  g_logMenu->setOnEnter([](){
+    // clear and rebuild entries
+    g_logMenu->clearEntries();
+    struct C { abbot::log::Channel ch; const char* name; } channels[] = {
+      { abbot::log::CHANNEL_TUNING,  "TUNING" },
+      { abbot::log::CHANNEL_BLE,     "BLE" },
+      { abbot::log::CHANNEL_IMU,     "IMU" },
+      { abbot::log::CHANNEL_MOTOR,   "MOTOR" },
+      { abbot::log::CHANNEL_DEFAULT, "DEFAULT" },
+    };
+    int id = 1;
+    for (auto &c : channels) {
+      const char* name = abbot::log::channelName(c.ch);
+      bool on = abbot::log::isChannelEnabled(c.ch);
+      char lbl[64];
+      snprintf(lbl, sizeof(lbl), "%s: %s", name, on ? "ON" : "OFF");
+      // capture channel value by copy for the action
+      abbot::log::Channel chcopy = c.ch;
+      g_logMenu->addEntry(id++, lbl, [chcopy](const String&){
+        bool newState = abbot::log::toggleChannel(chcopy);
+        char msg[64];
+        snprintf(msg, sizeof(msg), "%s %s", abbot::log::channelName(chcopy), newState ? "enabled" : "disabled");
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
+        // re-enter menu to refresh labels
+        if (g_logMenu) {
+          g_logMenu->enter();
+        }
+      });
+    }
+  });
+
+  // Root menu entries link to submenus
+  g_rootMenu->addSubmenu(1, "Calibration (BMI088)", g_calibMenu);
+  g_rootMenu->addSubmenu(2, "Motor control", g_motorMenu);
+  g_rootMenu->addSubmenu(3, "Madgwick tuning", g_tuningMenu);
+  g_rootMenu->addSubmenu(4, "Log channels", g_logMenu);
+}
+
+// Start the interactive menu programmatically (prints the menu and makes it active)
+void startInteractiveMenu(abbot::BMI088Driver *driver) {
+  ensureMenus(driver);
+  g_menuActive = true;
+  g_currentMenu = g_rootMenu;
+  if (g_currentMenu) {
+    g_currentMenu->enter();
+  }
+}
+
+
 void processSerialOnce(class abbot::BMI088Driver *driver) {
-  if (!driver) return;
-  if (!Serial || Serial.available() == 0) return;
+  if (!driver) {
+    return;
+  }
+  ensureMenus(driver);
+  if (!Serial || Serial.available() == 0) {
+    return;
+  }
   String line = Serial.readStringUntil('\n');
   line.trim();
-  if (line.length() == 0) return;
+  if (line.length() == 0) {
+    return;
+  }
+
+  // If interactive menu is active, feed input there first
+  if (g_menuActive && g_currentMenu) {
+    SerialMenu* next = g_currentMenu->handleInput(line);
+    if (next == nullptr) {
+      // exit menu
+      g_menuActive = false;
+      g_currentMenu = nullptr;
+    } else {
+      g_currentMenu = next;
+    }
+    return;
+  }
   // First try imu_cal commands
   // imu_cal functions expect upper-case tokens; we forward the raw line but
   // the imu_cal module uppercases internally when parsing.
@@ -30,23 +175,35 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     char buf[128];
     up.toCharArray(buf, sizeof(buf));
     char *tk = strtok(buf, " \t\r\n");
-    if (!tk) return;
+    if (!tk) {
+      return;
+    }
     char *t2 = strtok(NULL, " \t\r\n");
-    if (!t2) return;
+    if (!t2) {
+      return;
+    }
     if (strcmp(t2, "START") == 0) {
       char *what = strtok(NULL, " \t\r\n");
-      if (!what) return;
+      if (!what) {
+        return;
+      }
       int sampleCount = 2000;
       char *nstr = strtok(NULL, " \t\r\n");
       if (nstr) {
         int v = atoi(nstr);
-        if (v > 0) sampleCount = v;
+        if (v > 0) {
+          sampleCount = v;
+        }
       }
       if (strcmp(what, "GYRO") == 0) {
-        if (!abbot::imu_cal::isCalibrating()) abbot::imu_cal::startGyroCalibration(*driver, sampleCount);
+        if (!abbot::imu_cal::isCalibrating()) {
+          abbot::imu_cal::startGyroCalibration(*driver, sampleCount);
+        }
         return;
       } else if (strcmp(what, "ACCEL") == 0) {
-        if (!abbot::imu_cal::isCalibrating()) abbot::imu_cal::startAccelCalibration(*driver, sampleCount);
+        if (!abbot::imu_cal::isCalibrating()) {
+          abbot::imu_cal::startAccelCalibration(*driver, sampleCount);
+        }
         return;
       }
     } else if (strcmp(t2, "DUMP") == 0) {
@@ -58,26 +215,12 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     }
   }
 
-  // HELP command: print list of available serial commands
+  // HELP command: enter interactive menu (numeric selections)
   if (up == "HELP" || up == "?" || up.startsWith("HELP ")) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Available commands:");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  CALIB START GYRO [N]   - start gyro calibration (N samples, default 2000)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  CALIB START ACCEL [N]  - start accel calibration (N samples, default 2000)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  CALIB DUMP             - show current calibration values (gyro_bias, accel_offset)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  CALIB RESET            - reset stored calibration (clear NVS)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  MOTOR ENABLE           - enable motors (initializes servo bus on-demand and enables torque)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  MOTOR DISABLE          - disable motors (torque off)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  MOTOR STATUS           - print motor enabled state and IDs");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  MOTOR DUMP             - dump motor config (pins, IDs)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  TUNING START           - start CSV tuning stream (timestamp,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,left_cmd,right_cmd)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  TUNING STOP            - stop CSV tuning stream");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  MOTOR READ <LEFT|RIGHT|ID>     - read encoder/position from servo");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  MOTOR SET <LEFT|RIGHT|ID> <v>  - set motor command normalized in [-1.0..1.0]");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "      Normalized values are mapped to servo units using SC_SERVO_MAX_SPEED (default 7000). Use small values first (e.g. 0.05)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  MOTOR SET <LEFT|RIGHT|ID> RAW <value> - send raw signed servo speed units (bypasses normalization)");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "      RAW is useful for precise tuning (e.g. RAW 2000). Use short pulses and be careful.");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  MOTOR PARAMS <LEFT|RIGHT|ID> - read and print servo EEPROM/SRAM parameters and present status");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "  HELP or ?              - print this help text");
+    ensureMenus(driver);
+    g_menuActive = true;
+    g_currentMenu = g_rootMenu;
+    g_currentMenu->enter();
     return;
   }
 
@@ -114,7 +257,7 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     if (strcmp(cmd, "LIST") == 0) {
       char out[128];
       abbot::log::listEnabledChannels(out, sizeof(out));
-      LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "LOG enabled: "); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+      LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LOG enabled: %s\n", out);
       return;
     }
     char *argch = strtok(NULL, " \t\r\n");
@@ -141,7 +284,9 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
   }
 
   // Forward to motor driver processor
-  if (abbot::motor::processSerialCommand(line)) return;
+  if (abbot::motor::processSerialCommand(line)) {
+    return;
+  }
 
   LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "Unknown command: "); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, line);
 }
