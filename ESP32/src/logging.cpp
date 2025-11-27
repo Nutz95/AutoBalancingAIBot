@@ -10,6 +10,8 @@ namespace log {
 
 static uint32_t g_enabled = 0;
 static SemaphoreHandle_t g_log_mutex = nullptr;
+static uint32_t g_mask_stack[8];
+static int g_mask_stack_top = 0;
 
 void init() {
     // default: enable DEFAULT channel
@@ -41,6 +43,32 @@ bool toggleChannel(Channel c) {
         g_enabled |= mask;
         return true;
     }
+}
+
+bool pushChannelMask(uint32_t enabledMask) {
+    if (g_mask_stack_top >= (int)(sizeof(g_mask_stack)/sizeof(g_mask_stack[0]))) {
+        return false;
+    }
+    // save current and set new
+    g_mask_stack[g_mask_stack_top++] = g_enabled;
+    g_enabled = enabledMask;
+    return true;
+}
+
+bool popChannelMask() {
+    if (g_mask_stack_top <= 0) {
+        return false;
+    }
+    g_enabled = g_mask_stack[--g_mask_stack_top];
+    return true;
+}
+
+uint32_t getEnabledMask() {
+    return g_enabled;
+}
+
+void setEnabledMask(uint32_t m) {
+    g_enabled = m;
 }
 
 static bool iequals(const char *a, const char *b) {

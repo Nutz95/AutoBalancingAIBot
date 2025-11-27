@@ -39,6 +39,19 @@ bool isChannelEnabled(Channel c);
 // Toggle the channel state and return the new state (true = enabled)
 bool toggleChannel(Channel c);
 
+// Push a new enabled-channel mask onto an internal stack and set it.
+// Use this to temporarily restrict which channels are active. Returns true
+// on success (stack not full).
+bool pushChannelMask(uint32_t enabledMask);
+
+// Pop the last pushed mask and restore it. Returns true on success (stack
+// was not empty).
+bool popChannelMask();
+
+// Directly set/get the enabled mask (for advanced usage)
+uint32_t getEnabledMask();
+void setEnabledMask(uint32_t m);
+
 // Utility: parse channel name (case-insensitive). Returns 0 on failure.
 Channel channelFromString(const char *name);
 

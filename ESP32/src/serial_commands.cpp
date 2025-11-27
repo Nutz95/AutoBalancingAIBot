@@ -40,7 +40,15 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
       n = p.toInt();
     }
     if (!abbot::imu_cal::isCalibrating()) {
-      abbot::imu_cal::startGyroCalibration(*driver, n);
+      // Temporarily restrict logs to DEFAULT + IMU while calibrating
+      abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_IMU));
+      bool ok = abbot::imu_cal::startGyroCalibration(*driver, n);
+      (void)ok;
+      abbot::log::popChannelMask();
+      // If interactive menu is active, re-show the current menu
+      if (g_menuActive && g_currentMenu) {
+        g_currentMenu->enter();
+      }
     }
   });
   g_calibMenu->addEntry(2, "CALIB START ACCEL [N]", [driver](const String& p){
@@ -49,7 +57,15 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
       n = p.toInt();
     }
     if (!abbot::imu_cal::isCalibrating()) {
-      abbot::imu_cal::startAccelCalibration(*driver, n);
+      // Temporarily restrict logs to DEFAULT + IMU while calibrating
+      abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_IMU));
+      bool ok = abbot::imu_cal::startAccelCalibration(*driver, n);
+      (void)ok;
+      abbot::log::popChannelMask();
+      // If interactive menu is active, re-show the current menu
+      if (g_menuActive && g_currentMenu) {
+        g_currentMenu->enter();
+      }
     }
   });
   g_calibMenu->addEntry(3, "CALIB DUMP", [](const String&){ abbot::imu_cal::dumpCalibration(); });
@@ -81,8 +97,21 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
 
   // Tuning submenu
   g_tuningMenu = new SerialMenu("Tuning (Madgwick)");
-  g_tuningMenu->addEntry(1, "TUNING START", [](const String&){ abbot::startTuningStream(); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started"); });
-  g_tuningMenu->addEntry(2, "TUNING STOP", [](const String&){ abbot::stopTuningStream(); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: stopped"); });
+  g_tuningMenu->addEntry(1, "TUNING START", [](const String&){
+    // Restrict logs to DEFAULT + TUNING while tuning stream is active
+    abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+    abbot::startTuningStream();
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started");
+  });
+  g_tuningMenu->addEntry(2, "TUNING STOP", [](const String&){
+    abbot::stopTuningStream();
+    abbot::log::popChannelMask();
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: stopped");
+    // If interactive menu is active, re-show the current menu
+    if (g_menuActive && g_currentMenu) {
+      g_currentMenu->enter();
+    }
+  });
 
   // Log channels submenu: dynamically rebuild entries on enter so each
   // channel appears with its current ON/OFF state and selecting an item
@@ -197,12 +226,26 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       }
       if (strcmp(what, "GYRO") == 0) {
         if (!abbot::imu_cal::isCalibrating()) {
-          abbot::imu_cal::startGyroCalibration(*driver, sampleCount);
+          abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_IMU));
+          bool ok = abbot::imu_cal::startGyroCalibration(*driver, sampleCount);
+          (void)ok;
+          abbot::log::popChannelMask();
+          // If interactive menu is active, re-show the current menu
+          if (g_menuActive && g_currentMenu) {
+            g_currentMenu->enter();
+          }
         }
         return;
       } else if (strcmp(what, "ACCEL") == 0) {
         if (!abbot::imu_cal::isCalibrating()) {
-          abbot::imu_cal::startAccelCalibration(*driver, sampleCount);
+          abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_IMU));
+          bool ok = abbot::imu_cal::startAccelCalibration(*driver, sampleCount);
+          (void)ok;
+          abbot::log::popChannelMask();
+          // If interactive menu is active, re-show the current menu
+          if (g_menuActive && g_currentMenu) {
+            g_currentMenu->enter();
+          }
         }
         return;
       }
@@ -231,12 +274,18 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     char *tk = strtok(buf2, " \t\r\n");
     char *arg = strtok(NULL, " \t\r\n");
     if (arg && strcmp(arg, "START") == 0) {
+      abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
       abbot::startTuningStream();
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started");
       return;
     } else if (arg && strcmp(arg, "STOP") == 0) {
       abbot::stopTuningStream();
+      abbot::log::popChannelMask();
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: stopped");
+      // If interactive menu is active, re-show the current menu
+      if (g_menuActive && g_currentMenu) {
+        g_currentMenu->enter();
+      }
       return;
     } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING usage: TUNING START | TUNING STOP");
