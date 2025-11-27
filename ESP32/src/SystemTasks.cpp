@@ -5,6 +5,7 @@
 #include "serial_commands.h"
 #include "imu_fusion.h"
 #include "motor_driver.h"
+#include "tuning_capture.h"
 #include "../config/motor_config.h"
 #include "logging.h"
 #include <freertos/FreeRTOS.h>
@@ -81,18 +82,23 @@ static void imuConsumerTask(void *pvParameters) {
         }
       }
 
-      // If tuning stream is active, print CSV line with both degrees and radians:
-      // timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,left_cmd,right_cmd
-      if (abbot::log::isChannelEnabled(abbot::log::CHANNEL_TUNING)) {
-        const float RAD2DEG = 57.29577951308232f; // 180/pi
-        float pitch_deg = fused_pitch_local * RAD2DEG;
-        float pitch_rate_dps = fused_pitch_rate_local * RAD2DEG;
-        float pitch_rad = fused_pitch_local;
-        float pitch_rate_rads = fused_pitch_rate_local;
-        // Read last motor commands (normalized) via motor driver API
-        float left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
-        float right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
-        // Print CSV line (use LOG_PRINTF so it's formatted under the logging mutex)
+      // Tuning output: two modes exist
+      // - Stream mode: `startTuningStream()` enables CHANNEL_TUNING and SystemTasks should print CSV lines
+      // - Capture mode: `startCapture()` delegates CSV emission and stats to the tuning helper
+      const float RAD2DEG = 57.29577951308232f; // 180/pi
+      float pitch_deg = fused_pitch_local * RAD2DEG;
+      float pitch_rate_dps = fused_pitch_rate_local * RAD2DEG;
+      float pitch_rad = fused_pitch_local;
+      float pitch_rate_rads = fused_pitch_rate_local;
+      // Read last motor commands (normalized) via motor driver API
+      float left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
+      float right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
+
+      if (abbot::tuning::isCapturing()) {
+        // In capture mode the helper is responsible for CSV emission and statistics
+        abbot::tuning::submitSample(sample.ts_ms, pitch_deg, pitch_rad, pitch_rate_dps, pitch_rate_rads, left_cmd, right_cmd);
+      } else if (abbot::log::isChannelEnabled(abbot::log::CHANNEL_TUNING)) {
+        // Stream mode: print CSV here
         LOG_PRINTF(abbot::log::CHANNEL_TUNING,
                    "%lu,%.4f,%.6f,%.4f,%.6f,%.4f,%.4f\n",
                    sample.ts_ms,

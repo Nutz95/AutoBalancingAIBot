@@ -5,6 +5,7 @@
 #include "../config/motor_config.h"
 #include "BMI088Driver.h"
 #include "logging.h"
+#include "tuning_capture.h"
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -25,6 +26,13 @@ static SerialMenu *g_tuningMenu = nullptr;
 static SerialMenu *g_logMenu = nullptr;
 static bool g_menuActive = false;
 static SerialMenu* g_currentMenu = nullptr;
+
+// Called by tuning capture when it finishes so we can re-enter the current menu
+static void onCaptureCompleteRefreshMenu() {
+  if (g_menuActive && g_currentMenu) {
+    g_currentMenu->enter();
+  }
+}
 
 static void ensureMenus(abbot::BMI088Driver *driver) {
   if (g_rootMenu) {
@@ -97,17 +105,69 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
 
   // Tuning submenu
   g_tuningMenu = new SerialMenu("Tuning (Madgwick)");
-  g_tuningMenu->addEntry(1, "TUNING START", [](const String&){
-    // Restrict logs to DEFAULT + TUNING while tuning stream is active
+  g_tuningMenu->addEntry(1, "TUNING STATIC (2000)", [](const String&){
+    // Capture 2000 samples (static noise measurement)
+    abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+    abbot::tuning::startCapture(2000, true);
+    if (g_menuActive && g_currentMenu) { g_currentMenu->enter(); }
+  });
+  g_tuningMenu->addEntry(2, "TUNING DYNAMIC (20000)", [](const String&){
+    // Capture 20000 samples (dynamic maneuver)
+    abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+    abbot::tuning::startCapture(20000, true);
+    if (g_menuActive && g_currentMenu) { g_currentMenu->enter(); }
+  });
+  g_tuningMenu->addEntry(3, "TUNING CUSTOM <N>", [](const String& p){
+    String s = p; s.trim();
+    if (s.length() == 0) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: 3 <N> (number of samples)");
+      return;
+    }
+    int n = s.toInt();
+    if (n <= 0) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Invalid sample count");
+      return;
+    }
+    abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+    abbot::tuning::startCapture((uint32_t)n, true);
+    if (g_menuActive && g_currentMenu) { g_currentMenu->enter(); }
+  });
+  // Stats-only menu entries (periodic progress + final summary, no CSV)
+  g_tuningMenu->addEntry(6, "TUNING STATIC STATS (2000)", [](const String&){
+    abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+    abbot::tuning::startCapture(2000, false, true);
+    if (g_menuActive && g_currentMenu) { g_currentMenu->enter(); }
+  });
+  g_tuningMenu->addEntry(7, "TUNING DYNAMIC STATS (20000)", [](const String&){
+    abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+    abbot::tuning::startCapture(20000, false, true);
+    if (g_menuActive && g_currentMenu) { g_currentMenu->enter(); }
+  });
+  g_tuningMenu->addEntry(8, "TUNING CUSTOM STATS <N>", [](const String& p){
+    String s = p; s.trim();
+    if (s.length() == 0) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: 8 <N> (number of samples)");
+      return;
+    }
+    int n = s.toInt();
+    if (n <= 0) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Invalid sample count");
+      return;
+    }
+    abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+    abbot::tuning::startCapture((uint32_t)n, false, true);
+    if (g_menuActive && g_currentMenu) { g_currentMenu->enter(); }
+  });
+  g_tuningMenu->addEntry(4, "TUNING STREAM START", [](const String&){
     abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
     abbot::startTuningStream();
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started");
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started (stream)");
+    if (g_menuActive && g_currentMenu) { g_currentMenu->enter(); }
   });
-  g_tuningMenu->addEntry(2, "TUNING STOP", [](const String&){
+  g_tuningMenu->addEntry(5, "TUNING STREAM STOP", [](const String&){
     abbot::stopTuningStream();
     abbot::log::popChannelMask();
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: stopped");
-    // If interactive menu is active, re-show the current menu
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: stopped (stream)");
     if (g_menuActive && g_currentMenu) {
       g_currentMenu->enter();
     }
@@ -153,6 +213,10 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
   g_rootMenu->addSubmenu(2, "Motor control", g_motorMenu);
   g_rootMenu->addSubmenu(3, "Madgwick tuning", g_tuningMenu);
   g_rootMenu->addSubmenu(4, "Log channels", g_logMenu);
+
+  // Register capture-complete callback so the interactive menu can be re-shown
+  // when an auto-capture finishes.
+  abbot::tuning::setOnCaptureComplete(onCaptureCompleteRefreshMenu);
 }
 
 // Start the interactive menu programmatically (prints the menu and makes it active)
@@ -273,7 +337,18 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     up.toCharArray(buf2, sizeof(buf2));
     char *tk = strtok(buf2, " \t\r\n");
     char *arg = strtok(NULL, " \t\r\n");
+    char *arg2 = strtok(NULL, " \t\r\n");
     if (arg && strcmp(arg, "START") == 0) {
+      // Optional sample count after START
+      if (arg2) {
+        int n = atoi(arg2);
+        if (n > 0) {
+          abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+          abbot::tuning::startCapture((uint32_t)n, true);
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: auto-capture started");
+          return;
+        }
+      }
       abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
       abbot::startTuningStream();
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started");
@@ -286,6 +361,17 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       if (g_menuActive && g_currentMenu) {
         g_currentMenu->enter();
       }
+      return;
+    } else if (arg && strcmp(arg, "START_STATS") == 0) {
+      // Start capture in stats-only mode (periodic progress + final summary)
+      int sampleCount = 2000;
+      if (arg2) {
+        int v = atoi(arg2);
+        if (v > 0) sampleCount = v;
+      }
+      abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+      abbot::tuning::startCapture((uint32_t)sampleCount, false, true);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: auto-capture (stats-only) started");
       return;
     } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING usage: TUNING START | TUNING STOP");
