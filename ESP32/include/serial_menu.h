@@ -42,6 +42,9 @@ public:
   // Print the entries (used when entering or after invalid input)
   void printEntries();
 
+  // For diagnostics: number of entries currently in this menu
+  size_t getEntryCount() const { return entries.size(); }
+
   // Parent menu (nullptr for root)
   void setParent(SerialMenu* p) { parent = p; }
   SerialMenu* getParent() const { return parent; }

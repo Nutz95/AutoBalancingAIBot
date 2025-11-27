@@ -34,4 +34,9 @@ void startTuningStream();
 void stopTuningStream();
 bool isTuningStreamActive();
 
+// Request a warm-up period (seconds) for Madgwick filter before emitting tuning CSV.
+// During warm-up the filter will keep processing samples but tuning output will be suppressed.
+// Callers (e.g. tuning_capture) may call this when a capture starts.
+void requestTuningWarmupSeconds(float seconds);
+
 } // namespace abbot

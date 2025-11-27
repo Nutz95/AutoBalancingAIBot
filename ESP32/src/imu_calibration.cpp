@@ -46,9 +46,10 @@ bool saveCalibration(const Calibration &cal) {
 
 void applyCalibrationToSample(struct abbot::IMUSample &s) {
   if (!g_cal.valid) return;
-  s.gx -= g_cal.gyro_bias[0];
-  s.gy -= g_cal.gyro_bias[1];
-  s.gz -= g_cal.gyro_bias[2];
+  // NOTE: gyro bias is applied at runtime by the balancer task (abbot namespace)
+  // to support warm-up estimation and EMA refinement. Do NOT subtract
+  // `g_cal.gyro_bias[]` here to avoid double-application when the runtime
+  // bias is also in use.
   s.ax -= g_cal.accel_offset[0];
   s.ay -= g_cal.accel_offset[1];
   s.az -= g_cal.accel_offset[2];

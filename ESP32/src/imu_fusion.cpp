@@ -75,7 +75,12 @@ void Madgwick::update(float gx, float gy, float gz, float ax, float ay, float az
     // compute pitch and pitch rate (derived)
     // pitch = asin(2*(w*y - z*x))
     float v = 2.0f * (q0_ * q2_ - q3_ * q1_);
-    if (v > 1.0f) v = 1.0f; if (v < -1.0f) v = -1.0f;
+    if (v > 1.0f) {
+        v = 1.0f;
+    }
+    if (v < -1.0f) {
+        v = -1.0f;
+    }
     float pitch = asinf(v);
 
     if (dt > 1e-9f && last_dt_ > 0.0f) {
@@ -91,9 +96,64 @@ void Madgwick::getQuaternion(float &w, float &x, float &y, float &z) const {
     w = q0_; x = q1_; y = q2_; z = q3_;
 }
 
+void Madgwick::setQuaternion(float w, float x, float y, float z) {
+    q0_ = w; q1_ = x; q2_ = y; q3_ = z;
+    // normalize
+    float n = sqrtf(q0_*q0_ + q1_*q1_ + q2_*q2_ + q3_*q3_);
+    if (n > 1e-9f) {
+        q0_ /= n; q1_ /= n; q2_ /= n; q3_ /= n;
+    }
+    // reset derivative history
+    last_pitch_ = getPitch();
+    last_dt_ = 0.0f;
+    last_pitch_rate_ = 0.0f;
+}
+
+void Madgwick::setFromAccel(float ax, float ay, float az) {
+    // normalize accel
+    float norm = sqrtf(ax*ax + ay*ay + az*az);
+    if (norm < 1e-6f) {
+        // fallback to identity
+        setQuaternion(1.0f, 0.0f, 0.0f, 0.0f);
+        return;
+    }
+    float tx = ax / norm;
+    float ty = ay / norm;
+    float tz = az / norm;
+    // We want quaternion that rotates world Z (0,0,1) to target (tx,ty,tz)
+    float dot = tz; // dot((0,0,1), t) = tz
+    const float EPS = 1e-6f;
+    if (dot > 1.0f - EPS) {
+        // already aligned
+        setQuaternion(1.0f, 0.0f, 0.0f, 0.0f);
+        return;
+    }
+    if (dot < -1.0f + EPS) {
+        // 180 degree rotation about X axis (arbitrary)
+        setQuaternion(0.0f, 1.0f, 0.0f, 0.0f);
+        return;
+    }
+    // cross product v = z x t = (-ty, tx, 0)
+    float vx = -ty;
+    float vy = tx;
+    float vz = 0.0f;
+    float s = sqrtf((1.0f + dot) * 2.0f);
+    float invs = 1.0f / s;
+    float qw = s * 0.5f;
+    float qx = vx * invs;
+    float qy = vy * invs;
+    float qz = vz * invs;
+    setQuaternion(qw, qx, qy, qz);
+}
+
 float Madgwick::getPitch() const {
     float v = 2.0f * (q0_ * q2_ - q3_ * q1_);
-    if (v > 1.0f) v = 1.0f; if (v < -1.0f) v = -1.0f;
+    if (v > 1.0f) {
+        v = 1.0f;
+    }
+    if (v < -1.0f) {
+        v = -1.0f;
+    }
     return asinf(v);
 }
 

@@ -26,6 +26,10 @@ static SerialMenu *g_tuningMenu = nullptr;
 static SerialMenu *g_logMenu = nullptr;
 static bool g_menuActive = false;
 static SerialMenu* g_currentMenu = nullptr;
+// Guard to prevent concurrent menu construction (race after upload)
+static volatile bool g_building_menu = false;
+// Mutex for protecting menu construction
+static portMUX_TYPE g_menu_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Called by tuning capture when it finishes so we can re-enter the current menu
 static void onCaptureCompleteRefreshMenu() {
@@ -35,10 +39,27 @@ static void onCaptureCompleteRefreshMenu() {
 }
 
 static void ensureMenus(abbot::BMI088Driver *driver) {
+  // Fast-path: already built
+  portENTER_CRITICAL(&g_menu_mux);
   if (g_rootMenu) {
+    portEXIT_CRITICAL(&g_menu_mux);
     return;
   }
-  g_rootMenu = new SerialMenu("Main Menu");
+  // If another task is building the menus, wait until it's done
+  if (g_building_menu) {
+    portEXIT_CRITICAL(&g_menu_mux);
+    // wait until builder finishes (should be quick)
+    while (!g_rootMenu) {
+      vTaskDelay(pdMS_TO_TICKS(1));
+    }
+    return;
+  }
+  // mark that we are building
+  g_building_menu = true;
+  portEXIT_CRITICAL(&g_menu_mux);
+
+  // Build root locally and only assign to global after fully populated
+  SerialMenu *root = new SerialMenu("Main Menu");
 
   // Calibration submenu
   g_calibMenu = new SerialMenu("Calibration Commands");
@@ -209,10 +230,16 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
   });
 
   // Root menu entries link to submenus
-  g_rootMenu->addSubmenu(1, "Calibration (BMI088)", g_calibMenu);
-  g_rootMenu->addSubmenu(2, "Motor control", g_motorMenu);
-  g_rootMenu->addSubmenu(3, "Madgwick tuning", g_tuningMenu);
-  g_rootMenu->addSubmenu(4, "Log channels", g_logMenu);
+  root->addSubmenu(1, "Calibration (BMI088)", g_calibMenu);
+  root->addSubmenu(2, "Motor control", g_motorMenu);
+  root->addSubmenu(3, "Madgwick tuning", g_tuningMenu);
+  root->addSubmenu(4, "Log channels", g_logMenu);
+
+  // Commit to globals after fully-built to avoid races
+  portENTER_CRITICAL(&g_menu_mux);
+  g_rootMenu = root;
+  g_building_menu = false;
+  portEXIT_CRITICAL(&g_menu_mux);
 
   // Register capture-complete callback so the interactive menu can be re-shown
   // when an auto-capture finishes.
@@ -239,22 +266,54 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     return;
   }
   String line = Serial.readStringUntil('\n');
+  // Optional RX echo for debugging user-typed commands. Define
+  // `ENABLE_RX_ECHO` at compile time to enable this (see platformio.ini
+  // build_flags). Disabled by default to keep serial output clean.
+#ifdef ENABLE_RX_ECHO
+  {
+    String tline = line;
+    tline.trim();
+    if (tline.length() > 0) {
+      char dbg2[128];
+      tline.toCharArray(dbg2, sizeof(dbg2));
+      char outbuf[160];
+      snprintf(outbuf, sizeof(outbuf), "RX: %s", dbg2);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, outbuf);
+    }
+  }
+#endif
   line.trim();
   if (line.length() == 0) {
     return;
   }
 
-  // If interactive menu is active, feed input there first
+  // If interactive menu is active, only feed the menu when the input
+  // looks like a numeric selection. Otherwise fall through so textual
+  // commands (e.g. "TUNING START 2000") are still processed while the
+  // menu is visible.
   if (g_menuActive && g_currentMenu) {
-    SerialMenu* next = g_currentMenu->handleInput(line);
-    if (next == nullptr) {
-      // exit menu
-      g_menuActive = false;
-      g_currentMenu = nullptr;
-    } else {
-      g_currentMenu = next;
+    // determine if first token is numeric
+    String s = line;
+    s.trim();
+    int sp = s.indexOf(' ');
+    String first = (sp == -1) ? s : s.substring(0, sp);
+    bool firstIsNum = true;
+    if (first.length() == 0) firstIsNum = false;
+    for (unsigned int i = 0; i < first.length() && firstIsNum; ++i) {
+      if (!isDigit(first.charAt(i))) firstIsNum = false;
     }
-    return;
+    if (firstIsNum) {
+      SerialMenu* next = g_currentMenu->handleInput(line);
+      if (next == nullptr) {
+        // exit menu
+        g_menuActive = false;
+        g_currentMenu = nullptr;
+      } else {
+        g_currentMenu = next;
+      }
+      return;
+    }
+    // else: not a numeric selection - fall through to command parsing
   }
   // First try imu_cal commands
   // imu_cal functions expect upper-case tokens; we forward the raw line but

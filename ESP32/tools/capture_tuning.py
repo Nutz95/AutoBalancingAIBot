@@ -52,19 +52,16 @@ try:
 except Exception:
     pass
 
-# If an initial command was provided, send it and wait briefly for device to respond
+# If an initial command was provided, defer sending it until we see a likely
+# interactive prompt / main menu from the device. This avoids missing the
+# command when the ESP32 is still booting and the serial task isn't ready.
+pending_cmd = None
 if args.cmd:
-    try:
-        cmd = args.cmd
-        if not cmd.endswith('\n'):
-            cmd = cmd + '\n'
-        ser.write(cmd.encode('utf8'))
-        ser.flush()
-        # give device a moment to process and emit output
-        time.sleep(0.3)
-        print('Sent initial command:', args.cmd)
-    except Exception as e:
-        print('Failed to send initial command:', e)
+    pending_cmd = args.cmd
+    if not pending_cmd.endswith('\n'):
+        pending_cmd = pending_cmd + '\n'
+    # the actual send will occur once we observe a menu-like line in the serial
+    cmd_sent = False
 
 with open(outfile, 'w', encoding='utf8') as f:
     try:
@@ -79,6 +76,20 @@ with open(outfile, 'w', encoding='utf8') as f:
             print(s)
             f.write(s + '\n')
             f.flush()
+            # If we have a pending initial command and we detect the device's
+            # interactive menu, send the command once to ensure it's processed.
+            if pending_cmd and not cmd_sent:
+                menu_triggers = ['== Main Menu ==', 'Main Menu', 'TUNING: capture started', 'IMU tasks started']
+                for trig in menu_triggers:
+                    if trig in s:
+                        try:
+                            ser.write(pending_cmd.encode('utf8'))
+                            ser.flush()
+                            print('Sent initial command (deferred):', args.cmd)
+                        except Exception as e:
+                            print('Failed to send initial command:', e)
+                        cmd_sent = True
+                        break
             # Stop if the stop-string was observed
             if args.stop_string and args.stop_string in s:
                 print('End marker seen, stopping capture')

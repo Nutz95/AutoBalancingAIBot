@@ -3,6 +3,7 @@
 #include <cmath>
 #include <cstdio>
 #include <Arduino.h>
+#include "SystemTasks.h"
 
 namespace abbot {
 namespace tuning {
@@ -44,6 +45,11 @@ void startCapture(uint32_t nSamples, bool streamCsv, bool statsOnly) {
   } else {
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: capture started (no-stream)");
   }
+  // Request a Madgwick warm-up period to reduce initial transient prior to emitting CSV
+  // Default warm-up: ~12 seconds worth of samples (based on fusion sample rate)
+  const float DEFAULT_WARMUP_SECONDS = 1.0f;
+  // Default warmup reduced to 1s for faster capture start; callers may override
+  requestTuningWarmupSeconds(DEFAULT_WARMUP_SECONDS);
 }
 
 void setOnCaptureComplete(void (*cb)()) {
@@ -162,7 +168,10 @@ void submitSample(uint32_t ts_ms,
   }
 }
 
-bool isCapturing() { return g_active; }
+bool isCapturing()
+{
+  return g_active;
+}
 
 } // namespace tuning
 } // namespace abbot

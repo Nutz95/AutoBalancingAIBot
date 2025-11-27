@@ -17,6 +17,11 @@ public:
     float getPitch() const;    // radians
     float getRoll() const;     // radians
     float getPitchRate() const; // rad/s (derived from change in pitch)
+    // Set quaternion directly (w,x,y,z) and seed internal state
+    void setQuaternion(float w, float x, float y, float z);
+    // Initialize quaternion from accelerometer vector (ax,ay,az)
+    // Accelerometer units are arbitrary; function will normalize internally.
+    void setFromAccel(float ax, float ay, float az);
 
 private:
     float q0_, q1_, q2_, q3_;

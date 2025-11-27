@@ -170,6 +170,35 @@ def analyze_and_plot(path, outdir=None):
     fig.savefig(p1)
     plt.close(fig)
 
+    # --- Accel-derived pitch vs fused pitch overlay ---
+    # Compute simple accel-derived pitch (degrees): pitch_accel = atan2(-ax, sqrt(ay^2+az^2))
+    ax_vals = data[:,5]
+    ay_vals = data[:,6]
+    az_vals = data[:,7]
+    pitch_accel = np.degrees(np.arctan2(-ax_vals, np.sqrt(ay_vals*ay_vals + az_vals*az_vals)))
+
+    fig, ax = plt.subplots(figsize=(10,4))
+    ax.plot(t, pitch, label='fused pitch (deg)', color='tab:blue', linewidth=1)
+    ax.plot(t, pitch_accel, label='accel-derived pitch (deg)', color='tab:orange', alpha=0.8, linewidth=1)
+    ax.set_xlabel('time (s)')
+    ax.set_ylabel('pitch (deg)')
+    ax.set_title('Fused vs accel-derived pitch')
+    ax.grid(True)
+    ax.legend()
+    p_overlay = outdir / 'pitch_accel_vs_fused.png'
+    fig.tight_layout()
+    fig.savefig(p_overlay)
+    plt.close(fig)
+
+    # compute correlation and RMSE between accel-derived and fused pitch
+    try:
+        corr_acc_fused = float(np.corrcoef(pitch_accel, pitch)[0,1])
+        rmse = float(np.sqrt(np.mean((pitch_accel - pitch)**2)))
+    except Exception:
+        corr_acc_fused = None
+        rmse = None
+    print('Accel vs fused: corr=', corr_acc_fused, 'rmse=', rmse)
+
     # plot running mean/std to inspect startup transient
     fig, ax = plt.subplots(figsize=(10,4))
     ax.plot(t, run_mean_pitch, label='running mean (pitch)', color='tab:green')
@@ -356,6 +385,8 @@ def analyze_and_plot(path, outdir=None):
         fh.write('\n-- Extended metrics --\n')
         fh.write(f'corr_temp_pitch: {None if "corr_pitch" not in locals() else corr_pitch}\n')
         fh.write(f'corr_temp_pr: {None if "corr_pr" not in locals() else corr_pr}\n')
+        fh.write(f'corr_accel_vs_fused_pitch: {corr_acc_fused}\n')
+        fh.write(f'rmse_accel_vs_fused_pitch_deg: {rmse}\n')
         if 'fs' in locals() and fs is not None:
             if 'taus_p' in locals() and taus_p is not None:
                 fh.write('allan_pitch_taus_s: ' + ','.join([f'{v:.6g}' for v in taus_p]) + '\n')
