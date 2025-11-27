@@ -21,6 +21,8 @@ try:
     import numpy as np
     import matplotlib.pyplot as plt
     from scipy.signal import welch
+    from scipy.signal import detrend as scipy_detrend
+    from scipy import stats as scipy_stats
 except Exception as e:
     print("Missing Python packages for analysis. Install with: pip install numpy matplotlib scipy")
     raise
@@ -102,6 +104,28 @@ def analyze_and_plot(path, outdir=None):
     pr = data[:,3]
     temp = data[:,11]
 
+    # diagnostics: running mean/std to inspect startup transient
+    def running_stats(x, window=200):
+        # simple running mean/std (past window)
+        import numpy as _np
+        if len(x) < window:
+            return _np.cumsum(x)/(_np.arange(len(x))+1), _np.zeros_like(x)
+        csum = _np.cumsum(x)
+        csum2 = _np.cumsum(x*x)
+        mean = _np.empty_like(x)
+        std = _np.empty_like(x)
+        for i in range(len(x)):
+            start = max(0, i-window+1)
+            n = i-start+1
+            s = csum[i] - (csum[start-1] if start>0 else 0.0)
+            s2 = csum2[i] - (csum2[start-1] if start>0 else 0.0)
+            mean[i] = s / n
+            var = (s2 - (s*s)/n) / (n-1) if n>1 else 0.0
+            std[i] = _np.sqrt(var) if var>0 else 0.0
+        return mean, std
+
+    run_mean_pitch, run_std_pitch = running_stats(pitch, window=200)
+
     # basic stats
     stats = {
         'samples': int(data.shape[0]),
@@ -146,6 +170,20 @@ def analyze_and_plot(path, outdir=None):
     fig.savefig(p1)
     plt.close(fig)
 
+    # plot running mean/std to inspect startup transient
+    fig, ax = plt.subplots(figsize=(10,4))
+    ax.plot(t, run_mean_pitch, label='running mean (pitch)', color='tab:green')
+    ax.fill_between(t, run_mean_pitch - run_std_pitch, run_mean_pitch + run_std_pitch, color='tab:green', alpha=0.2, label='running std')
+    ax.set_xlabel('time (s)')
+    ax.set_ylabel('pitch (deg)')
+    ax.set_title('Running mean/std (window=200 samples)')
+    ax.grid(True)
+    ax.legend()
+    p_rm = outdir / 'pitch_running_stats.png'
+    fig.tight_layout()
+    fig.savefig(p_rm)
+    plt.close(fig)
+
     fig, ax1 = plt.subplots(figsize=(10,4))
     ax1.plot(t, pr, label='pitch_rate (deg/s)', color='orange')
     ax1.set_xlabel('time (s)')
@@ -162,6 +200,24 @@ def analyze_and_plot(path, outdir=None):
     p2 = outdir / 'pr_time.png'
     fig.tight_layout()
     fig.savefig(p2)
+    plt.close(fig)
+
+    # detrend pitch and plot
+    try:
+        pitch_detr = scipy_detrend(pitch)
+    except Exception:
+        pitch_detr = pitch - np.poly1d(np.polyfit(t, pitch, 1))(t)
+
+    fig, ax = plt.subplots(figsize=(10,4))
+    ax.plot(t, pitch_detr, label='detrended pitch (deg)', color='tab:purple')
+    ax.set_xlabel('time (s)')
+    ax.set_ylabel('pitch (deg)')
+    ax.set_title('Detrended pitch')
+    ax.grid(True)
+    ax.legend()
+    p_dt = outdir / 'pitch_detrended.png'
+    fig.tight_layout()
+    fig.savefig(p_dt)
     plt.close(fig)
 
     # histograms
@@ -200,17 +256,90 @@ def analyze_and_plot(path, outdir=None):
         plt.savefig(p5)
         plt.close()
 
-        f_pr, Pxx_pr = welch(pr, fs=fs, nperseg=min(1024, len(pr)))
-        plt.figure(figsize=(8,4))
-        plt.semilogy(f_pr, Pxx_pr)
-        plt.title('Pitch-rate PSD (Welch)')
-        plt.xlabel('Frequency (Hz)')
-        plt.ylabel('PSD ((deg/s)^2/Hz)')
-        plt.grid(True)
-        p6 = outdir / 'pr_psd.png'
-        plt.tight_layout()
-        plt.savefig(p6)
-        plt.close()
+    # --- Allan variance for gyro (pitch rate) and for pitch ---
+    def allan_variance(x, fs, max_num=50):
+        # non-overlapping Allan var for taus doubling
+        import numpy as _np
+        if fs is None or len(x) < 4:
+            return None, None
+        dt = 1.0 / fs
+        n = len(x)
+        max_m = int(_np.floor(n/2))
+        taus = []
+        adevs = []
+        m = 1
+        while m <= max_m and len(taus) < max_num:
+            # cluster length m samples -> tau = m*dt
+            k = int(_np.floor(n / m))
+            if k < 2:
+                break
+            # average over clusters
+            y = _np.array([_np.mean(x[i*m:(i+1)*m]) for i in range(k)])
+            # Allan variance from adjacent cluster differences
+            diff = y[1:] - y[:-1]
+            avar = 0.5 * _np.mean(diff*diff)
+            adev = _np.sqrt(avar)
+            taus.append(m*dt)
+            adevs.append(adev)
+            m = m * 2
+        return _np.array(taus), _np.array(adevs)
+
+    fs = estimate_sampling_rate(ts)
+    if fs is not None:
+        taus_p, adevs_p = allan_variance(pitch, fs)
+        taus_pr, adevs_pr = allan_variance(pr, fs)
+        # plot Allan
+        if taus_p is not None:
+            plt.figure(figsize=(6,4))
+            plt.loglog(taus_p, adevs_p, marker='o')
+            plt.xlabel('tau (s)')
+            plt.ylabel('Allan deviation (deg)')
+            plt.grid(True, which='both')
+            plt.title('Allan deviation - pitch')
+            plt.tight_layout()
+            plt.savefig(outdir / 'allan_pitch.png')
+            plt.close()
+        if taus_pr is not None:
+            plt.figure(figsize=(6,4))
+            plt.loglog(taus_pr, adevs_pr, marker='o')
+            plt.xlabel('tau (s)')
+            plt.ylabel('Allan deviation (deg/s)')
+            plt.grid(True, which='both')
+            plt.title('Allan deviation - pitch rate')
+            plt.tight_layout()
+            plt.savefig(outdir / 'allan_pr.png')
+            plt.close()
+
+    # Temperature correlation analysis
+    try:
+        # Pearson correlation between temp and pitch / pitch rate
+        corr_pitch = float(scipy_stats.pearsonr(temp, pitch)[0])
+        corr_pr = float(scipy_stats.pearsonr(temp, pr)[0])
+    except Exception:
+        corr_pitch = None
+        corr_pr = None
+
+    # compute low-frequency pitch (moving average) to see bias vs temp
+    def moving_average(x, w=500):
+        import numpy as _np
+        if w <= 1:
+            return x
+        c = _np.convolve(x, _np.ones(w), 'same') / w
+        return c
+
+    pitch_low = moving_average(pitch, w=max(3, int(fs*0.5)) if fs else 200)
+
+    # scatter plot temp vs pitch_low
+    plt.figure(figsize=(6,4))
+    plt.scatter(temp, pitch_low, s=6, alpha=0.6)
+    plt.xlabel('temp (C)')
+    plt.ylabel('low-freq pitch (deg)')
+    plt.grid(True)
+    plt.title(f'Temp vs low-freq pitch (corr={corr_pitch:.3f})' if corr_pitch is not None else 'Temp vs low-freq pitch')
+    plt.tight_layout()
+    plt.savefig(outdir / 'temp_vs_pitch_low.png')
+    plt.close()
+
 
     # write simple report
     rpt = outdir / 'summary.txt'
@@ -221,6 +350,19 @@ def analyze_and_plot(path, outdir=None):
         if fs is not None:
             fh.write(f'estimated_sample_rate_Hz: {fs}\n')
             fh.write('\nColumns: timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd\n')
+
+    # append extended metrics (correlations, Allan)
+    with open(rpt, 'a') as fh:
+        fh.write('\n-- Extended metrics --\n')
+        fh.write(f'corr_temp_pitch: {None if "corr_pitch" not in locals() else corr_pitch}\n')
+        fh.write(f'corr_temp_pr: {None if "corr_pr" not in locals() else corr_pr}\n')
+        if 'fs' in locals() and fs is not None:
+            if 'taus_p' in locals() and taus_p is not None:
+                fh.write('allan_pitch_taus_s: ' + ','.join([f'{v:.6g}' for v in taus_p]) + '\n')
+                fh.write('allan_pitch_adev: ' + ','.join([f'{v:.6g}' for v in adevs_p]) + '\n')
+            if 'taus_pr' in locals() and taus_pr is not None:
+                fh.write('allan_pr_taus_s: ' + ','.join([f'{v:.6g}' for v in taus_pr]) + '\n')
+                fh.write('allan_pr_adev: ' + ','.join([f'{v:.6g}' for v in adevs_pr]) + '\n')
 
     print('Plots and summary written to', outdir)
 
