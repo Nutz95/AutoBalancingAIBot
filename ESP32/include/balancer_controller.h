@@ -24,9 +24,21 @@ namespace controller {
     float getDeadband();
     void calibrateDeadband();
     // Called each IMU loop to compute (and optionally apply) motor command.
-    // Arguments: fused_pitch_rad (radians), fused_pitch_rate_rads (radians/sec), dt_s (seconds).
+    // Arguments: fused_pitch_rad (radians), fused_pitch_rate_rads (radians/sec), dt_s (seconds), pitch_invert (flip sign if true).
     // Returns computed normalized command in [-1,1].
-    float processCycle(float fused_pitch_rad, float fused_pitch_rate_rads, float dt_s);
+    float processCycle(float fused_pitch_rad, float fused_pitch_rate_rads, float dt_s, bool pitch_invert);
+    
+    // Autotuning API
+    void startAutotune();
+    void stopAutotune();
+    bool isAutotuning();
+    const char* getAutotuneStatus();
+    void applyAutotuneGains(); // Apply gains if autotune completed successfully
+
+    // Autotune configuration setters
+    void setAutotuneRelay(float amplitude);
+    void setAutotuneDeadband(float deadband_deg);
+    void setAutotuneMaxAngle(float max_pitch_deg);
 }
 
 } // namespace balancer

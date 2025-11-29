@@ -8,6 +8,7 @@
 #include "pid_controller.h"
 #include "motor_driver.h"
 #include "units.h"
+#include "autotune_controller.h"
 #include <Preferences.h>
 
 // Configs
@@ -25,6 +26,9 @@ static const float g_cmd_slew = BALANCER_CMD_SLEW_LIMIT;
 static float g_deadband = BALANCER_MOTOR_MIN_OUTPUT;
 static Preferences g_prefs;
 static bool g_prefs_started = false;
+static AutotuneController g_autotune;
+static bool g_autotune_active = false;
+static AutotuneController::Config g_autocfg; // configurable autotune params
 
 void init()
 {
@@ -127,12 +131,62 @@ void calibrateDeadband()
 
 // Called each IMU loop to compute and (if active) command motors. Returns
 // the computed command (normalized) regardless of whether it was sent.
-float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
+float processCycle(float fused_pitch, float fused_pitch_rate, float dt, bool pitch_invert)
 {
+    // Check if autotuning is active
+    if (g_autotune_active && g_autotune.isActive()) {
+        float pitch_deg = radToDeg(fused_pitch);
+        uint32_t dt_ms = (uint32_t)(dt * 1000.0f);
+        float autotune_cmd = g_autotune.update(pitch_deg, dt_ms);
+        
+        // Debug: log autotune state and command
+        static uint32_t last_log_ms = 0;
+        uint32_t now_ms = millis();
+        if (now_ms - last_log_ms > 500) {
+            char dbg[128];
+            snprintf(dbg, sizeof(dbg), "AUTOTUNE: state=%d pitch=%.2f° cmd=%.3f motors_en=%d", 
+                (int)g_autotune.getState(), (double)pitch_deg, (double)autotune_cmd, 
+                abbot::motor::areMotorsEnabled() ? 1 : 0);
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, dbg);
+            last_log_ms = now_ms;
+        }
+        
+        // Check if autotune just finished
+        if (!g_autotune.isActive()) {
+            g_autotune_active = false;
+            
+            if (g_autotune.getState() == AutotuneController::State::COMPLETE) {
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: COMPLETE - use 'AUTOTUNE APPLY' to set gains");
+            } else if (g_autotune.getState() == AutotuneController::State::FAILED) {
+                char buf[128];
+                snprintf(buf, sizeof(buf), "AUTOTUNE: FAILED - %s", g_autotune.getFailureReason());
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+            }
+            
+            // Zero and disable motors
+            abbot::motor::setMotorCommand(LEFT_MOTOR_ID, 0.0f);
+            abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, 0.0f);
+            abbot::motor::disableMotors();
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: motors disabled automatically");
+            return 0.0f;
+        }
+        
+        // Apply autotune command to motors
+        if (abbot::motor::areMotorsEnabled()) {
+            abbot::motor::setMotorCommand(LEFT_MOTOR_ID, autotune_cmd);
+            abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, autotune_cmd);
+        }
+        
+        return autotune_cmd;
+    }
+    
     if (!g_active) return 0.0f;
+    // Apply pitch inversion if needed
     // error: positive pitch (tilt back) requires positive motor command (forward)
-    float error = fused_pitch;
-    float error_dot = fused_pitch_rate;
+    // If pitch_invert=true: inverts sign so negative pitch (tilt forward) -> positive command
+    float pitch_sign = pitch_invert ? -1.0f : 1.0f;
+    float error = pitch_sign * fused_pitch;
+    float error_dot = pitch_sign * fused_pitch_rate;
     float cmd = g_pid.update(error, error_dot, dt);
     // clamp
     if (cmd > 1.0f) cmd = 1.0f;
@@ -162,6 +216,132 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
     LOG_PRINTF(abbot::log::CHANNEL_BALANCER, "BALANCER: cmd=%.4f err=%.6f pitch_deg=%.4f\n", cmd, (double)error, (double)radToDeg(fused_pitch));
     g_last_cmd = cmd;
     return cmd;
+}
+
+void startAutotune()
+{
+    if (g_autotune_active) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: already running");
+        return;
+    }
+    
+    // Stop regular balancing
+    if (g_active) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: stopping balancer to start tuning");
+        stop();
+    }
+    
+    // Start with current configurable parameters (defaults in g_autocfg)
+    g_autotune.start(&g_autocfg);
+    g_autotune_active = true;
+    
+    // Always enable motors for autotuning
+    abbot::motor::enableMotors();
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: motors enabled automatically");
+    
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: started - applying relay control (HOLD THE ROBOT!)");
+}
+
+void stopAutotune()
+{
+    if (!g_autotune_active) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: not running");
+        return;
+    }
+    
+    g_autotune.stop();
+    g_autotune_active = false;
+    
+    // Zero and disable motors
+    abbot::motor::setMotorCommand(LEFT_MOTOR_ID, 0.0f);
+    abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, 0.0f);
+    abbot::motor::disableMotors();
+    
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: stopped - motors disabled");
+}
+
+bool isAutotuning()
+{
+    return g_autotune_active && g_autotune.isActive();
+}
+
+const char* getAutotuneStatus()
+{
+    if (!g_autotune_active) {
+        return "IDLE";
+    }
+    
+    switch (g_autotune.getState()) {
+        case AutotuneController::State::IDLE:
+            return "IDLE";
+        case AutotuneController::State::WAITING_START:
+            return "WAITING_START (apply disturbance)";
+        case AutotuneController::State::COLLECTING:
+            return "COLLECTING (measuring oscillations)";
+        case AutotuneController::State::ANALYZING:
+            return "ANALYZING (computing gains)";
+        case AutotuneController::State::COMPLETE:
+            return "COMPLETE (use AUTOTUNE APPLY to set gains)";
+        case AutotuneController::State::FAILED:
+            return g_autotune.getFailureReason();
+        default:
+            return "UNKNOWN";
+    }
+}
+
+void applyAutotuneGains()
+{
+    if (g_autotune.getState() != AutotuneController::State::COMPLETE) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: no successful tuning result available");
+        return;
+    }
+    
+    const auto& result = g_autotune.getResult();
+    if (!result.success) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: tuning failed");
+        return;
+    }
+    
+    // Apply the computed gains
+    setGains(result.Kp, result.Ki, result.Kd);
+    
+    char buf[256];
+    snprintf(buf, sizeof(buf), 
+        "AUTOTUNE: Applied gains - Kp=%.4f Ki=%.4f Kd=%.4f | Ku=%.4f Tu=%.1fms Amp=%.2f°",
+        (double)result.Kp, (double)result.Ki, (double)result.Kd,
+        (double)result.ultimate_gain, (double)result.ultimate_period_ms,
+        (double)result.oscillation_amplitude);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+    
+    g_autotune_active = false;
+}
+
+// --- Autotune configuration setters ---
+void setAutotuneRelay(float amplitude)
+{
+    if (amplitude < 0.05f) amplitude = 0.05f;
+    if (amplitude > 1.0f) amplitude = 1.0f;
+    g_autocfg.relay_amplitude = amplitude;
+    char buf[128]; snprintf(buf, sizeof(buf), "AUTOTUNE: relay amplitude set to %.3f", (double)amplitude);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+}
+
+void setAutotuneDeadband(float deadband_deg)
+{
+    if (deadband_deg < 0.0f) deadband_deg = 0.0f;
+    if (deadband_deg > 10.0f) deadband_deg = 10.0f;
+    g_autocfg.deadband = deadband_deg;
+    char buf[128]; snprintf(buf, sizeof(buf), "AUTOTUNE: deadband set to %.3f°", (double)deadband_deg);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+}
+
+void setAutotuneMaxAngle(float max_pitch_deg)
+{
+    if (max_pitch_deg < 5.0f) max_pitch_deg = 5.0f;
+    if (max_pitch_deg > 90.0f) max_pitch_deg = 90.0f;
+    g_autocfg.max_pitch_abort = max_pitch_deg;
+    char buf[128]; snprintf(buf, sizeof(buf), "AUTOTUNE: max angle set to %.1f°", (double)max_pitch_deg);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
 }
 
 } // namespace controller

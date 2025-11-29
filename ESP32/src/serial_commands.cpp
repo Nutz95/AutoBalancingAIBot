@@ -266,6 +266,14 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
     float v = s.toFloat(); abbot::balancer::controller::setDeadband(v);
   });
   bal->addEntry(7, "BALANCE DEADBAND CALIBRATE", [](const String&){ abbot::balancer::controller::calibrateDeadband(); });
+  bal->addEntry(8, "AUTOTUNE START", [](const String&){ abbot::balancer::controller::startAutotune(); });
+  bal->addEntry(9, "AUTOTUNE STOP", [](const String&){ abbot::balancer::controller::stopAutotune(); });
+  bal->addEntry(10, "AUTOTUNE STATUS", [](const String&){
+    const char* status = abbot::balancer::controller::getAutotuneStatus();
+    char buf[128]; snprintf(buf, sizeof(buf), "AUTOTUNE: %s", status);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+  });
+  bal->addEntry(11, "AUTOTUNE APPLY", [](const String&){ abbot::balancer::controller::applyAutotuneGains(); });
   root->addSubmenu(5, "Balancer (PID)", bal);
   root->addSubmenu(4, "Log channels", g_logMenu);
 
@@ -564,6 +572,53 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       }
     }
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS <kp> <ki> <kd>");
+    return;
+  }
+
+  // AUTOTUNE commands: AUTOTUNE START | AUTOTUNE STOP | AUTOTUNE STATUS | AUTOTUNE APPLY | AUTOTUNE RELAY <amp> | AUTOTUNE DEADBAND <deg> | AUTOTUNE MAXANGLE <deg>
+  if (up.startsWith("AUTOTUNE")) {
+    char buf5[64];
+    up.toCharArray(buf5, sizeof(buf5));
+    char *tk = strtok(buf5, " \t\r\n");
+    char *arg = strtok(NULL, " \t\r\n");
+    if (!arg) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE usage: AUTOTUNE START | AUTOTUNE STOP | AUTOTUNE STATUS | AUTOTUNE APPLY | AUTOTUNE RELAY <amp> | AUTOTUNE DEADBAND <deg> | AUTOTUNE MAXANGLE <deg>");
+      return;
+    }
+    if (strcmp(arg, "START") == 0) {
+      abbot::balancer::controller::startAutotune();
+      return;
+    } else if (strcmp(arg, "STOP") == 0) {
+      abbot::balancer::controller::stopAutotune();
+      return;
+    } else if (strcmp(arg, "STATUS") == 0) {
+      const char* status = abbot::balancer::controller::getAutotuneStatus();
+      char buf[128]; snprintf(buf, sizeof(buf), "AUTOTUNE: %s", status);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+      return;
+    } else if (strcmp(arg, "APPLY") == 0) {
+      abbot::balancer::controller::applyAutotuneGains();
+      return;
+    } else if (strcmp(arg, "RELAY") == 0) {
+      char *val = strtok(NULL, " \t\r\n");
+      if (!val) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: AUTOTUNE RELAY <amplitude>"); return; }
+      float amp = atof(val);
+      abbot::balancer::controller::setAutotuneRelay(amp);
+      return;
+    } else if (strcmp(arg, "DEADBAND") == 0) {
+      char *val = strtok(NULL, " \t\r\n");
+      if (!val) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: AUTOTUNE DEADBAND <degrees>"); return; }
+      float db = atof(val);
+      abbot::balancer::controller::setAutotuneDeadband(db);
+      return;
+    } else if (strcmp(arg, "MAXANGLE") == 0) {
+      char *val = strtok(NULL, " \t\r\n");
+      if (!val) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: AUTOTUNE MAXANGLE <degrees>"); return; }
+      float maxa = atof(val);
+      abbot::balancer::controller::setAutotuneMaxAngle(maxa);
+      return;
+    }
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE usage: AUTOTUNE START | AUTOTUNE STOP | AUTOTUNE STATUS | AUTOTUNE APPLY | AUTOTUNE RELAY <amp> | AUTOTUNE DEADBAND <deg> | AUTOTUNE MAXANGLE <deg>");
     return;
   }
 

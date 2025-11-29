@@ -5,7 +5,7 @@ namespace abbot {
 namespace fusion {
 
 struct FusionConfig {
-    float beta = 0.084f;        // Madgwick gain (default tuned from capture)
+    float beta = 0.4f;        // Madgwick gain - increased to 0.4 to reduce gyro drift
     float sample_rate = 166.66667f; // Hz (measured sample rate)
     // Axis mapping: allow remapping/inversion of sensor axes into the robot
     // coordinate frame used by the fusion/filter. This makes it easy to
@@ -22,6 +22,10 @@ struct FusionConfig {
     // same for gyro (rad/s)
     int gyro_map[3] = {1, 0, 2};
     int gyro_sign[3] = {1, 1, 1};
+    
+    // Control polarity: if true, inverts pitch error for balance control
+    // Set to true if motors respond backwards (tilt forward -> motors reverse instead of forward)
+    bool pitch_invert = true;
 };
 
 } // namespace fusion

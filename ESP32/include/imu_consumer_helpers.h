@@ -64,7 +64,8 @@ void runBalancerCycleIfActive(float fused_pitch_local,
                               float fused_pitch_rate_local,
                               float dt,
                               float &left_cmd,
-                              float &right_cmd);
+                              float &right_cmd,
+                              bool pitch_invert);
 
 // Emit tuning/capture output (CSV or capture submit)
 void emitTuningOrStream(const ConsumerState &state,

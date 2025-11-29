@@ -148,9 +148,10 @@ void runBalancerCycleIfActive(float fused_pitch_local,
                               float fused_pitch_rate_local,
                               float dt,
                               float &left_cmd,
-                              float &right_cmd) {
-  if (abbot::balancer::controller::isActive()) {
-    (void)abbot::balancer::controller::processCycle(fused_pitch_local, fused_pitch_rate_local, dt);
+                              float &right_cmd,
+                              bool pitch_invert) {
+  if (abbot::balancer::controller::isActive() || abbot::balancer::controller::isAutotuning()) {
+    (void)abbot::balancer::controller::processCycle(fused_pitch_local, fused_pitch_rate_local, dt, pitch_invert);
     left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
     right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
   }
@@ -216,7 +217,11 @@ void initializeConsumerStateFromCalibrationIfNeeded(ConsumerState &state,
                                                     Preferences *prefs) {
   const float kEPS = 1e-6f;
   bool bias_all_zero = (fabsf(state.gyro_bias[0]) < kEPS && fabsf(state.gyro_bias[1]) < kEPS && fabsf(state.gyro_bias[2]) < kEPS);
+  // Acceptable delta between persisted gyro bias and IMU calibration before we decide to sync
+  const float kSYNC_THRESHOLD = 1e-4f; // ~0.0057 deg/s
+
   if (!prefs_started || bias_all_zero) {
+    // No valid persisted prefs: initialize from imu calibration
     state.gyro_bias[0] = cal.gyro_bias[0];
     state.gyro_bias[1] = cal.gyro_bias[1];
     state.gyro_bias[2] = cal.gyro_bias[2];
@@ -231,6 +236,28 @@ void initializeConsumerStateFromCalibrationIfNeeded(ConsumerState &state,
     snprintf(buf2, sizeof(buf2), "TUNING: initialized gyro_bias from imu calibration (rad/s = %.6f, %.6f, %.6f)",
              (double)state.gyro_bias[0], (double)state.gyro_bias[1], (double)state.gyro_bias[2]);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf2);
+  } else if (prefs_started && prefs) {
+    // We already have persisted prefs; if they differ significantly from the IMU calibration,
+    // sync them so on-device calibration and persisted tuning state match.
+    bool differs = false;
+    for (int i = 0; i < 3; ++i) {
+      float diff = fabsf(state.gyro_bias[i] - cal.gyro_bias[i]);
+      if (diff > kSYNC_THRESHOLD) { differs = true; break; }
+    }
+    if (differs) {
+      state.gyro_bias[0] = cal.gyro_bias[0];
+      state.gyro_bias[1] = cal.gyro_bias[1];
+      state.gyro_bias[2] = cal.gyro_bias[2];
+      state.gyro_bias_initialized = true;
+      prefs->putFloat("gbx", state.gyro_bias[0]);
+      prefs->putFloat("gby", state.gyro_bias[1]);
+      prefs->putFloat("gbz", state.gyro_bias[2]);
+      state.last_persist_ms = millis();
+      char buf3[128];
+      snprintf(buf3, sizeof(buf3), "TUNING: synced persisted gyro_bias from imu calibration (rad/s = %.6f, %.6f, %.6f)",
+               (double)state.gyro_bias[0], (double)state.gyro_bias[1], (double)state.gyro_bias[2]);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf3);
+    }
   }
 }
 
