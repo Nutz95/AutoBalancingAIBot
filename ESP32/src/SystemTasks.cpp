@@ -30,6 +30,8 @@ static QueueHandle_t calibQueue = nullptr;
 // Fusion state (shared between IMU consumer and external callers)
 static unsigned long g_last_sample_timestamp_ms = 0;
 static fusion::Madgwick g_madgwick;
+// Fusion configuration (mapping + params) used to transform sensor->robot axes
+static fusion::FusionConfig g_fusion_cfg;
 // Store sample rate (Hz) in one place so dt fallback uses the configured value
 static float g_madgwick_sample_rate_hz = 200.0f;
 // Fused outputs (units: radians, radians/sec)
@@ -61,6 +63,28 @@ static uint32_t g_initial_persist_deadline_ms = 0;
 static const uint32_t g_initial_persist_timeout_ms = 5000; // wait 5s after warmup before allowing initial persist
 static float g_initial_persist_candidate_x = 0.0f, g_initial_persist_candidate_y = 0.0f, g_initial_persist_candidate_z = 0.0f;
 // Note: tuning stream state is now managed by the logging channel manager
+
+// Map raw sensor readings into the robot coordinate frame using the
+// `g_fusion_cfg` mapping/sign arrays. `raw_g*` are gyro readings (rad/s),
+// `raw_a*` are accel readings (m/s^2). The outputs are written into
+// `out_g[3]` (gyro robot-frame) and `out_a[3]` (accel robot-frame).
+static void mapSensorToRobot(float raw_gx, float raw_gy, float raw_gz,
+                             float raw_ax, float raw_ay, float raw_az,
+                             float out_g[3], float out_a[3]) {
+  // Bias-compensate gyro readings from runtime estimates (globals now declared)
+  float sensor_g[3] = { raw_gx - g_gyro_bias_x, raw_gy - g_gyro_bias_y, raw_gz - g_gyro_bias_z };
+  float sensor_a[3] = { raw_ax, raw_ay, raw_az };
+  for (int i = 0; i < 3; ++i) {
+    int gim = g_fusion_cfg.gyro_map[i];
+    int gsign = g_fusion_cfg.gyro_sign[i];
+    int aim = g_fusion_cfg.accel_map[i];
+    int asign = g_fusion_cfg.accel_sign[i];
+    if (gim < 0 || gim > 2) gim = i;
+    if (aim < 0 || aim > 2) aim = i;
+    out_g[i] = (float)gsign * sensor_g[gim];
+    out_a[i] = (float)asign * sensor_a[aim];
+  }
+}
 
 static void imuProducerTask(void *pvParameters) {
   BMI088Driver *driver = reinterpret_cast<BMI088Driver*>(pvParameters);
@@ -97,8 +121,8 @@ static void imuConsumerTask(void *pvParameters) {
       }
       g_last_sample_timestamp_ms = sample.ts_ms;
 
-      // Estimate gyro bias during warm-up: accumulate raw gyro samples and
-      // subtract estimated bias from readings before passing to Madgwick.
+      // --- Preprocessing & mapping ---
+      // Extract raw gyro & accel
       float gx = sample.gx;
       float gy = sample.gy;
       float gz = sample.gz;
@@ -114,13 +138,14 @@ static void imuConsumerTask(void *pvParameters) {
         g_warm_gz_sum += gz;
       }
 
-      // Adjust gyro readings by subtracting the estimated bias (zero until computed)
-      float gx_adj = gx - g_gyro_bias_x;
-      float gy_adj = gy - g_gyro_bias_y;
-      float gz_adj = gz - g_gyro_bias_z;
+      // Prepare arrays for robot-frame values and map sensor->robot
+      float gyro_robot[3];
+      float accel_robot[3];
+      mapSensorToRobot(gx, gy, gz, sample.ax, sample.ay, sample.az, gyro_robot, accel_robot);
 
-      // Update Madgwick filter with bias-compensated gyro and accel
-      g_madgwick.update(gx_adj, gy_adj, gz_adj, sample.ax, sample.ay, sample.az, dt);
+      // Update Madgwick with mapped values
+      g_madgwick.update(gyro_robot[0], gyro_robot[1], gyro_robot[2],
+                        accel_robot[0], accel_robot[1], accel_robot[2], dt);
 
       // If warm-up is requested, decrement counter and finalize when done
       if (g_warmup_samples_remaining > 0) {
@@ -135,8 +160,17 @@ static void imuConsumerTask(void *pvParameters) {
           g_gyro_bias_x = g_warm_gx_sum / (float)g_warmup_samples_total;
           g_gyro_bias_y = g_warm_gy_sum / (float)g_warmup_samples_total;
           g_gyro_bias_z = g_warm_gz_sum / (float)g_warmup_samples_total;
-          // seed orientation from accel average
-          g_madgwick.setFromAccel(ax_avg, ay_avg, az_avg);
+          // Map average accel into robot frame before seeding Madgwick
+          float avg_sensor_a[3] = { ax_avg, ay_avg, az_avg };
+          float avg_accel_robot[3];
+          for (int i = 0; i < 3; ++i) {
+            int aim = g_fusion_cfg.accel_map[i];
+            int asign = g_fusion_cfg.accel_sign[i];
+            if (aim < 0 || aim > 2) aim = i;
+            avg_accel_robot[i] = (float)asign * avg_sensor_a[aim];
+          }
+          // seed orientation from accel average (robot-frame)
+          g_madgwick.setFromAccel(avg_accel_robot[0], avg_accel_robot[1], avg_accel_robot[2]);
           // reset accumulators
           g_warm_ax_sum = g_warm_ay_sum = g_warm_az_sum = 0.0f;
           g_warm_gx_sum = g_warm_gy_sum = g_warm_gz_sum = 0.0f;
@@ -165,8 +199,8 @@ static void imuConsumerTask(void *pvParameters) {
         float a_norm = sqrtf(sample.ax * sample.ax + sample.ay * sample.ay + sample.az * sample.az);
         const float g_nominal = 9.80665f;
         bool accel_stationary = fabsf(a_norm - g_nominal) < 0.2f; // ~0.02g tolerance
-        // low angular rate (use the bias-compensated rates)
-        float ang_rate_mag = sqrtf(gx_adj * gx_adj + gy_adj * gy_adj + gz_adj * gz_adj);
+        // low angular rate (use the bias-compensated & mapped rates)
+        float ang_rate_mag = sqrtf(gyro_robot[0] * gyro_robot[0] + gyro_robot[1] * gyro_robot[1] + gyro_robot[2] * gyro_robot[2]);
         bool gyro_stationary = ang_rate_mag < 0.1f; // ~0.1 rad/s (~5.7 deg/s)
         if (accel_stationary && gyro_stationary) {
           // Use raw gyro sample (gx,gy,gz) as an instantaneous bias measurement (true motion small)
@@ -268,30 +302,30 @@ static void imuConsumerTask(void *pvParameters) {
       if (abbot::tuning::isCapturing()) {
         // In capture mode the helper is responsible for CSV emission and statistics
         abbot::tuning::submitSample(sample.ts_ms,
-                                    pitch_deg,
-                                    pitch_rad,
-                                    pitch_rate_dps,
-                                    pitch_rate_rads,
-                                    sample.ax, sample.ay, sample.az,
-                                    sample.gx, sample.gy, sample.gz,
-                                    // BMI088 temp from accel
-                                    sample.temp_C,
-                                    left_cmd, right_cmd);
+                  pitch_deg,
+                  pitch_rad,
+                  pitch_rate_dps,
+                  pitch_rate_rads,
+                  accel_robot[0], accel_robot[1], accel_robot[2],
+                  gyro_robot[0], gyro_robot[1], gyro_robot[2],
+                  // BMI088 temp from accel
+                  sample.temp_C,
+                  left_cmd, right_cmd);
         
       } else if (abbot::log::isChannelEnabled(abbot::log::CHANNEL_TUNING)) {
         // Stream mode: print CSV here
         LOG_PRINTF(abbot::log::CHANNEL_TUNING,
-                   "%lu,%.4f,%.6f,%.4f,%.6f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.3f,%.4f,%.4f\n",
-                   sample.ts_ms,
-                   pitch_deg,
-                   pitch_rad,
-                   pitch_rate_dps,
-                   pitch_rate_rads,
-                   sample.ax, sample.ay, sample.az,
-                   sample.gx, sample.gy, sample.gz,
-                   sample.temp_C,
-                   left_cmd,
-                   right_cmd);
+             "%lu,%.4f,%.6f,%.4f,%.6f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.3f,%.4f,%.4f\n",
+             sample.ts_ms,
+             pitch_deg,
+             pitch_rad,
+             pitch_rate_dps,
+             pitch_rate_rads,
+             accel_robot[0], accel_robot[1], accel_robot[2],
+             gyro_robot[0], gyro_robot[1], gyro_robot[2],
+             sample.temp_C,
+             left_cmd,
+             right_cmd);
       }
       #if defined(ENABLE_DEBUG_LOGS)
       // Suppress debug logs while calibration runs
@@ -337,6 +371,8 @@ bool startIMUTasks(BMI088Driver *driver) {
       cfg.sample_rate = 200.0f;
     }
     g_madgwick_sample_rate_hz = cfg.sample_rate;
+    // store fusion configuration (including axis mapping) for runtime use
+    g_fusion_cfg = cfg;
     g_madgwick.begin(cfg);
   }
 
