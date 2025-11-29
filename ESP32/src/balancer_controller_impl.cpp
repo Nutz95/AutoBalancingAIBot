@@ -130,22 +130,24 @@ void calibrateDeadband()
 float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
 {
     if (!g_active) return 0.0f;
-    // error: desired pitch 0 - measured
-    float error = 0.0f - fused_pitch;
-    float error_dot = -fused_pitch_rate;
+    // error: positive pitch (tilt back) requires positive motor command (forward)
+    float error = fused_pitch;
+    float error_dot = fused_pitch_rate;
     float cmd = g_pid.update(error, error_dot, dt);
     // clamp
     if (cmd > 1.0f) cmd = 1.0f;
     if (cmd < -1.0f) cmd = -1.0f;
-    // slew
+    // slew (apply rate limit to prevent abrupt changes)
     float max_delta = g_cmd_slew * dt;
     float delta = cmd - g_last_cmd;
     if (delta > max_delta) delta = max_delta;
     if (delta < -max_delta) delta = -max_delta;
     cmd = g_last_cmd + delta;
-    // deadband
-    if (fabsf(cmd) > 0.0f && fabsf(cmd) < g_deadband) {
-        cmd = (cmd > 0.0f) ? g_deadband : -g_deadband;
+    // deadband: only apply when command is non-zero after slew
+    // If magnitude below threshold, zero it (allows smooth zero-crossing)
+    // BUT: skip deadband if last_cmd was zero (startup/recovery) to allow initial response
+    if (fabsf(g_last_cmd) > 0.001f && fabsf(cmd) < g_deadband) {
+        cmd = 0.0f;
     }
     // if motors disabled, skip commanding but return computed value
     if (!abbot::motor::areMotorsEnabled()) {

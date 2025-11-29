@@ -5,6 +5,8 @@
 #include "imu_calibration.h"
 #include "serial_commands.h"
 #include "imu_fusion.h"
+#include "imu_mapping.h"
+#include "imu_consumer_helpers.h"
 #include "motor_driver.h"
 #include "tuning_capture.h"
 #include "../include/balancer_controller.h"
@@ -28,7 +30,6 @@ static BMI088Driver *g_driver = nullptr;
 static QueueHandle_t calibQueue = nullptr;
 
 // Fusion state (shared between IMU consumer and external callers)
-static unsigned long g_last_sample_timestamp_ms = 0;
 static fusion::Madgwick g_madgwick;
 // Fusion configuration (mapping + params) used to transform sensor->robot axes
 static fusion::FusionConfig g_fusion_cfg;
@@ -38,53 +39,17 @@ static float g_madgwick_sample_rate_hz = 200.0f;
 static float g_fused_pitch_rad = 0.0f;
 static float g_fused_pitch_rate_rads = 0.0f;
 static SemaphoreHandle_t g_fusion_mutex = nullptr;
-// Balancer state is owned by `abbot::balancer::controller`.
-// Warm-up state for tuning captures: when >0 we consume samples to let the
-// Madgwick filter converge and suppress output until warmup completes.
-static volatile uint32_t g_warmup_samples_remaining = 0;
-static uint32_t g_warmup_samples_total = 0;
-static float g_warm_ax_sum = 0.0f, g_warm_ay_sum = 0.0f, g_warm_az_sum = 0.0f;
-// Also accumulate gyro samples during warm-up to estimate gyro bias
-static float g_warm_gx_sum = 0.0f, g_warm_gy_sum = 0.0f, g_warm_gz_sum = 0.0f;
-// Estimated gyro bias (rad/s) subtracted from gyro readings after warm-up
-static float g_gyro_bias_x = 0.0f, g_gyro_bias_y = 0.0f, g_gyro_bias_z = 0.0f;
-// EMA parameters for online bias tracking
-static bool g_gyro_bias_initialized = false;
-static const float g_bias_ema_alpha = 0.01f; // smoothing factor (small -> slow adaptation)
+// Consumer mutable state (warmup, bias, persistence) moved into a dedicated struct
+static abbot::imu_consumer::ConsumerState g_consumer;
 // Persistence (Preferences/NVS)
 static Preferences g_prefs;
 static bool g_prefs_started = false;
-static uint32_t g_last_persist_ms = 0;
-static const uint32_t g_persist_interval_ms = 60000; // write at most once per minute
-static const float g_persist_delta_thresh = 0.01f; // rad/s threshold to trigger a write
-// Initial-persist gating: avoid writing noisy/invalid warmup bias immediately.
-static bool g_pending_initial_persist = false;
-static uint32_t g_initial_persist_deadline_ms = 0;
-static const uint32_t g_initial_persist_timeout_ms = 5000; // wait 5s after warmup before allowing initial persist
-static float g_initial_persist_candidate_x = 0.0f, g_initial_persist_candidate_y = 0.0f, g_initial_persist_candidate_z = 0.0f;
 // Note: tuning stream state is now managed by the logging channel manager
 
-// Map raw sensor readings into the robot coordinate frame using the
-// `g_fusion_cfg` mapping/sign arrays. `raw_g*` are gyro readings (rad/s),
-// `raw_a*` are accel readings (m/s^2). The outputs are written into
-// `out_g[3]` (gyro robot-frame) and `out_a[3]` (accel robot-frame).
-static void mapSensorToRobot(float raw_gx, float raw_gy, float raw_gz,
-                             float raw_ax, float raw_ay, float raw_az,
-                             float out_g[3], float out_a[3]) {
-  // Bias-compensate gyro readings from runtime estimates (globals now declared)
-  float sensor_g[3] = { raw_gx - g_gyro_bias_x, raw_gy - g_gyro_bias_y, raw_gz - g_gyro_bias_z };
-  float sensor_a[3] = { raw_ax, raw_ay, raw_az };
-  for (int i = 0; i < 3; ++i) {
-    int gim = g_fusion_cfg.gyro_map[i];
-    int gsign = g_fusion_cfg.gyro_sign[i];
-    int aim = g_fusion_cfg.accel_map[i];
-    int asign = g_fusion_cfg.accel_sign[i];
-    if (gim < 0 || gim > 2) gim = i;
-    if (aim < 0 || aim > 2) aim = i;
-    out_g[i] = (float)gsign * sensor_g[gim];
-    out_a[i] = (float)asign * sensor_a[aim];
-  }
-}
+// Helpers moved to `imu_consumer_helpers` (see include above)
+
+// Sensor->robot mapping and bias compensation is implemented in
+// `imu_mapping` (include/imu_mapping.h, src/imu_mapping.cpp).
 
 static void imuProducerTask(void *pvParameters) {
   BMI088Driver *driver = reinterpret_cast<BMI088Driver*>(pvParameters);
@@ -113,220 +78,52 @@ static void imuConsumerTask(void *pvParameters) {
   // g_fusion and g_fusionMutex are initialized in startIMUTasks
   for (;;) {
     if (imuQueue && xQueueReceive(imuQueue, &sample, portMAX_DELAY) == pdTRUE) {
-      // Compute dt (seconds) using host timestamp; fall back to configured sample_rate
-      float dt = 1.0f / g_madgwick_sample_rate_hz;
-      if (g_last_sample_timestamp_ms != 0) {
-        unsigned long delta_ms = sample.ts_ms - g_last_sample_timestamp_ms;
-        if (delta_ms > 0) dt = (float)delta_ms / 1000.0f;
-      }
-      g_last_sample_timestamp_ms = sample.ts_ms;
+      // Compute dt
+      float dt = abbot::imu_consumer::computeDt(g_consumer, sample, g_madgwick_sample_rate_hz);
 
-      // --- Preprocessing & mapping ---
       // Extract raw gyro & accel
       float gx = sample.gx;
       float gy = sample.gy;
       float gz = sample.gz;
 
-      if (g_warmup_samples_remaining > 0) {
-        // accumulate accel for average orientation seed
-        g_warm_ax_sum += sample.ax;
-        g_warm_ay_sum += sample.ay;
-        g_warm_az_sum += sample.az;
-        // accumulate gyro for bias estimation
-        g_warm_gx_sum += gx;
-        g_warm_gy_sum += gy;
-        g_warm_gz_sum += gz;
-      }
+      // Warmup accumulation
+      abbot::imu_consumer::accumulateWarmup(g_consumer, sample, gx, gy, gz);
 
-      // Prepare arrays for robot-frame values and map sensor->robot
+      // Map sensor -> robot (bias-compensated)
       float gyro_robot[3];
       float accel_robot[3];
-      mapSensorToRobot(gx, gy, gz, sample.ax, sample.ay, sample.az, gyro_robot, accel_robot);
+      float raw_g[3] = { gx, gy, gz };
+      float raw_a[3] = { sample.ax, sample.ay, sample.az };
+      float gyro_bias[3] = { g_consumer.gyro_bias[0], g_consumer.gyro_bias[1], g_consumer.gyro_bias[2] };
+      abbot::imu_mapping::mapSensorToRobot(g_fusion_cfg, raw_g, raw_a, gyro_bias, gyro_robot, accel_robot);
 
-      // Update Madgwick with mapped values
+      // Update Madgwick
       g_madgwick.update(gyro_robot[0], gyro_robot[1], gyro_robot[2],
                         accel_robot[0], accel_robot[1], accel_robot[2], dt);
 
-      // If warm-up is requested, decrement counter and finalize when done
-      if (g_warmup_samples_remaining > 0) {
-        // decrement remaining
-        --g_warmup_samples_remaining;
-        // If warmup just completed, compute averages and seed Madgwick
-        if (g_warmup_samples_remaining == 0) {
-          float ax_avg = g_warm_ax_sum / (float)g_warmup_samples_total;
-          float ay_avg = g_warm_ay_sum / (float)g_warmup_samples_total;
-          float az_avg = g_warm_az_sum / (float)g_warmup_samples_total;
-          // compute gyro bias (rad/s)
-          g_gyro_bias_x = g_warm_gx_sum / (float)g_warmup_samples_total;
-          g_gyro_bias_y = g_warm_gy_sum / (float)g_warmup_samples_total;
-          g_gyro_bias_z = g_warm_gz_sum / (float)g_warmup_samples_total;
-          // Map average accel into robot frame before seeding Madgwick
-          float avg_sensor_a[3] = { ax_avg, ay_avg, az_avg };
-          float avg_accel_robot[3];
-          for (int i = 0; i < 3; ++i) {
-            int aim = g_fusion_cfg.accel_map[i];
-            int asign = g_fusion_cfg.accel_sign[i];
-            if (aim < 0 || aim > 2) aim = i;
-            avg_accel_robot[i] = (float)asign * avg_sensor_a[aim];
-          }
-          // seed orientation from accel average (robot-frame)
-          g_madgwick.setFromAccel(avg_accel_robot[0], avg_accel_robot[1], avg_accel_robot[2]);
-          // reset accumulators
-          g_warm_ax_sum = g_warm_ay_sum = g_warm_az_sum = 0.0f;
-          g_warm_gx_sum = g_warm_gy_sum = g_warm_gz_sum = 0.0f;
-          g_warmup_samples_total = 0;
-          // mark bias as initialized so EMA updates can run
-          g_gyro_bias_initialized = true;
-          // Defer persisting the initial warmup bias until we see a short
-          // period of stationarity. This prevents storing a transient bias
-          // measured during handling/motion immediately after boot.
-          g_initial_persist_candidate_x = g_gyro_bias_x;
-          g_initial_persist_candidate_y = g_gyro_bias_y;
-          g_initial_persist_candidate_z = g_gyro_bias_z;
-          g_pending_initial_persist = true;
-          g_initial_persist_deadline_ms = millis() + g_initial_persist_timeout_ms;
-          char buf2[256];
-          snprintf(buf2, sizeof(buf2), "TUNING: warmup complete (gyro_bias rad/s = %.6f, %.6f, %.6f) - persisting deferred",
-                   (double)g_gyro_bias_x, (double)g_gyro_bias_y, (double)g_gyro_bias_z);
-          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf2);
-        }
+      // Finalize warmup if it just completed
+      if (g_consumer.warmup_samples_remaining > 0) {
+        --g_consumer.warmup_samples_remaining;
+        abbot::imu_consumer::finalizeWarmupIfDone(g_consumer, g_madgwick, g_fusion_cfg);
       }
 
-      // After warmup we can attempt ongoing online bias refinement when robot is stationary.
-      // Stationary detection: accel magnitude near 1g and low angular rate.
-      if (g_gyro_bias_initialized) {
-        // accel magnitude (m/s^2)
-        float a_norm = sqrtf(sample.ax * sample.ax + sample.ay * sample.ay + sample.az * sample.az);
-        const float g_nominal = 9.80665f;
-        bool accel_stationary = fabsf(a_norm - g_nominal) < 0.2f; // ~0.02g tolerance
-        // low angular rate (use the bias-compensated & mapped rates)
-        float ang_rate_mag = sqrtf(gyro_robot[0] * gyro_robot[0] + gyro_robot[1] * gyro_robot[1] + gyro_robot[2] * gyro_robot[2]);
-        bool gyro_stationary = ang_rate_mag < 0.1f; // ~0.1 rad/s (~5.7 deg/s)
-        if (accel_stationary && gyro_stationary) {
-          // Use raw gyro sample (gx,gy,gz) as an instantaneous bias measurement (true motion small)
-          // Update EMA toward that measured value
-          g_gyro_bias_x = (1.0f - g_bias_ema_alpha) * g_gyro_bias_x + g_bias_ema_alpha * gx;
-          g_gyro_bias_y = (1.0f - g_bias_ema_alpha) * g_gyro_bias_y + g_bias_ema_alpha * gy;
-          g_gyro_bias_z = (1.0f - g_bias_ema_alpha) * g_gyro_bias_z + g_bias_ema_alpha * gz;
-          // Persist occasionally if bias changed enough and interval passed.
-          // Also handle the deferred initial-persist-case: only write the
-          // warmup candidate after a short period of stationarity and only
-          // if the measured bias hasn't drifted away from the candidate.
-          uint32_t now = millis();
+      // Update bias EMA & persist when appropriate
+      abbot::imu_consumer::updateBiasEmaAndPersistIfNeeded(g_consumer, sample, gyro_robot);
 
-          if (g_pending_initial_persist) {
-            // Check deadline and stationarity; only then consider writing the
-            // candidate bias to NVS. This reduces chance of storing a transient.
-            if ((int32_t)(now - g_initial_persist_deadline_ms) >= 0) {
-              // Candidate only committed if current bias remains close to it
-              if (fabsf(g_gyro_bias_x - g_initial_persist_candidate_x) <= g_persist_delta_thresh &&
-                  fabsf(g_gyro_bias_y - g_initial_persist_candidate_y) <= g_persist_delta_thresh &&
-                  fabsf(g_gyro_bias_z - g_initial_persist_candidate_z) <= g_persist_delta_thresh) {
-                if (g_prefs_started) {
-                  g_prefs.putFloat("gbx", g_gyro_bias_x);
-                  g_prefs.putFloat("gby", g_gyro_bias_y);
-                  g_prefs.putFloat("gbz", g_gyro_bias_z);
-                  g_last_persist_ms = now;
-                }
-                g_pending_initial_persist = false;
-                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: initial gyro bias persisted to NVS after stability check");
-              } else {
-                // Candidate drifted — refresh candidate and postpone another period
-                g_initial_persist_candidate_x = g_gyro_bias_x;
-                g_initial_persist_candidate_y = g_gyro_bias_y;
-                g_initial_persist_candidate_z = g_gyro_bias_z;
-                g_initial_persist_deadline_ms = now + g_initial_persist_timeout_ms;
-                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: initial persist deferred (candidate drift)");
-              }
-            }
-          }
-
-          // Regular periodic persistence (after initial commit) to refine stored bias
-          if ((int32_t)(now - g_last_persist_ms) >= (int32_t)g_persist_interval_ms) {
-            // read current stored values and decide if writing is needed
-            float stored_x = g_prefs.getFloat("gbx", 0.0f);
-            float stored_y = g_prefs.getFloat("gby", 0.0f);
-            float stored_z = g_prefs.getFloat("gbz", 0.0f);
-            if (fabsf(g_gyro_bias_x - stored_x) > g_persist_delta_thresh ||
-                fabsf(g_gyro_bias_y - stored_y) > g_persist_delta_thresh ||
-                fabsf(g_gyro_bias_z - stored_z) > g_persist_delta_thresh) {
-              g_prefs.putFloat("gbx", g_gyro_bias_x);
-              g_prefs.putFloat("gby", g_gyro_bias_y);
-              g_prefs.putFloat("gbz", g_gyro_bias_z);
-              g_last_persist_ms = now;
-              LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: persisted updated gyro bias to NVS");
-            } else {
-              // still update timestamp to avoid repeated reads if nothing changed
-              g_last_persist_ms = now;
-            }
-          }
-        }
-      }
-
-      // Read fused outputs and store under mutex
+      // Publish fused outputs
       float fused_pitch_local = g_madgwick.getPitch();
       float fused_pitch_rate_local = g_madgwick.getPitchRate();
-      if (g_fusion_mutex) {
-        if (xSemaphoreTake(g_fusion_mutex, (TickType_t)0) == pdTRUE) {
-          g_fused_pitch_rad = fused_pitch_local;
-          g_fused_pitch_rate_rads = fused_pitch_rate_local;
-          xSemaphoreGive(g_fusion_mutex);
-        }
-      }
+      abbot::imu_consumer::publishFusedOutputsUnderMutex(g_consumer, fused_pitch_local, fused_pitch_rate_local, g_fused_pitch_rad, g_fused_pitch_rate_rads, &g_fusion_mutex);
 
-      // Tuning output: two modes exist
-      // - Stream mode: `startTuningStream()` enables CHANNEL_TUNING and SystemTasks should print CSV lines
-      // - Capture mode: `startCapture()` delegates CSV emission and stats to the tuning helper
-      float pitch_deg = radToDeg(fused_pitch_local);
-      float pitch_rate_dps = radToDeg(fused_pitch_rate_local);
-      float pitch_rad = fused_pitch_local;
-      float pitch_rate_rads = fused_pitch_rate_local;
       // Read last motor commands (normalized) via motor driver API
       float left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
       float right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
+      abbot::imu_consumer::runBalancerCycleIfActive(fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd);
 
-      // Delegate balancer control to the controller module. The controller
-      // will compute the command, apply slew/deadband and send motor commands
-      // when active. We still read last motor commands for telemetry output.
-      if (abbot::balancer::controller::isActive()) {
-        (void)abbot::balancer::controller::processCycle(fused_pitch_local, fused_pitch_rate_local, dt);
-        left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
-        right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
-      }
-
-      if (g_warmup_samples_remaining > 0) {
-        // Suppress emission while warmup in progress
-        continue;
-      }
-
-      if (abbot::tuning::isCapturing()) {
-        // In capture mode the helper is responsible for CSV emission and statistics
-        abbot::tuning::submitSample(sample.ts_ms,
-                  pitch_deg,
-                  pitch_rad,
-                  pitch_rate_dps,
-                  pitch_rate_rads,
-                  accel_robot[0], accel_robot[1], accel_robot[2],
-                  gyro_robot[0], gyro_robot[1], gyro_robot[2],
-                  // BMI088 temp from accel
-                  sample.temp_C,
-                  left_cmd, right_cmd);
-        
-      } else if (abbot::log::isChannelEnabled(abbot::log::CHANNEL_TUNING)) {
-        // Stream mode: print CSV here
-        LOG_PRINTF(abbot::log::CHANNEL_TUNING,
-             "%lu,%.4f,%.6f,%.4f,%.6f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.3f,%.4f,%.4f\n",
-             sample.ts_ms,
-             pitch_deg,
-             pitch_rad,
-             pitch_rate_dps,
-             pitch_rate_rads,
-             accel_robot[0], accel_robot[1], accel_robot[2],
-             gyro_robot[0], gyro_robot[1], gyro_robot[2],
-             sample.temp_C,
-             left_cmd,
-             right_cmd);
-      }
+      // Emit tuning stream or capture outputs
+      abbot::imu_consumer::emitTuningOrStream(g_consumer, sample, fused_pitch_local, fused_pitch_rate_local, accel_robot, gyro_robot, left_cmd, right_cmd);
+      // Emit diagnostics if BALANCER channel enabled
+      abbot::imu_consumer::emitDiagnosticsIfEnabled(sample.ts_ms, fused_pitch_local, fused_pitch_rate_local, left_cmd, right_cmd);
       #if defined(ENABLE_DEBUG_LOGS)
       // Suppress debug logs while calibration runs
       if (abbot::imu_cal::isCalibrating()) {
@@ -384,50 +181,15 @@ bool startIMUTasks(BMI088Driver *driver) {
   abbot::log::init();
   abbot::log::disableChannel(abbot::log::CHANNEL_TUNING);
 
-  // Initialize Preferences (NVS) and try to load persisted gyro bias
-  // Use namespace "abbot" in Preferences. If NVS isn't available this is a no-op.
+  // Initialize Preferences (NVS) and attempt to load persisted gyro bias via helper
   if (g_prefs.begin("abbot", false)) {
     g_prefs_started = true;
-    g_gyro_bias_x = g_prefs.getFloat("gbx", 0.0f);
-    g_gyro_bias_y = g_prefs.getFloat("gby", 0.0f);
-    g_gyro_bias_z = g_prefs.getFloat("gbz", 0.0f);
-    g_gyro_bias_initialized = true;
-    g_last_persist_ms = millis();
-    char buf[128];
-    snprintf(buf, sizeof(buf), "TUNING: loaded persisted gyro_bias rad/s = %.6f, %.6f, %.6f",
-             (double)g_gyro_bias_x, (double)g_gyro_bias_y, (double)g_gyro_bias_z);
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
-    // Balancer deadband/gains are handled by controller; leave gyro bias handling here.
+    abbot::imu_consumer::initializeConsumerStateFromPreferences(g_consumer, g_prefs);
   }
-
-  // If no persisted `abbot` gyro bias was found (or Preferences unavailable),
-  // try to initialize bias from the IMU calibration stored under the "imu"
-  // namespace. This synchronizes the calibration that `imu_cal` manages with
-  // the runtime bias used by the Madgwick filter.
+  // Attempt to initialize from IMU calibration if needed (helper decides)
   abbot::imu_cal::Calibration cal;
-  bool have_imu_cal = abbot::imu_cal::loadCalibration(cal);
-  if (have_imu_cal) {
-    // Check if we should prefer imu_cal values: if Preferences didn't start
-    // or if persisted abbot bias is effectively zero, populate from imu cal.
-    const float kEPS = 1e-6f;
-    bool abbot_bias_all_zero = (fabsf(g_gyro_bias_x) < kEPS && fabsf(g_gyro_bias_y) < kEPS && fabsf(g_gyro_bias_z) < kEPS);
-    if (!g_prefs_started || abbot_bias_all_zero) {
-      g_gyro_bias_x = cal.gyro_bias[0];
-      g_gyro_bias_y = cal.gyro_bias[1];
-      g_gyro_bias_z = cal.gyro_bias[2];
-      g_gyro_bias_initialized = true;
-      // Persist into abbot namespace if available
-      if (g_prefs_started) {
-        g_prefs.putFloat("gbx", g_gyro_bias_x);
-        g_prefs.putFloat("gby", g_gyro_bias_y);
-        g_prefs.putFloat("gbz", g_gyro_bias_z);
-        g_last_persist_ms = millis();
-      }
-      char buf2[128];
-      snprintf(buf2, sizeof(buf2), "TUNING: initialized gyro_bias from imu calibration (rad/s = %.6f, %.6f, %.6f)",
-               (double)g_gyro_bias_x, (double)g_gyro_bias_y, (double)g_gyro_bias_z);
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf2);
-    }
+  if (abbot::imu_cal::loadCalibration(cal)) {
+    abbot::imu_consumer::initializeConsumerStateFromCalibrationIfNeeded(g_consumer, cal, g_prefs_started, &g_prefs);
   }
 
   // Create producer task (higher priority)
@@ -521,24 +283,7 @@ bool isTuningStreamActive() {
 }
 
 void requestTuningWarmupSeconds(float seconds) {
-  if (seconds <= 0.0f) {
-    return;
-  }
-  // compute samples based on configured madgwick sample rate (fallback if 0)
-  float rate = g_madgwick_sample_rate_hz;
-  if (rate <= 0.0f) {
-    rate = 200.0f;
-  }
-  uint32_t samples = (uint32_t)ceilf(seconds * rate);
-  if (samples == 0) {
-    samples = (uint32_t)rate; // at least one second
-  }
-  g_warmup_samples_remaining = samples;
-  g_warmup_samples_total = samples;
-  g_warm_ax_sum = g_warm_ay_sum = g_warm_az_sum = 0.0f;
-  char buf[128];
-  snprintf(buf, sizeof(buf), "TUNING: warmup requested %u samples (~%.1f s)", (unsigned)samples, (double)seconds);
-  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+  abbot::imu_consumer::requestWarmup(g_consumer, seconds, g_madgwick_sample_rate_hz);
 }
 
 } // namespace abbot

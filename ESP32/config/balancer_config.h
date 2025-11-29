@@ -31,9 +31,9 @@
 #endif
 
 // Command slew limit (normalized units per second). Prevents instant full-power
-// steps from small transients. Set to 2.0f (i.e. command can change by 2.0 per second).
+// steps from small transients. Set to 10.0f for faster response (command can change by 10.0 per second).
 #ifndef BALANCER_CMD_SLEW_LIMIT
-#define BALANCER_CMD_SLEW_LIMIT 2.0f
+#define BALANCER_CMD_SLEW_LIMIT 10.0f
 #endif
 
 // Angle limit (degrees) for auto-enabling motors when starting balancer.
