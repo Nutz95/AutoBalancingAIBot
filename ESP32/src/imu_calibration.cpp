@@ -242,11 +242,11 @@ bool startAccelCalibration(class abbot::BMI088Driver &driver, int nSamples) {
 
 void dumpCalibration() {
   if (!g_cal.valid) {
-    LOG_PRINTLN(abbot::log::CHANNEL_IMU, "CALIB: none");
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "CALIB: none");
     return;
   }
-  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB DUMP gyro_bias=%.6f,%.6f,%.6f\n", g_cal.gyro_bias[0], g_cal.gyro_bias[1], g_cal.gyro_bias[2]);
-  LOG_PRINTF(abbot::log::CHANNEL_IMU, "CALIB DUMP accel_offset=%.6f,%.6f,%.6f\n", g_cal.accel_offset[0], g_cal.accel_offset[1], g_cal.accel_offset[2]);
+  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "CALIB DUMP gyro_bias=%.6f,%.6f,%.6f\n", g_cal.gyro_bias[0], g_cal.gyro_bias[1], g_cal.gyro_bias[2]);
+  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "CALIB DUMP accel_offset=%.6f,%.6f,%.6f\n", g_cal.accel_offset[0], g_cal.accel_offset[1], g_cal.accel_offset[2]);
 }
 
 void resetCalibration() {
@@ -256,7 +256,7 @@ void resetCalibration() {
     prefs.end();
   }
   g_cal = {{0,0,0},{0,0,0},1,false};
-  LOG_PRINTLN(abbot::log::CHANNEL_IMU, "CALIB RESET");
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "CALIB RESET");
 }
 
 bool isCalibrating() { return g_is_calibrating; }
