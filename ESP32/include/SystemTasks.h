@@ -39,4 +39,22 @@ bool isTuningStreamActive();
 // Callers (e.g. tuning_capture) may call this when a capture starts.
 void requestTuningWarmupSeconds(float seconds);
 
+// Balancer control (PID-based). Start/stop the balancer which will use the
+// runtime Madgwick outputs to compute motor commands via the PID controller.
+// These are safe to call from the serial command task.
+void startBalancer();
+void stopBalancer();
+bool isBalancerActive();
+// Set PID gains (kp, ki, kd). Values are in controller units where pitch is radians.
+void setBalancerGains(float kp, float ki, float kd);
+// Retrieve current balancer gains (returned via reference). Units: pitch in radians.
+void getBalancerGains(float &kp, float &ki, float &kd);
+
+// Deadband (minimum commanded absolute motor value to overcome static friction).
+float getBalancerDeadband();
+void setBalancerDeadband(float db);
+
+// Start an interactive/calibration routine for deadband (may be a stub).
+void calibrateBalancerDeadband();
+
 } // namespace abbot

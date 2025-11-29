@@ -2,10 +2,50 @@
 
 This document explains how to build and run the host-native unit tests on Windows using MSYS2 / MinGW-w64.
 
-The project provides a comprehensive test binary `imu_fusion_tests.cpp` (in `ESP32/test/`) which
-contains the original lightweight checks plus extended robustness tests and a fuzz test.
+The project provides comprehensive test binaries (`imu_fusion_tests.cpp` and `pid_controller_tests.cpp` in `ESP32/test/`) which test the IMU fusion algorithm and PID controller implementation.
 
-Goal: produce a native Windows executable from sources in `ESP32/` and run `build/imu_fusion_tests.exe` locally.
+Goal: produce native Windows executables from sources in `ESP32/` and run the test binaries locally.
+
+## ⚠️ IMPORTANT: Confirmed Working Method (Updated 2025-11-29)
+
+**g++ compilation only works reliably from within the MSYS2 MinGW64 shell.**
+
+Direct invocation from PowerShell or Python fails silently (exit code 1, no error output) due to environment/DLL issues.
+
+### ✅ Recommended: Use the bash script
+
+```bash
+# 1. Open 'MSYS2 MinGW 64-bit' from Windows Start Menu
+# 2. Navigate to the test directory:
+cd /i/GIT/AutoBalancingAIBot/ESP32/test
+
+# 3. Run the test script:
+./build_test.sh
+```
+
+This script compiles and runs both IMU and PID tests successfully.
+
+### ✅ Alternative: Manual compilation in MSYS2
+
+```bash
+cd /i/GIT/AutoBalancingAIBot/ESP32
+
+# IMU Fusion test
+g++ -std=c++17 -O2 -I include test/imu_fusion_tests.cpp src/imu_fusion.cpp \
+    -o build/imu_fusion_tests.exe -DM_PI=3.14159265358979323846
+build/imu_fusion_tests.exe
+
+# PID Controller test
+g++ -std=c++17 -O2 -I include test/pid_controller_tests.cpp src/pid_controller.cpp \
+    -o build/pid_controller_tests.exe
+build/pid_controller_tests.exe
+```
+
+### ❌ Known Issue: PowerShell/Python compilation fails
+
+~~The provided `build_test.ps1` and `build_test.py` scripts~~ PowerShell and Python scripts were tested but **fail to compile** when run from Windows due to g++ environment issues. Only the bash script `build_test.sh` works reliably in MSYS2.
+
+---
 
 Prerequisites
 - 64-bit Windows
@@ -42,6 +82,37 @@ Notes:
 - `-I include` uses the local headers in `ESP32/include`.
 - We compile both the test and the implementation (`src/imu_fusion.cpp`) together.
 - `-DM_PI=...` defines `M_PI` to avoid editing sources.
+
+Compiling the PID unit test (example)
+-----------------------------------
+To compile the host PID unit test that lives in `test/pid_controller_tests.cpp`, compile both the test and the implementation together:
+
+```bash
+cd /i/GIT/AutoBalancingAIBot/ESP32
+mkdir -p build
+g++ -std=c++17 -O2 -I include test/pid_controller_tests.cpp src/pid_controller.cpp -o build/pid_controller_tests.exe
+```
+
+Notes and troubleshooting for silent failures
+-------------------------------------------
+- **Known Issue (PowerShell Direct g++ Invocation)**: When running `D:\msys64\mingw64\bin\g++.exe` directly from PowerShell (outside MSYS), compilation may fail with exit code 1 and zero error output. This is a system/environment issue (DLL or path mapping incompatibility). **Workaround**: Compile from within an MSYS2 MinGW64 shell or run `powershell.exe -File build_test.ps1` from inside MSYS.
+- If your PowerShell run of the script returns "Compilation failed (exit code 1, no executable created)" with no other compiler output, try running the compile command directly in the **MSYS2 MinGW 64-bit** shell — MSYS2's g++ prints native diagnostics there which can be easier to capture.
+- Ensure the `mingw-w64-x86_64-toolchain` is installed and you are using the *MinGW64* session (or have `mingw64\bin` on your PATH when running from PowerShell).
+- If the test compiles in MSYS2 but fails from PowerShell, try running the command from PowerShell but adding the MSYS `mingw64/bin` to PATH first, for example:
+
+```powershell
+$mingw = 'D:\msys64\mingw64\bin'
+$env:Path = "$mingw;$env:Path"
+g++ -std=c++17 -O2 -I include test/pid_controller_tests.cpp src/pid_controller.cpp -o build/pid_controller_tests.exe
+```
+
+- If the compiler still exits with code 1 and no output, try invoking `g++` via the MSYS bash and capture stderr, e.g. from PowerShell:
+
+```powershell
+cmd /c "D:\msys64\usr\bin\bash.exe -lc 'g++ -std=c++17 -O2 -I /i/GIT/AutoBalancingAIBot/ESP32/include /i/GIT/AutoBalancingAIBot/ESP32/test/pid_controller_tests.cpp /i/GIT/AutoBalancingAIBot/ESP32/src/pid_controller.cpp -o /i/GIT/AutoBalancingAIBot/ESP32/build/pid_controller_tests.exe'"
+```
+
+This often surfaces errors that are swallowed by certain PowerShell redirections.
 
 Run the test
 Still in the MSYS2 shell:

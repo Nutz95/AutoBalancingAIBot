@@ -24,6 +24,30 @@ pio device monitor --baud 115200
 
 This project prints a heartbeat on serial every second.
 
+PowerShell helper scripts
+-------------------------
+
+For convenience this project includes small PowerShell helpers at the project root to run PlatformIO commands with consistent messaging:
+
+- `build_firmware.ps1` — runs `pio run` in the `ESP32` folder to build the firmware.
+- `build_and_upload.ps1` — runs `pio run` then `pio run --target upload` to build and upload in one step.
+- `upload_firmware.ps1` — runs `pio run --target upload` to upload a previously built firmware.
+
+Usage (PowerShell):
+
+```powershell
+# From the ESP32 project folder
+.\build_firmware.ps1            # build only
+.\build_and_upload.ps1         # build then upload
+.\upload_firmware.ps1          # upload only (assumes build already done)
+```
+
+Notes:
+- The scripts detect whether `pio` (PlatformIO CLI) is available and print helpful errors if not.
+- You can pass additional PlatformIO arguments to the scripts, they will be forwarded to `pio` (for example `-e <env>`).
+- Configure `upload_port` in `platformio.ini` or pass upload options to the upload script if your board is on a non-standard port.
+
+
 ## Calibration (IMU)
 
 This project includes a simple IMU calibration utility to capture and persist gyroscope bias and a single-position accelerometer offset. Use the serial monitor at `921600` (or the project default) to run the commands below.

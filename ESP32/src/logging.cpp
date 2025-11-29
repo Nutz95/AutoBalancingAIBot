@@ -101,6 +101,9 @@ Channel channelFromString(const char *name) {
     if (iequals(name, "MOTOR")) {
         return CHANNEL_MOTOR;
     }
+    if (iequals(name, "BALANCER")) {
+        return CHANNEL_BALANCER;
+    }
     if (iequals(name, "DEFAULT")) {
         return CHANNEL_DEFAULT;
     }
@@ -129,6 +132,9 @@ size_t listEnabledChannels(char *buf, size_t bufLen) {
     if (isChannelEnabled(CHANNEL_MOTOR)) {
         add("MOTOR");
     }
+    if (isChannelEnabled(CHANNEL_BALANCER)) {
+        add("BALANCER");
+    }
     if (isChannelEnabled(CHANNEL_DEFAULT)) {
         add("DEFAULT");
     }
@@ -144,6 +150,7 @@ const char* channelName(Channel c) {
         case CHANNEL_BLE: return "BLE";
         case CHANNEL_IMU: return "IMU";
         case CHANNEL_MOTOR: return "MOTOR";
+        case CHANNEL_BALANCER: return "BALANCER";
         case CHANNEL_DEFAULT: return "DEFAULT";
         default: return "UNKNOWN";
     }

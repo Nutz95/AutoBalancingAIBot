@@ -26,6 +26,7 @@ enum Channel : uint32_t {
     CHANNEL_IMU     = 1u << 2,
     CHANNEL_MOTOR   = 1u << 3,
     CHANNEL_DEFAULT = 1u << 4,
+    CHANNEL_BALANCER = 1u << 5,
 };
 
 // Initialize logging manager (no-op, safe to call multiple times)

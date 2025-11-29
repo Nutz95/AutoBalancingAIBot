@@ -72,3 +72,29 @@ FRANÇAIS — Mode d'emploi et interprétation rapide
 - La `Suggested beta` fournie par le firmware est un point de départ. Testez-la, puis augmentez si l'estimation traîne derrière les mouvements réels, ou diminuez si elle devient trop bruitée.
 
 Souhaitez-vous que j'ajoute un petit script Python d'analyse (moyenne, std, PSD rapide) qui prend le fichier de capture et propose un balayage de `beta` pour comparaison ?
+
+Auto-persistence du biais gyro (nouveau)
+- Le firmware collecte maintenant un biais gyro initial pendant la phase de warm-up, mais NE l'écrit PAS immédiatement dans la NVS.
+- Au lieu de cela il retient un candidat de biais et attend une courte période (par défaut 5 s) de stationnarité avant d'écrire dans l'espace `abbot` (`gbx,gby,gbz`).
+- Ce comportement évite de stocker un biais mesuré pendant que vous manipulez la platine immédiatement après le démarrage.
+
+Balancer / PID — prochaines étapes pour activer les moteurs
+- Le projet contient maintenant un squelette de contrôleur PID séparé dans `ESP32/src/balancer_controller.h/.cpp`.
+- Étapes recommandées pour activer les moteurs en toute sécurité :
+  - Vérifier le câblage moteur / servo et la configuration dans `ESP32/config/motor_config.h` (IDs, pins, inversion).
+  - Tester la commande manuelle des moteurs (via `MOTOR ENABLE` puis `MOTOR SET LEFT 0.2` et `MOTOR SET RIGHT 0.2`) pour vérifier la réponse et la direction.
+  - Intégrer le contrôleur PID : implémenter une routine qui lit `abbot::getFusedPitch()` et `abbot::getFusedPitchRate()` puis calcule une commande à l'aide de `abbot::balancer::PIDController::update(error, error_dot, dt)`.
+  - Ne pas activer les moteurs automatiquement au démarrage. Utiliser d'abord la commande série `MOTOR ENABLE` depuis un terminal pour armer les moteurs.
+
+Architecture suggérée pour le PID
+- Séparer les responsabilités :
+  - `balancer_controller` : calcul du PID, anti-windup, limites.
+  - `SystemTasks` : lecture IMU, fusion Madgwick, appel au balancer pour obtenir la consigne moteur.
+  - `motor_driver` : API d'abstraction matérielle (déjà existante).
+
+Consignes de sécurité avant essai dynamique
+- Montez le robot sur un support qui empêche toute chute.
+- Préparez un interrupteur d'alimentation ou un bouton d'arrêt rapide.
+- Commencez avec gains PID faibles (Kp petit, Ki=0, Kd petit) et validez la réponse en poussant légèrement.
+
+Souhaitez-vous que j'intègre un exemple minimal d'appel au PID dans `SystemTasks` (désactivé par défaut par un `#define`), ou que je crée un petit guide pas-à-pas pour les tests moteurs ?

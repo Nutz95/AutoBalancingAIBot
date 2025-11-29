@@ -11,6 +11,7 @@
 #include <freertos/task.h>
 #include "SystemTasks.h"
 #include "serial_menu.h"
+#include "../include/balancer_controller.h"
 
 namespace abbot {
 namespace serialcmds {
@@ -206,6 +207,7 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
       { abbot::log::CHANNEL_BLE,     "BLE" },
       { abbot::log::CHANNEL_IMU,     "IMU" },
       { abbot::log::CHANNEL_MOTOR,   "MOTOR" },
+      { abbot::log::CHANNEL_BALANCER, "BALANCER" },
       { abbot::log::CHANNEL_DEFAULT, "DEFAULT" },
     };
     int id = 1;
@@ -233,6 +235,38 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
   root->addSubmenu(1, "Calibration (BMI088)", g_calibMenu);
   root->addSubmenu(2, "Motor control", g_motorMenu);
   root->addSubmenu(3, "Madgwick tuning", g_tuningMenu);
+  // Balancer submenu
+  SerialMenu *bal = new SerialMenu("Balancer (PID)");
+  bal->addEntry(1, "BALANCE START", [](const String&){ abbot::balancer::controller::start(abbot::getFusedPitch()); });
+  bal->addEntry(2, "BALANCE STOP", [](const String&){ abbot::balancer::controller::stop(); });
+  bal->addEntry(3, "BALANCE GET_GAINS", [](const String&){
+    float kp,ki,kd; abbot::balancer::controller::getGains(kp,ki,kd);
+    char buf[128]; snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f", (double)kp, (double)ki, (double)kd);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+  });
+  bal->addEntry(4, "BALANCE SET GAINS <kp> <ki> <kd>", [](const String& p){
+    String s = p; s.trim();
+    float kp=0, ki=0, kd=0;
+    int sp = s.indexOf(' ');
+    // parse three floats
+    float a=0,b=0,c=0;
+    int matched = sscanf(s.c_str(), "%f %f %f", &a, &b, &c);
+    if (matched >= 1) kp = a;
+    if (matched >= 2) ki = b;
+    if (matched >= 3) kd = c;
+    abbot::balancer::controller::setGains(kp, ki, kd);
+  });
+  bal->addEntry(5, "BALANCE DEADBAND GET", [](const String&){
+    float db = abbot::balancer::controller::getDeadband();
+    char buf[128]; snprintf(buf, sizeof(buf), "BALANCER: deadband=%.6f", (double)db);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+  });
+  bal->addEntry(6, "BALANCE DEADBAND SET <v>", [](const String& p){
+    String s = p; s.trim(); if (s.length()==0) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE DEADBAND SET <value>"); return; }
+    float v = s.toFloat(); abbot::balancer::controller::setDeadband(v);
+  });
+  bal->addEntry(7, "BALANCE DEADBAND CALIBRATE", [](const String&){ abbot::balancer::controller::calibrateDeadband(); });
+  root->addSubmenu(5, "Balancer (PID)", bal);
   root->addSubmenu(4, "Log channels", g_logMenu);
 
   // Commit to globals after fully-built to avoid races
@@ -474,6 +508,62 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       return;
     }
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LOG usage: LOG ENABLE|DISABLE <CHANNEL> | LOG LIST");
+    return;
+  }
+
+  // BALANCE commands: BALANCE START | BALANCE STOP | BALANCE GAINS <kp> <ki> <kd>
+  //                 | BALANCE GET_GAINS
+  //                 | BALANCE DEADBAND GET|SET|CALIBRATE
+  if (up.startsWith("BALANCE")) {
+    char buf4[64];
+    up.toCharArray(buf4, sizeof(buf4));
+    char *tk = strtok(buf4, " \t\r\n");
+    char *arg = strtok(NULL, " \t\r\n");
+    if (!arg) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS <kp> <ki> <kd> | BALANCE GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE");
+      return;
+    }
+    if (strcmp(arg, "START") == 0) {
+      abbot::startBalancer();
+      return;
+    } else if (strcmp(arg, "STOP") == 0) {
+      abbot::stopBalancer();
+      return;
+    } else if (strcmp(arg, "GAINS") == 0) {
+      // remaining tokens are kp ki kd
+      char *kp_s = strtok(NULL, " \t\r\n");
+      char *ki_s = strtok(NULL, " \t\r\n");
+      char *kd_s = strtok(NULL, " \t\r\n");
+      float kp = kp_s ? atof(kp_s) : 0.0f;
+      float ki = ki_s ? atof(ki_s) : 0.0f;
+      float kd = kd_s ? atof(kd_s) : 0.0f;
+      abbot::setBalancerGains(kp, ki, kd);
+      return;
+    } else if (strcmp(arg, "GET_GAINS") == 0) {
+      float kp,ki,kd; abbot::getBalancerGains(kp,ki,kd);
+      char buf[128]; snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f", (double)kp, (double)ki, (double)kd);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+      return;
+    } else if (strcmp(arg, "DEADBAND") == 0) {
+      char *sub = strtok(NULL, " \t\r\n");
+      if (!sub) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE DEADBAND usage: DEADBAND GET | DEADBAND SET <v> | DEADBAND CALIBRATE"); return; }
+      if (strcmp(sub, "GET") == 0) {
+        float db = abbot::balancer::controller::getDeadband();
+        char buf[128]; snprintf(buf, sizeof(buf), "BALANCER: deadband=%.6f", (double)db);
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+        return;
+      } else if (strcmp(sub, "SET") == 0) {
+        char *val = strtok(NULL, " \t\r\n");
+        if (!val) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE DEADBAND SET <value>"); return; }
+        float v = atof(val);
+        abbot::balancer::controller::setDeadband(v);
+        return;
+      } else if (strcmp(sub, "CALIBRATE") == 0) {
+        abbot::balancer::controller::calibrateDeadband();
+        return;
+      }
+    }
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS <kp> <ki> <kd>");
     return;
   }
 

@@ -1,3 +1,4 @@
+#include "units.h"
 // SystemTasks.cpp
 #include "SystemTasks.h"
 #include "BMI088Driver.h"
@@ -6,7 +7,9 @@
 #include "imu_fusion.h"
 #include "motor_driver.h"
 #include "tuning_capture.h"
+#include "../include/balancer_controller.h"
 #include "../config/motor_config.h"
+#include "../config/balancer_config.h"
 #include "logging.h"
 #include <cmath>
 #include <Preferences.h>
@@ -33,6 +36,7 @@ static float g_madgwick_sample_rate_hz = 200.0f;
 static float g_fused_pitch_rad = 0.0f;
 static float g_fused_pitch_rate_rads = 0.0f;
 static SemaphoreHandle_t g_fusion_mutex = nullptr;
+// Balancer state is owned by `abbot::balancer::controller`.
 // Warm-up state for tuning captures: when >0 we consume samples to let the
 // Madgwick filter converge and suppress output until warmup completes.
 static volatile uint32_t g_warmup_samples_remaining = 0;
@@ -51,6 +55,11 @@ static bool g_prefs_started = false;
 static uint32_t g_last_persist_ms = 0;
 static const uint32_t g_persist_interval_ms = 60000; // write at most once per minute
 static const float g_persist_delta_thresh = 0.01f; // rad/s threshold to trigger a write
+// Initial-persist gating: avoid writing noisy/invalid warmup bias immediately.
+static bool g_pending_initial_persist = false;
+static uint32_t g_initial_persist_deadline_ms = 0;
+static const uint32_t g_initial_persist_timeout_ms = 5000; // wait 5s after warmup before allowing initial persist
+static float g_initial_persist_candidate_x = 0.0f, g_initial_persist_candidate_y = 0.0f, g_initial_persist_candidate_z = 0.0f;
 // Note: tuning stream state is now managed by the logging channel manager
 
 static void imuProducerTask(void *pvParameters) {
@@ -134,16 +143,16 @@ static void imuConsumerTask(void *pvParameters) {
           g_warmup_samples_total = 0;
           // mark bias as initialized so EMA updates can run
           g_gyro_bias_initialized = true;
-          // persist initial bias to NVS immediately (but avoid hammering flash)
-          uint32_t now_ms = millis();
-          if (g_prefs_started) {
-            g_prefs.putFloat("gbx", g_gyro_bias_x);
-            g_prefs.putFloat("gby", g_gyro_bias_y);
-            g_prefs.putFloat("gbz", g_gyro_bias_z);
-            g_last_persist_ms = now_ms;
-          }
-          char buf2[128];
-          snprintf(buf2, sizeof(buf2), "TUNING: warmup complete (gyro_bias rad/s = %.6f, %.6f, %.6f)",
+          // Defer persisting the initial warmup bias until we see a short
+          // period of stationarity. This prevents storing a transient bias
+          // measured during handling/motion immediately after boot.
+          g_initial_persist_candidate_x = g_gyro_bias_x;
+          g_initial_persist_candidate_y = g_gyro_bias_y;
+          g_initial_persist_candidate_z = g_gyro_bias_z;
+          g_pending_initial_persist = true;
+          g_initial_persist_deadline_ms = millis() + g_initial_persist_timeout_ms;
+          char buf2[256];
+          snprintf(buf2, sizeof(buf2), "TUNING: warmup complete (gyro_bias rad/s = %.6f, %.6f, %.6f) - persisting deferred",
                    (double)g_gyro_bias_x, (double)g_gyro_bias_y, (double)g_gyro_bias_z);
           LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf2);
         }
@@ -165,8 +174,40 @@ static void imuConsumerTask(void *pvParameters) {
           g_gyro_bias_x = (1.0f - g_bias_ema_alpha) * g_gyro_bias_x + g_bias_ema_alpha * gx;
           g_gyro_bias_y = (1.0f - g_bias_ema_alpha) * g_gyro_bias_y + g_bias_ema_alpha * gy;
           g_gyro_bias_z = (1.0f - g_bias_ema_alpha) * g_gyro_bias_z + g_bias_ema_alpha * gz;
-          // Persist occasionally if bias changed enough and interval passed
+          // Persist occasionally if bias changed enough and interval passed.
+          // Also handle the deferred initial-persist-case: only write the
+          // warmup candidate after a short period of stationarity and only
+          // if the measured bias hasn't drifted away from the candidate.
           uint32_t now = millis();
+
+          if (g_pending_initial_persist) {
+            // Check deadline and stationarity; only then consider writing the
+            // candidate bias to NVS. This reduces chance of storing a transient.
+            if ((int32_t)(now - g_initial_persist_deadline_ms) >= 0) {
+              // Candidate only committed if current bias remains close to it
+              if (fabsf(g_gyro_bias_x - g_initial_persist_candidate_x) <= g_persist_delta_thresh &&
+                  fabsf(g_gyro_bias_y - g_initial_persist_candidate_y) <= g_persist_delta_thresh &&
+                  fabsf(g_gyro_bias_z - g_initial_persist_candidate_z) <= g_persist_delta_thresh) {
+                if (g_prefs_started) {
+                  g_prefs.putFloat("gbx", g_gyro_bias_x);
+                  g_prefs.putFloat("gby", g_gyro_bias_y);
+                  g_prefs.putFloat("gbz", g_gyro_bias_z);
+                  g_last_persist_ms = now;
+                }
+                g_pending_initial_persist = false;
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: initial gyro bias persisted to NVS after stability check");
+              } else {
+                // Candidate drifted — refresh candidate and postpone another period
+                g_initial_persist_candidate_x = g_gyro_bias_x;
+                g_initial_persist_candidate_y = g_gyro_bias_y;
+                g_initial_persist_candidate_z = g_gyro_bias_z;
+                g_initial_persist_deadline_ms = now + g_initial_persist_timeout_ms;
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: initial persist deferred (candidate drift)");
+              }
+            }
+          }
+
+          // Regular periodic persistence (after initial commit) to refine stored bias
           if ((int32_t)(now - g_last_persist_ms) >= (int32_t)g_persist_interval_ms) {
             // read current stored values and decide if writing is needed
             float stored_x = g_prefs.getFloat("gbx", 0.0f);
@@ -202,14 +243,22 @@ static void imuConsumerTask(void *pvParameters) {
       // Tuning output: two modes exist
       // - Stream mode: `startTuningStream()` enables CHANNEL_TUNING and SystemTasks should print CSV lines
       // - Capture mode: `startCapture()` delegates CSV emission and stats to the tuning helper
-      const float RAD2DEG = 57.29577951308232f; // 180/pi
-      float pitch_deg = fused_pitch_local * RAD2DEG;
-      float pitch_rate_dps = fused_pitch_rate_local * RAD2DEG;
+      float pitch_deg = radToDeg(fused_pitch_local);
+      float pitch_rate_dps = radToDeg(fused_pitch_rate_local);
       float pitch_rad = fused_pitch_local;
       float pitch_rate_rads = fused_pitch_rate_local;
       // Read last motor commands (normalized) via motor driver API
       float left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
       float right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
+
+      // Delegate balancer control to the controller module. The controller
+      // will compute the command, apply slew/deadband and send motor commands
+      // when active. We still read last motor commands for telemetry output.
+      if (abbot::balancer::controller::isActive()) {
+        (void)abbot::balancer::controller::processCycle(fused_pitch_local, fused_pitch_rate_local, dt);
+        left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
+        right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
+      }
 
       if (g_warmup_samples_remaining > 0) {
         // Suppress emission while warmup in progress
@@ -291,6 +340,10 @@ bool startIMUTasks(BMI088Driver *driver) {
     g_madgwick.begin(cfg);
   }
 
+  // Initialize balancer controller (owns PID, deadband, persisted gains)
+  abbot::balancer::controller::init();
+  // g_balancer_active is managed by the controller
+
   // Initialize logging manager and ensure TUNING channel is disabled by default
   abbot::log::init();
   abbot::log::disableChannel(abbot::log::CHANNEL_TUNING);
@@ -308,6 +361,7 @@ bool startIMUTasks(BMI088Driver *driver) {
     snprintf(buf, sizeof(buf), "TUNING: loaded persisted gyro_bias rad/s = %.6f, %.6f, %.6f",
              (double)g_gyro_bias_x, (double)g_gyro_bias_y, (double)g_gyro_bias_z);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+    // Balancer deadband/gains are handled by controller; leave gyro bias handling here.
   }
 
   // If no persisted `abbot` gyro bias was found (or Preferences unavailable),
@@ -349,6 +403,38 @@ bool startIMUTasks(BMI088Driver *driver) {
   BaseType_t r3 = xTaskCreate(abbot::serialcmds::serialTaskEntry, "IMUSerial", 4096, driver, configMAX_PRIORITIES - 4, nullptr);
 
   return (r1 == pdPASS) && (r2 == pdPASS) && (r3 == pdPASS);
+}
+
+void startBalancer() {
+  abbot::balancer::controller::start(abbot::getFusedPitch());
+}
+
+void stopBalancer() {
+  abbot::balancer::controller::stop();
+}
+
+bool isBalancerActive() {
+  return abbot::balancer::controller::isActive();
+}
+
+void setBalancerGains(float kp, float ki, float kd) {
+  abbot::balancer::controller::setGains(kp, ki, kd);
+}
+
+void getBalancerGains(float &kp, float &ki, float &kd) {
+  abbot::balancer::controller::getGains(kp, ki, kd);
+}
+
+float getBalancerDeadband() {
+  return abbot::balancer::controller::getDeadband();
+}
+
+void setBalancerDeadband(float db) {
+  abbot::balancer::controller::setDeadband(db);
+}
+
+void calibrateBalancerDeadband() {
+  abbot::balancer::controller::calibrateDeadband();
 }
 
 void attachCalibrationQueue(QueueHandle_t q) {
