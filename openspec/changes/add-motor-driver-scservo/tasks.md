@@ -12,7 +12,13 @@
 	- [x] Completed: `SCServo` integration implemented (WheelMode/WriteSpe/FeedBack/ReadPos used).
 6. Add simple bench tests (manual test instructions + smoke tests) and a `CALIB`-style serial command to toggle motors for bench verification.
 	- [x] Completed: serial commands (`MOTOR ENABLE`, `MOTOR DISABLE`, `MOTOR SET`, `MOTOR READ`, `MOTOR PARAMS`) implemented; HELP updated.
+7. Add runtime acceleration control and configuration updates.
+	- [x] Completed: add `MOTOR ACC <LEFT|RIGHT|id> <value>` serial command to set servo acceleration in-flight.
+	- [x] Completed: update `ESP32/config/motor_config.h` to set `VELOCITY_MAX_SPEED`=7000 and default `MOTOR_SERVO_DEFAULT_ACC`=200.
 7. Validate the change with `openspec validate add-motor-driver-scservo --strict` and iterate until clean.
 	- [x] Performed local checks: project builds and commits applied. Recommend running `openspec validate` in your CI if available.
 8. Archive the change after successful bench validation and documentation updates.
 	- [ ] Pending: please confirm bench validation on hardware; once confirmed we can move this change to `openspec/changes/archive/`.
+
+9. Optional: expose runtime command to persist chosen acceleration to preferences/NVS (future task).
+	- [ ] Not started

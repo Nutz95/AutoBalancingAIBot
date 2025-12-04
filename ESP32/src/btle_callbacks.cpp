@@ -15,11 +15,9 @@ void ClientCallbacks::onConnect(NimBLEClient* pClient) {
 void ClientCallbacks::onDisconnect(NimBLEClient* pClient) {
   g_connected = false;
   LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> BLE: Disconnected");
-  // Auto-disable motors when controller link is lost
-  if (abbot::motor::areMotorsEnabled()) {
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: auto-disable due to controller disconnect");
-    abbot::motor::disableMotors();
-  }
+  // NOTE: Do NOT auto-disable motors on controller disconnect here.
+  // Motor enable/disable should be controlled explicitly by user commands
+  // (e.g. via serial/menu) to avoid unexpected motor cutouts during bench tests.
 }
 
 void ClientCallbacks::onAuthenticationComplete(ble_gap_conn_desc* desc) {

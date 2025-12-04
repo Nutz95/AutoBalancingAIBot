@@ -11,6 +11,13 @@
 
 // Per-motor direction inversion (set to 1 if the physical motor is inverted)
 // For differential drive balancing: motors must rotate opposite directions.
+//
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+// WARNING: DO NOT CHANGE THESE VALUES!
+// Motor directions have been validated with MOTOR VEL LEFT/RIGHT 500 commands.
+// Both motors correctly go FORWARD with positive velocity.
+// If balancing direction is wrong, fix it in the PID/balancer code, NOT here!
+// !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 #define LEFT_MOTOR_INVERT 1
 #define RIGHT_MOTOR_INVERT 0
 
@@ -46,6 +53,7 @@
 #define MOTOR_SERVO_RESET_ON_BOOT 1
 #endif
 
+
 // =============================================================================
 // VELOCITY CLOSED-LOOP MODE (ESP-side position control)
 // =============================================================================
@@ -62,7 +70,7 @@
 // Maximum servo speed units for velocity commands
 // STS3215 max is ~3400 steps/s at no load.
 #ifndef VELOCITY_MAX_SPEED
-#define VELOCITY_MAX_SPEED 6000 // 3000
+#define VELOCITY_MAX_SPEED 7000
 #endif
 
 // Velocity command scaling

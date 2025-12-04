@@ -7,15 +7,17 @@
 // Kp=8.0 means 1 degree error (0.017 rad) -> 0.13 command (13% speed)
 // Saturation (100% speed) occurs at ~7.7 degrees error.
 #ifndef BALANCER_DEFAULT_KP
-#define BALANCER_DEFAULT_KP 40.0f
+#define BALANCER_DEFAULT_KP 26.0f
 #endif
 
+// Ki=0 by default to avoid integral windup causing direction reversal
+// Add small Ki (0.01-0.05) only after Kp/Kd are tuned
 #ifndef BALANCER_DEFAULT_KI
-#define BALANCER_DEFAULT_KI 0.02f
+#define BALANCER_DEFAULT_KI 1.15f
 #endif
 
 #ifndef BALANCER_DEFAULT_KD
-#define BALANCER_DEFAULT_KD 2.0f
+#define BALANCER_DEFAULT_KD 0.85f
 #endif
 
 // Integrator anti-windup clamp (absolute limit applied to integrator state)

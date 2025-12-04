@@ -535,6 +535,35 @@ bool processSerialCommand(const String &line) {
                s_target_pos_right, s_accumulated_pos_right, s_target_pos_right - s_accumulated_pos_right);
     return true;
   }
+  if (strcmp(cmd, "ACC") == 0) {
+    // Runtime acceleration setter: MOTOR ACC <LEFT|RIGHT|id> <value>
+    char *arg = strtok(NULL, " \t\r\n");
+    if (!arg) {
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Usage: MOTOR ACC <LEFT|RIGHT|id> <value>");
+      return true;
+    }
+    int id = -1;
+    if (strcmp(arg, "LEFT") == 0) id = LEFT_MOTOR_ID;
+    else if (strcmp(arg, "RIGHT") == 0) id = RIGHT_MOTOR_ID;
+    else id = atoi(arg);
+    char *v = strtok(NULL, " \t\r\n");
+    if (!v) {
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Usage: MOTOR ACC <LEFT|RIGHT|id> <value>");
+      return true;
+    }
+    int acc = atoi(v);
+#if MOTOR_DRIVER_REAL
+    if (!s_servoInitialized) {
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: ACC requested but servo bus not initialized");
+      return true;
+    }
+    int rc = s_servoBus.writeByte((uint8_t)id, SMS_STS_ACC, (uint8_t)acc);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: ACC id=%d acc=%d rc=%d\n", id, acc, rc);
+#else
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: STUB ACC id=%d acc=%d\n", id, acc);
+#endif
+    return true;
+  }
   if (strcmp(cmd, "VEL") == 0) {
     // Direct velocity command: MOTOR VEL <LEFT|RIGHT> <speed>
     // Sends velocity directly via WriteSpe (bypasses closed-loop but applies inversion)

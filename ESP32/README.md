@@ -95,6 +95,11 @@ Basic serial commands (send as plain text lines):
 - `MOTOR READ <LEFT|RIGHT|ID>` - read encoder/position from servo
 - `MOTOR SET <LEFT|RIGHT|ID> <v>` - set normalized command in [-1.0..1.0]
 	- Normalized values are mapped to servo units using `SC_SERVO_MAX_SPEED` (default 7000). Start with small values (e.g. `0.05`).
+ - `MOTOR SET <LEFT|RIGHT|ID> <v>` - set normalized command in [-1.0..1.0]
+ 	- Normalized values are mapped to servo units using `SC_SERVO_MAX_SPEED` (default 7000). Start with small values (e.g. `0.05`).
+ - `MOTOR ACC <LEFT|RIGHT|ID> <value>` - set servo acceleration register at runtime
+ 	- Example: `MOTOR ACC LEFT 0` (no smoothing, fastest changes)
+ 	- Example: `MOTOR ACC LEFT 200` (default smoothing; repository default value is set in `ESP32/config/motor_config.h` as `MOTOR_SERVO_DEFAULT_ACC`)
 - `MOTOR SET <LEFT|RIGHT|ID> RAW <value>` - send raw signed servo units directly (use short pulses)
 - `MOTOR PARAMS <LEFT|RIGHT|ID>` - dump servo EEPROM/SRAM parameters and present status
 

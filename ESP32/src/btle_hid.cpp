@@ -6,8 +6,13 @@
 #include "../config/motor_config.h" // LEFT_MOTOR_ID / RIGHT_MOTOR_ID
 #include "logging.h"
 #include "btle_callbacks.h"
+#include "balancer_controller.h" // for balance toggle
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+
+// Button mapping for Xbox controller (byte index, bit mask)
+#define BALANCE_TOGGLE_BYTE  15   // Last byte of HID report
+#define BALANCE_TOGGLE_MASK  0x01 // Bit 0
 
 // Helper: wait for the NimBLE client to report connected state (with timeout).
 // Returns the number of milliseconds actually waited.
@@ -41,7 +46,59 @@ static uint32_t waitForStableAfterSecure(NimBLEClient* client, uint32_t timeout_
 NimBLEClient* g_client = nullptr;
 NimBLEAdvertisedDevice* g_targetDevice = nullptr;
 volatile bool g_connected = false;
+
+// Track button state for edge detection
+static uint8_t g_lastButtonState = 0;
+
+// Handle controller button presses - returns true if any action was taken
+static void handleControllerButtons(const uint8_t* pData, size_t length) {
+  if (length <= BALANCE_TOGGLE_BYTE) return;
+  
+  uint8_t currentButton = pData[BALANCE_TOGGLE_BYTE] & BALANCE_TOGGLE_MASK;
+  uint8_t wasPressed = g_lastButtonState & BALANCE_TOGGLE_MASK;
+  
+  // Balance toggle: falling edge (button released)
+  if (wasPressed && !currentButton) {
+    if (abbot::balancer::controller::isActive()) {
+      abbot::balancer::controller::stop();
+      abbot::motor::disableMotors();
+      LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> BALANCE STOP (controller button)");
+    } else {
+      if (!abbot::motor::areMotorsEnabled()) {
+        abbot::motor::enableMotors();
+      }
+      abbot::balancer::controller::start(abbot::getFusedPitch());
+      LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> BALANCE START (controller button)");
+    }
+  }
+  
+  g_lastButtonState = pData[BALANCE_TOGGLE_BYTE];
+}
+
 void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t length, bool isNotify) {
+  // Log raw HID report for button mapping discovery
+  static uint8_t lastData[32] = {0};
+  bool changed = false;
+  for (size_t i = 0; i < length && i < 32; i++) {
+    if (pData[i] != lastData[i]) {
+      changed = true;
+      break;
+    }
+  }
+  
+  if (changed) {
+    char buf[128];
+    int pos = snprintf(buf, sizeof(buf), "HID[%d]: ", (int)length);
+    for (size_t i = 0; i < length && i < 16 && pos < 120; i++) {
+      pos += snprintf(buf + pos, sizeof(buf) - pos, "%02X ", pData[i]);
+    }
+    LOG_PRINTLN(abbot::log::CHANNEL_BLE, buf);
+    memcpy(lastData, pData, length < 32 ? length : 32);
+  }
+  
+  // Handle button actions (balance toggle, etc.)
+  handleControllerButtons(pData, length);
+  
   if (length < 4) {
     return;
   }

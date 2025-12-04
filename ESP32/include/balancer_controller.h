@@ -25,9 +25,10 @@ namespace controller {
     float getDeadband();
     void calibrateDeadband();
     // Called each IMU loop to compute (and optionally apply) motor command.
-    // Arguments: fused_pitch_rad (radians), fused_pitch_rate_rads (radians/sec), dt_s (seconds), pitch_invert (flip sign if true).
+    // Arguments: fused_pitch_rad (radians), fused_pitch_rate_rads (radians/sec), dt_s (seconds).
     // Returns computed normalized command in [-1,1].
-    float processCycle(float fused_pitch_rad, float fused_pitch_rate_rads, float dt_s, bool pitch_invert);
+    // Note: Pitch sign is handled by axis mapping in FusionConfig (accel_sign/gyro_sign).
+    float processCycle(float fused_pitch_rad, float fused_pitch_rate_rads, float dt_s);
     
     // Autotuning API
     void startAutotune();

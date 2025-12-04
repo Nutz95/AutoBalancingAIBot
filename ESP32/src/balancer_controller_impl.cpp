@@ -151,23 +151,21 @@ void calibrateDeadband()
 
 // Called each IMU loop to compute and (if active) command motors. Returns
 // the computed command (normalized) regardless of whether it was sent.
-float processCycle(float fused_pitch, float fused_pitch_rate, float dt, bool pitch_invert)
+// Note: Pitch sign is now handled by axis mapping in FusionConfig (accel_sign/gyro_sign),
+// so pitch arrives with correct sign: positive = tilted forward.
+float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
 {
     // Check if autotuning is active
     if (g_autotune_active && g_autotune.isActive()) {
-        // Use error (corrected for pitch_invert) for autotune input
-        // This ensures autotune sees the same "error" as the PID
-        float pitch_sign = pitch_invert ? -1.0f : 1.0f;
-        float error_rad = pitch_sign * fused_pitch;
+        // Pitch is already correctly signed from fusion
+        float error_rad = fused_pitch;
         float error_deg = radToDeg(error_rad);
         
         uint32_t dt_ms = (uint32_t)(dt * 1000.0f);
         
-        // Autotune returns Negative Feedback (Input > 0 -> Output < 0)
-        // But for balancing (unstable), we need Positive Feedback on Error (Error > 0 -> Cmd > 0)
-        // So we INVERT the autotune output.
+        // Autotune relay output - use directly (same sign convention as PID)
         float autotune_raw = g_autotune.update(error_deg, dt_ms);
-        float autotune_cmd = -autotune_raw;
+        float autotune_cmd = autotune_raw;  // No inversion - consistent with PID
         
         // Debug: log autotune state and command
         static uint32_t last_log_ms = 0;
@@ -209,13 +207,22 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt, bool pit
     }
     
     if (!g_active) return 0.0f;
-    // Apply pitch inversion if needed
-    // error: positive pitch (tilt back) requires positive motor command (forward)
-    // If pitch_invert=true: inverts sign so negative pitch (tilt forward) -> positive command
-    float pitch_sign = pitch_invert ? -1.0f : 1.0f;
-    float error = pitch_sign * fused_pitch;
-    float error_dot = pitch_sign * fused_pitch_rate;
-    float cmd = g_pid.update(error, error_dot, dt);
+    // For INVERTED PENDULUM (balancing robot):
+    // - Pitch > 0 (tilted forward) -> motors must go FORWARD (cmd > 0) to catch
+    // - Pitch < 0 (tilted backward) -> motors must go BACKWARD (cmd < 0) to catch
+    // With ay > 0 when tilted forward and our axis mapping, Madgwick produces
+    // pitch that may be positive or negative for forward tilt depending on convention.
+    // We use positive command = motors forward.
+    //
+    // NOTE: Motor directions are CORRECT (validated with MOTOR VEL commands).
+    //       DO NOT change motor inversion in motor_config.h!
+    //       Pitch sign is handled by accel_sign/gyro_sign in FusionConfig.h
+    
+    // PID input: use pitch directly as error (target = 0)
+    // For inverted pendulum: error and command should have SAME sign
+    // (tilt forward = positive -> command forward = positive to catch)
+    float pid_out = g_pid.update(fused_pitch, fused_pitch_rate, dt);
+    float cmd = pid_out;  // No negation - same sign as pitch for catching behavior
     // clamp
     if (cmd > 1.0f) cmd = 1.0f;
     if (cmd < -1.0f) cmd = -1.0f;

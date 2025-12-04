@@ -14,18 +14,25 @@ struct FusionConfig {
     // accel_map[i] specifies which sensor axis (0=ax,1=ay,2=az) should be
     // used as robot-axis i (i==0 -> robot X, i==1 -> robot Y, i==2 -> robot Z).
     // accel_sign[i] is either +1 or -1 to flip the sign if needed.
-    // Default mapping for your mounting: sensor X+ -> right, Y+ -> forward
-    // Map sensor axes into robot axes: robot X := sensor Y, robot Y := sensor X
+    //
+    // BMI088 mounting on this robot:
+    //   - Sensor Y+ points forward (ay > 0 when tilted forward)
+    //   - Sensor X+ points right
+    //   - Sensor Z+ points up
+    //
+    // Robot coordinate frame (for Madgwick):
+    //   - Robot X = forward (pitch axis rotation)
+    //   - Robot Y = right (roll axis rotation)  
+    //   - Robot Z = up
+    //
+    // Mapping: robot X := sensor Y, robot Y := sensor X, robot Z := sensor Z
+    // Sign adjustment: invert robot X (accel_sign[0] = -1) so that pitch > 0 means forward tilt
     int accel_map[3] = {1, 0, 2};
-    int accel_sign[3] = {1, 1, 1};
+    int accel_sign[3] = {-1, 1, 1};  // Invert X to get correct pitch sign
 
-    // same for gyro (rad/s)
+    // same for gyro (rad/s) - must match accel mapping for consistent fusion
     int gyro_map[3] = {1, 0, 2};
-    int gyro_sign[3] = {1, 1, 1};
-    
-    // Control polarity: if true, inverts pitch error for balance control
-    // Set to true if motors respond backwards (tilt forward -> motors reverse instead of forward)
-    bool pitch_invert = true;
+    int gyro_sign[3] = {-1, 1, 1};  // Invert X to match accel
 };
 
 } // namespace fusion

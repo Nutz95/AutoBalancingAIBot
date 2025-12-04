@@ -118,7 +118,7 @@ static void imuConsumerTask(void *pvParameters) {
       // Read last motor commands (normalized) via motor driver API
       float left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
       float right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
-      abbot::imu_consumer::runBalancerCycleIfActive(fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd, g_fusion_cfg.pitch_invert);
+      abbot::imu_consumer::runBalancerCycleIfActive(fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd);
 
       // Emit tuning stream or capture outputs
       abbot::imu_consumer::emitTuningOrStream(g_consumer, sample, fused_pitch_local, fused_pitch_rate_local, accel_robot, gyro_robot, left_cmd, right_cmd);

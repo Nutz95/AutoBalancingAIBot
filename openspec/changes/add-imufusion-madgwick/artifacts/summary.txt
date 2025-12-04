@@ -1,0 +1,21 @@
+Analysis summary for: tuning_capture_10000.txt
+samples: 10000
+pitch_mean_deg: 0.8818738461000001
+pitch_std_deg: 0.2632321193113393
+pr_mean_deg_s: 0.0317245349
+pr_std_deg_s: 0.14683295129174814
+temp_mean_C: 24.792575
+temp_std_C: 0.06454386853990556
+estimated_sample_rate_Hz: 166.66666666666666
+
+Columns: timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd
+
+-- Extended metrics --
+corr_temp_pitch: 0.2836393035936017
+corr_temp_pr: -0.19654743105481798
+corr_accel_vs_fused_pitch: 0.017359662317333355
+rmse_accel_vs_fused_pitch_deg: 0.3078962565266819
+allan_pitch_taus_s: 0.006,0.012,0.024,0.048,0.096,0.192,0.384,0.768,1.536,3.072,6.144,12.288,24.576
+allan_pitch_adev: 0.000638031,0.00110386,0.00201777,0.00385114,0.00747539,0.0145321,0.0278524,0.0516969,0.0891616,0.13497,0.163427,0.155182,0.137706
+allan_pr_taus_s: 0.006,0.012,0.024,0.048,0.096,0.192,0.384,0.768,1.536,3.072,6.144,12.288,24.576
+allan_pr_adev: 0.0926069,0.0792723,0.0575,0.0391467,0.0258302,0.0205963,0.0166093,0.0213874,0.035499,0.0535153,0.0646048,0.0625162,0.0544961

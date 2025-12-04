@@ -148,10 +148,9 @@ void runBalancerCycleIfActive(float fused_pitch_local,
                               float fused_pitch_rate_local,
                               float dt,
                               float &left_cmd,
-                              float &right_cmd,
-                              bool pitch_invert) {
+                              float &right_cmd) {
   if (abbot::balancer::controller::isActive() || abbot::balancer::controller::isAutotuning()) {
-    (void)abbot::balancer::controller::processCycle(fused_pitch_local, fused_pitch_rate_local, dt, pitch_invert);
+    (void)abbot::balancer::controller::processCycle(fused_pitch_local, fused_pitch_rate_local, dt);
     left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
     right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
   }

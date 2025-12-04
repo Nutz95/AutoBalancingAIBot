@@ -131,6 +131,16 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
     }
     else { int id = side.toInt(); abbot::motor::setMotorCommandRaw(id, (int)val.toInt()); }
   });
+  g_motorMenu->addEntry(9, "MOTOR PARAMS <LEFT|RIGHT>", [](const String& p){
+    // Dump servo EEPROM/SRAM parameters
+    String cmd = "PARAMS " + p;
+    abbot::motor::processSerialCommand(cmd);
+  });
+  g_motorMenu->addEntry(10, "MOTOR ACC <LEFT|RIGHT> <value>", [](const String& p){
+    // Set servo acceleration at runtime
+    String cmd = "ACC " + p;
+    abbot::motor::processSerialCommand(cmd);
+  });
 
   // Tuning submenu
   g_tuningMenu = new SerialMenu("Tuning (Madgwick)");
@@ -281,6 +291,16 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
   });
   bal->addEntry(11, "AUTOTUNE APPLY", [](const String&){ abbot::balancer::controller::applyAutotuneGains(); });
+  bal->addEntry(12, "TUNING START <samples>", [](const String& p){
+    String s = p; s.trim();
+    int samples = 2000;
+    if (s.length() > 0) samples = s.toInt();
+    if (samples < 100) samples = 100;
+    abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
+    abbot::tuning::startCapture(samples, true);
+  });
+  bal->addEntry(13, "TUNING STOP", [](const String&){ abbot::tuning::stopCapture(); });
+  bal->addEntry(14, "BALANCE RESET GAINS", [](const String&){ abbot::balancer::controller::resetGainsToDefaults(); });
   root->addSubmenu(5, "Balancer (PID)", bal);
   root->addSubmenu(4, "Log channels", g_logMenu);
 

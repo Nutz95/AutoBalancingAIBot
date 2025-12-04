@@ -98,3 +98,12 @@ Consignes de sécurité avant essai dynamique
 - Commencez avec gains PID faibles (Kp petit, Ki=0, Kd petit) et validez la réponse en poussant légèrement.
 
 Souhaitez-vous que j'intègre un exemple minimal d'appel au PID dans `SystemTasks` (désactivé par défaut par un `#define`), ou que je crée un petit guide pas-à-pas pour les tests moteurs ?
+
+Motor acceleration (runtime) control
+ - The firmware now exposes a runtime command to adjust servo acceleration without rebuilding: `MOTOR ACC <LEFT|RIGHT|ID> <value>`
+ - Example: `MOTOR ACC LEFT 0` (sets acceleration register to 0 — fastest changes, higher current spikes)
+ - Example: `MOTOR ACC LEFT 200` (sets a smoothing acceleration value; this repository's default is `200`)
+ - The compile-time defaults are configured in `ESP32/config/motor_config.h`:
+   - `VELOCITY_MAX_SPEED` (default `7000`) — raw servo units used to map normalized velocity commands
+   - `MOTOR_SERVO_DEFAULT_ACC` (default `200`) — default acceleration register written on enable
+ - Use the runtime `MOTOR ACC` command during bench testing to quickly switch between aggressive and smooth acceleration settings. Monitor servo current and temperature when trying aggressive values (e.g. `0`) — higher currents and heating are expected under load.
