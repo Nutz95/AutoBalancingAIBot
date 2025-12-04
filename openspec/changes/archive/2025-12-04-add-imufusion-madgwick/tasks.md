@@ -37,7 +37,7 @@ Notes:
 
 ## 5. Documentation & Archive
 - [x] 5.1 Update `ESP32/README_TUNING.md` with tuning procedure
-- [x] 5.2 After bench validation, archive change using `openspec archive`
+- [ ] 5.2 After bench validation, archive change using `openspec archive`
 
 
 Notes:

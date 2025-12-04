@@ -35,6 +35,13 @@ Safety
 Files
 - `openspec/changes/add-imufusion-madgwick/bench_report.md` — optional location to store bench results.
 
+Artifacts & archive
+- After running captures and analysis, archive your CSV and PNGs under the openspec change for traceability. Example destination used in this repo:
+  - `openspec/changes/add-imufusion-madgwick/artifacts/plots/`
+  - A manifest of archived files is available at `openspec/changes/add-imufusion-madgwick/artifacts/manifest.txt`
+
+Note: the recent 10k-sample capture used for benching produced a `TUNING SUMMARY` and plots archived under the paths above; see `openspec/changes/add-imufusion-madgwick/artifacts/summary.txt` for the numeric summary.
+
 TUNING SUMMARY (firmware)
 - Example firmware output (appears after `TUNING STOP` or when auto-capture completes):
   - `TUNING SUMMARY: samples=2000, pitch_mean=0.185635, pitch_std=0.085277, pr_mean=0.025836, pr_std=0.136723`

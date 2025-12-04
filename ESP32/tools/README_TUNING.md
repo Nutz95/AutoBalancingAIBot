@@ -81,6 +81,19 @@ Kd = 5.0
 - `balance_capture_YYYYMMDD_HHMMSS_balancer.csv` - Balancer (cmd, error, pitch)
 - `balance_capture_YYYYMMDD_HHMMSS.png` - Plot (if --plot used)
 
+## Capture helpers & archive
+
+- The repo includes small helper scripts to capture TUNING / balancer telemetry and run basic analysis:
+   - `ESP32/tools/capture_tuning.py` — Python capture helper (auto-detects port and saves CSV). Use `-p <COM>` to pick a port.
+   - `ESP32/tools/capture_tuning.ps1` — PowerShell wrapper around the Python helper for Windows users.
+   - `ESP32/tools/analyze_tuning_capture.py` — offline analyzer that produces PNGs and `summary.txt`.
+
+- After a capture and analysis, archive the raw CSV and generated PNGs under the openspec change for the IMU fusion work, for example:
+   - `openspec/changes/add-imufusion-madgwick/artifacts/plots/`
+   - `openspec/changes/add-imufusion-madgwick/artifacts/manifest.txt`
+
+This keeps tuning evidence with the corresponding design change and enables reproducible follow-ups.
+
 ## Tips
 
 - Start with robot **almost vertical** (within ±10°)
