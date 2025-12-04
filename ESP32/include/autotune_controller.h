@@ -26,9 +26,9 @@ public:
     };
 
     struct Config {
-        float relay_amplitude = 0.3f;     ///< Relay output magnitude (±)
-        float deadband = 0.5f;            ///< Deadband around zero (degrees) - not used in relay
-        float max_pitch_abort = 50.0f;    ///< Abort if pitch exceeds this
+        float relay_amplitude = 0.25f;    ///< Relay output magnitude (±) - 25% (~750 speed units)
+        float deadband = 0.05f;           ///< Deadband around zero (degrees) - Reduced to minimize coasting
+        float max_pitch_abort = 45.0f;    ///< Abort if pitch exceeds this (safety limit)
         uint32_t timeout_ms = 8000;       ///< Max time to wait for oscillations
         uint32_t min_cycles = 3;          ///< Minimum consistent cycles required
     };

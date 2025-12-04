@@ -107,7 +107,14 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
   g_motorMenu->addEntry(2, "MOTOR DISABLE", [](const String&){ abbot::motor::disableMotors(); });
   g_motorMenu->addEntry(3, "MOTOR STATUS", [](const String&){ abbot::motor::printStatus(); });
   g_motorMenu->addEntry(4, "MOTOR DUMP", [](const String&){ abbot::motor::dumpConfig(); });
-  g_motorMenu->addEntry(5, "MOTOR SET <LEFT|RIGHT|ID> <v>", [](const String& p){
+  g_motorMenu->addEntry(5, "MOTOR RESETPOS", [](const String&){ abbot::motor::resetPositionTracking(); });
+  g_motorMenu->addEntry(6, "MOTOR POS", [](const String&){ abbot::motor::processSerialCommand("POS"); });
+  g_motorMenu->addEntry(7, "MOTOR VEL <LEFT|RIGHT> <speed>", [](const String& p){
+    // Direct velocity command for testing
+    String cmd = "VEL " + p;
+    abbot::motor::processSerialCommand(cmd);
+  });
+  g_motorMenu->addEntry(8, "MOTOR SET <LEFT|RIGHT|ID> <v>", [](const String& p){
     // Expect: <side> <value>
     String s = p; s.trim();
     int sp = s.indexOf(' ');
@@ -519,8 +526,8 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     return;
   }
 
-  // BALANCE commands: BALANCE START | BALANCE STOP | BALANCE GAINS <kp> <ki> <kd>
-  //                 | BALANCE GET_GAINS
+  // BALANCE commands: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> <kd>]
+  //                 | BALANCE RESET | BALANCE GET_GAINS
   //                 | BALANCE DEADBAND GET|SET|CALIBRATE
   if (up.startsWith("BALANCE")) {
     char buf4[64];
@@ -528,7 +535,7 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     char *tk = strtok(buf4, " \t\r\n");
     char *arg = strtok(NULL, " \t\r\n");
     if (!arg) {
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS <kp> <ki> <kd> | BALANCE GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> <kd>] | BALANCE RESET | BALANCE GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE");
       return;
     }
     if (strcmp(arg, "START") == 0) {
@@ -537,14 +544,27 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     } else if (strcmp(arg, "STOP") == 0) {
       abbot::stopBalancer();
       return;
+    } else if (strcmp(arg, "RESET") == 0) {
+      abbot::balancer::controller::resetGainsToDefaults();
+      return;
     } else if (strcmp(arg, "GAINS") == 0) {
       // remaining tokens are kp ki kd
       char *kp_s = strtok(NULL, " \t\r\n");
       char *ki_s = strtok(NULL, " \t\r\n");
       char *kd_s = strtok(NULL, " \t\r\n");
-      float kp = kp_s ? atof(kp_s) : 0.0f;
-      float ki = ki_s ? atof(ki_s) : 0.0f;
-      float kd = kd_s ? atof(kd_s) : 0.0f;
+      if (!kp_s || !ki_s || !kd_s) {
+        // No parameters provided, display current gains
+        float kp,ki,kd; 
+        abbot::getBalancerGains(kp,ki,kd);
+        char buf[128]; 
+        snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f", (double)kp, (double)ki, (double)kd);
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+        return;
+      }
+      // Parameters provided, set gains
+      float kp = atof(kp_s);
+      float ki = atof(ki_s);
+      float kd = atof(kd_s);
       abbot::setBalancerGains(kp, ki, kd);
       return;
     } else if (strcmp(arg, "GET_GAINS") == 0) {
@@ -571,7 +591,7 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
         return;
       }
     }
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS <kp> <ki> <kd>");
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> <kd>] | BALANCE RESET | BALANCE DEADBAND GET|SET|CALIBRATE");
     return;
   }
 
@@ -586,6 +606,15 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       return;
     }
     if (strcmp(arg, "START") == 0) {
+      abbot::balancer::controller::startAutotune();
+      return;
+    } else if (strcmp(arg, "SAFE") == 0) {
+      // Apply conservative autotune parameters and start autotune.
+      // These are intentionally small to reduce risk of falls during tuning.
+      abbot::balancer::controller::setAutotuneRelay(0.15f);   // 15% relay amplitude
+      abbot::balancer::controller::setAutotuneDeadband(0.5f); // 0.5° deadband
+      abbot::balancer::controller::setAutotuneMaxAngle(8.0f); // abort if pitch > 8°
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: starting in SAFE mode (relay=0.15 deadband=0.5° maxangle=8°)");
       abbot::balancer::controller::startAutotune();
       return;
     } else if (strcmp(arg, "STOP") == 0) {

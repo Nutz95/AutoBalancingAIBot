@@ -108,7 +108,7 @@ void updateBiasEmaAndPersistIfNeeded(ConsumerState &state, const IMUSample &samp
       }
     }
 
-    if ((int32_t)(now - state.last_persist_ms) >= (int32_t)state.persist_interval_ms) {
+    /*if ((int32_t)(now - state.last_persist_ms) >= (int32_t)state.persist_interval_ms) {
       if (state.prefs && state.prefs_started) {
         float stored_x = state.prefs->getFloat("gbx", 0.0f);
         float stored_y = state.prefs->getFloat("gby", 0.0f);
@@ -125,7 +125,7 @@ void updateBiasEmaAndPersistIfNeeded(ConsumerState &state, const IMUSample &samp
           state.last_persist_ms = now;
         }
       }
-    }
+    }*/
   }
 }
 

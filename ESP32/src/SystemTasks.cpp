@@ -122,8 +122,13 @@ static void imuConsumerTask(void *pvParameters) {
 
       // Emit tuning stream or capture outputs
       abbot::imu_consumer::emitTuningOrStream(g_consumer, sample, fused_pitch_local, fused_pitch_rate_local, accel_robot, gyro_robot, left_cmd, right_cmd);
+      
+      
+      #if defined(ENABLE_IMU_DEBUG_LOGS)
       // Emit diagnostics if BALANCER channel enabled
       abbot::imu_consumer::emitDiagnosticsIfEnabled(sample.ts_ms, fused_pitch_local, fused_pitch_rate_local, left_cmd, right_cmd);
+      #endif
+      
       #if defined(ENABLE_DEBUG_LOGS)
       // Suppress debug logs while calibration runs
       if (abbot::imu_cal::isCalibrating()) {

@@ -70,17 +70,15 @@ float AutotuneController::update(float pitch_deg, uint32_t dt_ms) {
         return 0.0f;
     }
 
-    // Helper: compute relay output with deadband and soft-start ramp
+    // Helper: compute relay output with deadband (NO RAMP for immediate reaction)
     auto computeRelayOutput = [&](float angle_deg) {
         float abs_ang = fabsf(angle_deg);
         // Deadband: no output when within threshold
         if (abs_ang <= m_config.deadband) {
             return 0.0f;
         }
-        // Soft-start: ramp amplitude over first 1500 ms to avoid jolts
-        const uint32_t ramp_ms = 1500;
-        float ramp = (m_elapsed_ms >= ramp_ms) ? 1.0f : (float)m_elapsed_ms / (float)ramp_ms;
-        float amp = m_config.relay_amplitude * ramp;
+        // Immediate full amplitude
+        float amp = m_config.relay_amplitude;
         return (angle_deg > 0.0f) ? -amp : amp;
     };
 
@@ -189,7 +187,7 @@ void AutotuneController::computeGains() {
         return;
     }
 
-    // Calculate oscillation amplitude (peak-to-peak)
+    // Calculate oscillation amplitude (peak, zero-to-peak)
     float amplitude = computeAverageAmplitude();
     if (amplitude <= 0.0f) {
         fail("Invalid oscillation amplitude");
@@ -197,7 +195,7 @@ void AutotuneController::computeGains() {
     }
 
     // Calculate ultimate gain: Ku = (4 * d) / (π * a)
-    // where d = relay amplitude, a = oscillation amplitude
+    // where d = relay amplitude, a = oscillation amplitude (peak)
     float Ku = (4.0f * m_config.relay_amplitude) / (M_PI * amplitude);
 
     // Tyreus-Luyben tuning rules (more conservative than Ziegler-Nichols)
@@ -243,11 +241,10 @@ float AutotuneController::computeAverageAmplitude() const {
         return 0.0f;
     }
 
-    // Average the peak amplitudes
-    // Peak-to-peak amplitude is 2x the peak value
+    // Average the peak amplitudes (zero-to-peak)
     float sum = 0.0f;
     for (uint8_t i = 0; i < m_data.num_peaks; i++) {
-        sum += m_data.peak_values[i] * 2.0f;
+        sum += m_data.peak_values[i];
     }
 
     return sum / m_data.num_peaks;

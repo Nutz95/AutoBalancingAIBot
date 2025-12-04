@@ -44,6 +44,11 @@ void init()
         char buf[128];
         snprintf(buf, sizeof(buf), "BALANCER: controller initialized (Kp=%.4f Ki=%.4f Kd=%.4f deadband=%.4f)", (double)bp, (double)bi, (double)bd, (double)g_deadband);
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+    } else {
+        g_prefs_started = false;
+        char buf[128];
+        snprintf(buf, sizeof(buf), "BALANCER: controller initialized (defaults used) - Kp=%.4f Ki=%.4f Kd=%.4f deadband=%.4f", (double)BALANCER_DEFAULT_KP, (double)BALANCER_DEFAULT_KI, (double)BALANCER_DEFAULT_KD, (double)g_deadband);
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
     }
 }
 
@@ -73,8 +78,7 @@ void stop()
     if (!g_active) return;
     g_active = false;
     abbot::log::disableChannel(abbot::log::CHANNEL_BALANCER);
-    abbot::motor::setMotorCommand(LEFT_MOTOR_ID, 0.0f);
-    abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, 0.0f);
+    abbot::motor::setMotorCommandBoth(0.0f, 0.0f);
     abbot::motor::disableMotors();
     g_pid.reset();
     g_last_cmd = 0.0f;
@@ -111,6 +115,22 @@ void getGains(float &kp, float &ki, float &kd)
     }
 }
 
+void resetGainsToDefaults()
+{
+    g_pid.setGains(BALANCER_DEFAULT_KP, BALANCER_DEFAULT_KI, BALANCER_DEFAULT_KD);
+    if (g_prefs_started) {
+        g_prefs.putFloat("bp", BALANCER_DEFAULT_KP);
+        g_prefs.putFloat("bi", BALANCER_DEFAULT_KI);
+        g_prefs.putFloat("bd", BALANCER_DEFAULT_KD);
+        g_prefs.putFloat("db", BALANCER_MOTOR_MIN_OUTPUT);
+    }
+    g_deadband = BALANCER_MOTOR_MIN_OUTPUT;
+    char buf[128];
+    snprintf(buf, sizeof(buf), "BALANCER: reset to defaults Kp=%.4f Ki=%.4f Kd=%.4f deadband=%.4f", 
+             (double)BALANCER_DEFAULT_KP, (double)BALANCER_DEFAULT_KI, (double)BALANCER_DEFAULT_KD, (double)BALANCER_MOTOR_MIN_OUTPUT);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+}
+
 void setDeadband(float db)
 {
     g_deadband = db;
@@ -135,17 +155,27 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt, bool pit
 {
     // Check if autotuning is active
     if (g_autotune_active && g_autotune.isActive()) {
-        float pitch_deg = radToDeg(fused_pitch);
+        // Use error (corrected for pitch_invert) for autotune input
+        // This ensures autotune sees the same "error" as the PID
+        float pitch_sign = pitch_invert ? -1.0f : 1.0f;
+        float error_rad = pitch_sign * fused_pitch;
+        float error_deg = radToDeg(error_rad);
+        
         uint32_t dt_ms = (uint32_t)(dt * 1000.0f);
-        float autotune_cmd = g_autotune.update(pitch_deg, dt_ms);
+        
+        // Autotune returns Negative Feedback (Input > 0 -> Output < 0)
+        // But for balancing (unstable), we need Positive Feedback on Error (Error > 0 -> Cmd > 0)
+        // So we INVERT the autotune output.
+        float autotune_raw = g_autotune.update(error_deg, dt_ms);
+        float autotune_cmd = -autotune_raw;
         
         // Debug: log autotune state and command
         static uint32_t last_log_ms = 0;
         uint32_t now_ms = millis();
         if (now_ms - last_log_ms > 500) {
             char dbg[128];
-            snprintf(dbg, sizeof(dbg), "AUTOTUNE: state=%d pitch=%.2f° cmd=%.3f motors_en=%d", 
-                (int)g_autotune.getState(), (double)pitch_deg, (double)autotune_cmd, 
+            snprintf(dbg, sizeof(dbg), "AUTOTUNE: state=%d err=%.2f° cmd=%.3f motors_en=%d", 
+                (int)g_autotune.getState(), (double)error_deg, (double)autotune_cmd, 
                 abbot::motor::areMotorsEnabled() ? 1 : 0);
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, dbg);
             last_log_ms = now_ms;
@@ -164,8 +194,7 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt, bool pit
             }
             
             // Zero and disable motors
-            abbot::motor::setMotorCommand(LEFT_MOTOR_ID, 0.0f);
-            abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, 0.0f);
+            abbot::motor::setMotorCommandBoth(0.0f, 0.0f);
             abbot::motor::disableMotors();
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: motors disabled automatically");
             return 0.0f;
@@ -173,8 +202,7 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt, bool pit
         
         // Apply autotune command to motors
         if (abbot::motor::areMotorsEnabled()) {
-            abbot::motor::setMotorCommand(LEFT_MOTOR_ID, autotune_cmd);
-            abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, autotune_cmd);
+            abbot::motor::setMotorCommandBoth(autotune_cmd, autotune_cmd);
         }
         
         return autotune_cmd;
@@ -210,10 +238,9 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt, bool pit
         g_last_cmd = cmd;
         return cmd;
     }
-    // command
-    abbot::motor::setMotorCommand(LEFT_MOTOR_ID, cmd);
-    abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, cmd);
-    LOG_PRINTF(abbot::log::CHANNEL_BALANCER, "BALANCER: cmd=%.4f err=%.6f pitch_deg=%.4f\n", cmd, (double)error, (double)radToDeg(fused_pitch));
+    // command both motors simultaneously
+    abbot::motor::setMotorCommandBoth(cmd, cmd);
+    // LOG_PRINTF(abbot::log::CHANNEL_BALANCER, "BALANCER: cmd=%.4f err=%.6f pitch_deg=%.4f\n", cmd, (double)error, (double)radToDeg(fused_pitch));
     g_last_cmd = cmd;
     return cmd;
 }
@@ -303,14 +330,20 @@ void applyAutotuneGains()
     }
     
     // Apply the computed gains
-    setGains(result.Kp, result.Ki, result.Kd);
+    // IMPORTANT: Autotune calculates gains based on DEGREES (Input=Deg, Output=0..1)
+    // But the PID controller works in RADIANS (Input=Rad, Output=0..1)
+    // We must convert the gains: K_rad = K_deg * (180/PI)
+    const float deg2rad_factor = 180.0f / M_PI;
+    float Kp = result.Kp * deg2rad_factor;
+    float Ki = result.Ki * deg2rad_factor;
+    float Kd = result.Kd * deg2rad_factor;
+
+    setGains(Kp, Ki, Kd);
     
     char buf[256];
     snprintf(buf, sizeof(buf), 
-        "AUTOTUNE: Applied gains - Kp=%.4f Ki=%.4f Kd=%.4f | Ku=%.4f Tu=%.1fms Amp=%.2f°",
-        (double)result.Kp, (double)result.Ki, (double)result.Kd,
-        (double)result.ultimate_gain, (double)result.ultimate_period_ms,
-        (double)result.oscillation_amplitude);
+        "AUTOTUNE: Applied gains (Rad) - Kp=%.4f Ki=%.4f Kd=%.4f | (Raw Deg: Kp=%.5f)",
+        (double)Kp, (double)Ki, (double)Kd, (double)result.Kp);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
     
     g_autotune_active = false;

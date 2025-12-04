@@ -20,6 +20,7 @@ namespace controller {
     bool isActive();
     void setGains(float kp, float ki, float kd);
     void getGains(float &kp, float &ki, float &kd);
+    void resetGainsToDefaults(); // Reset gains to compile-time defaults from balancer_config.h
     void setDeadband(float db);
     float getDeadband();
     void calibrateDeadband();

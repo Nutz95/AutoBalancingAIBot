@@ -60,7 +60,7 @@ def parse_capture(path):
         for i, L in enumerate(lines):
             if ROW_REGEX.search(L):
                 header_idx = i - 1
-                header = 'timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,left_cmd,right_cmd'
+                header = 'timestamp_ms,pitch_deg,pitch_rate_deg,left_cmd,right_cmd'
                 break
     if header_idx is None:
         raise ValueError('No CSV header or rows found in file')
@@ -70,26 +70,43 @@ def parse_capture(path):
         if ROW_REGEX.search(L):
             # split and try to parse first 5 numeric fields
             parts = [p.strip() for p in L.split(',')]
-            # expected columns: timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd
-            if len(parts) < 12:
-                continue
-            try:
-                ts = float(parts[0])
-                pitch_deg = float(parts[1])
-                pitch_rad = float(parts[2])
-                pr_deg = float(parts[3])
-                pr_rad = float(parts[4])
-                ax = float(parts[5])
-                ay = float(parts[6])
-                az = float(parts[7])
-                gx = float(parts[8])
-                gy = float(parts[9])
-                gz = float(parts[10])
-                temp_C = float(parts[11])
-                # keep core values plus raw and temp for possible later analysis
-                rows.append((ts, pitch_deg, pitch_rad, pr_deg, pr_rad, ax, ay, az, gx, gy, gz, temp_C))
-            except Exception:
-                continue
+            
+            # Handle short format (diag.csv): timestamp_ms,pitch_deg,pitch_rate_deg,left_cmd,right_cmd
+            if len(parts) == 5:
+                try:
+                    ts = float(parts[0])
+                    pitch_deg = float(parts[1])
+                    pr_deg = float(parts[2])
+                    left_cmd = float(parts[3])
+                    right_cmd = float(parts[4])
+                    
+                    # Derived/Default values
+                    pitch_rad = pitch_deg * np.pi / 180.0
+                    pr_rad = pr_deg * np.pi / 180.0
+                    ax = ay = az = gx = gy = gz = temp_C = 0.0
+                    
+                    rows.append((ts, pitch_deg, pitch_rad, pr_deg, pr_rad, ax, ay, az, gx, gy, gz, temp_C))
+                except Exception:
+                    continue
+            # Handle full format
+            elif len(parts) >= 12:
+                try:
+                    ts = float(parts[0])
+                    pitch_deg = float(parts[1])
+                    pitch_rad = float(parts[2])
+                    pr_deg = float(parts[3])
+                    pr_rad = float(parts[4])
+                    ax = float(parts[5])
+                    ay = float(parts[6])
+                    az = float(parts[7])
+                    gx = float(parts[8])
+                    gy = float(parts[9])
+                    gz = float(parts[10])
+                    temp_C = float(parts[11])
+                    # keep core values plus raw and temp for possible later analysis
+                    rows.append((ts, pitch_deg, pitch_rad, pr_deg, pr_rad, ax, ay, az, gx, gy, gz, temp_C))
+                except Exception:
+                    continue
     if not rows:
         raise ValueError('No valid CSV rows parsed')
 
