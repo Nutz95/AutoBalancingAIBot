@@ -1,5 +1,6 @@
 #include "serial_menu.h"
 #include "logging.h"
+#include <algorithm>
 
 SerialMenu::SerialMenu(const char* title_) : title(title_) {}
 SerialMenu::~SerialMenu() {
@@ -41,7 +42,11 @@ void SerialMenu::clearEntries() {
 }
 
 void SerialMenu::printEntries() {
-  for (const auto &e : entries) {
+  // Print entries in numeric order (by id) so menus appear stable
+  // regardless of insertion order.
+  std::vector<Entry> sorted = entries;
+  std::sort(sorted.begin(), sorted.end(), [](const Entry &a, const Entry &b){ return a.id < b.id; });
+  for (const auto &e : sorted) {
     char buf[128];
     snprintf(buf, sizeof(buf), "  %d - %s", e.id, e.label.c_str());
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
