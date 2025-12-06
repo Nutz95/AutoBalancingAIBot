@@ -11,6 +11,8 @@
 #include "tuning_capture.h"
 #include "../include/balancer_controller.h"
 #include "../config/motor_config.h"
+#include "../config/board_config.h"
+#include "status_led.h"
 #include "../config/balancer_config.h"
 #include "logging.h"
 #include <cmath>
@@ -44,12 +46,6 @@ static abbot::imu_consumer::ConsumerState g_consumer;
 // Persistence (Preferences/NVS)
 static Preferences g_prefs;
 static bool g_prefs_started = false;
-// Note: tuning stream state is now managed by the logging channel manager
-
-// Helpers moved to `imu_consumer_helpers` (see include above)
-
-// Sensor->robot mapping and bias compensation is implemented in
-// `imu_mapping` (include/imu_mapping.h, src/imu_mapping.cpp).
 
 static void imuProducerTask(void *pvParameters) {
   BMI088Driver *driver = reinterpret_cast<BMI088Driver*>(pvParameters);
@@ -106,6 +102,9 @@ static void imuConsumerTask(void *pvParameters) {
         --g_consumer.warmup_samples_remaining;
         abbot::imu_consumer::finalizeWarmupIfDone(g_consumer, g_madgwick, g_fusion_cfg);
       }
+
+      // Visual feedback handled by status_led module
+      statusLedUpdateFromConsumer(g_consumer);
 
       // Update bias EMA & persist when appropriate
       abbot::imu_consumer::updateBiasEmaAndPersistIfNeeded(g_consumer, sample, gyro_robot);
@@ -185,6 +184,9 @@ bool startIMUTasks(BMI088Driver *driver) {
   // Initialize logging manager and ensure TUNING channel is disabled by default
   abbot::log::init();
   abbot::log::disableChannel(abbot::log::CHANNEL_TUNING);
+
+  // Initialize status LED (no-op if not configured)
+  statusLedInit();
 
   // Initialize Preferences (NVS) and attempt to load persisted gyro bias via helper
   if (g_prefs.begin("abbot", false)) {
