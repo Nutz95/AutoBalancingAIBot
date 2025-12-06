@@ -199,12 +199,14 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
   });
   g_tuningMenu->addEntry(4, "TUNING STREAM START", [](const String&){
     abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
-    abbot::startTuningStream();
+    // enable channel and print CSV header (inlined from former wrapper)
+    abbot::log::enableChannel(abbot::log::CHANNEL_TUNING);
+    LOG_PRINTLN(abbot::log::CHANNEL_TUNING, "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd");
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started (stream)");
     if (g_menuActive && g_currentMenu) { g_currentMenu->enter(); }
   });
   g_tuningMenu->addEntry(5, "TUNING STREAM STOP", [](const String&){
-    abbot::stopTuningStream();
+    abbot::log::disableChannel(abbot::log::CHANNEL_TUNING);
     abbot::log::popChannelMask();
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: stopped (stream)");
     if (g_menuActive && g_currentMenu) {
@@ -478,11 +480,12 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
         }
       }
       abbot::log::pushChannelMask(static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) | static_cast<uint32_t>(abbot::log::CHANNEL_TUNING));
-      abbot::startTuningStream();
+      abbot::log::enableChannel(abbot::log::CHANNEL_TUNING);
+      LOG_PRINTLN(abbot::log::CHANNEL_TUNING, "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd");
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started");
       return;
     } else if (arg && strcmp(arg, "STOP") == 0) {
-      abbot::stopTuningStream();
+      abbot::log::disableChannel(abbot::log::CHANNEL_TUNING);
       abbot::log::popChannelMask();
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: stopped");
       // If interactive menu is active, re-show the current menu
@@ -559,10 +562,10 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       return;
     }
     if (strcmp(arg, "START") == 0) {
-      abbot::startBalancer();
+      abbot::balancer::controller::start(abbot::getFusedPitch());
       return;
     } else if (strcmp(arg, "STOP") == 0) {
-      abbot::stopBalancer();
+      abbot::balancer::controller::stop();
       return;
     } else if (strcmp(arg, "RESET") == 0) {
       abbot::balancer::controller::resetGainsToDefaults();
@@ -575,7 +578,7 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       if (!kp_s || !ki_s || !kd_s) {
         // No parameters provided, display current gains
         float kp,ki,kd; 
-        abbot::getBalancerGains(kp,ki,kd);
+        abbot::balancer::controller::getGains(kp,ki,kd);
         char buf[128]; 
         snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f", (double)kp, (double)ki, (double)kd);
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
@@ -585,10 +588,10 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       float kp = atof(kp_s);
       float ki = atof(ki_s);
       float kd = atof(kd_s);
-      abbot::setBalancerGains(kp, ki, kd);
+      abbot::balancer::controller::setGains(kp, ki, kd);
       return;
     } else if (strcmp(arg, "GET_GAINS") == 0) {
-      float kp,ki,kd; abbot::getBalancerGains(kp,ki,kd);
+      float kp,ki,kd; abbot::balancer::controller::getGains(kp,ki,kd);
       char buf[128]; snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f", (double)kp, (double)ki, (double)kd);
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
       return;

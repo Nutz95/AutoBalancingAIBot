@@ -122,7 +122,6 @@ static void imuConsumerTask(void *pvParameters) {
       // Emit tuning stream or capture outputs
       abbot::imu_consumer::emitTuningOrStream(g_consumer, sample, fused_pitch_local, fused_pitch_rate_local, accel_robot, gyro_robot, left_cmd, right_cmd);
       
-      
       #if defined(ENABLE_IMU_DEBUG_LOGS)
       // Emit diagnostics if BALANCER channel enabled
       abbot::imu_consumer::emitDiagnosticsIfEnabled(sample.ts_ms, fused_pitch_local, fused_pitch_rate_local, left_cmd, right_cmd);
@@ -179,7 +178,6 @@ bool startIMUTasks(BMI088Driver *driver) {
 
   // Initialize balancer controller (owns PID, deadband, persisted gains)
   abbot::balancer::controller::init();
-  // g_balancer_active is managed by the controller
 
   // Initialize logging manager and ensure TUNING channel is disabled by default
   abbot::log::init();
@@ -208,38 +206,6 @@ bool startIMUTasks(BMI088Driver *driver) {
   BaseType_t r3 = xTaskCreate(abbot::serialcmds::serialTaskEntry, "IMUSerial", 4096, driver, configMAX_PRIORITIES - 4, nullptr);
 
   return (r1 == pdPASS) && (r2 == pdPASS) && (r3 == pdPASS);
-}
-
-void startBalancer() {
-  abbot::balancer::controller::start(abbot::getFusedPitch());
-}
-
-void stopBalancer() {
-  abbot::balancer::controller::stop();
-}
-
-bool isBalancerActive() {
-  return abbot::balancer::controller::isActive();
-}
-
-void setBalancerGains(float kp, float ki, float kd) {
-  abbot::balancer::controller::setGains(kp, ki, kd);
-}
-
-void getBalancerGains(float &kp, float &ki, float &kd) {
-  abbot::balancer::controller::getGains(kp, ki, kd);
-}
-
-float getBalancerDeadband() {
-  return abbot::balancer::controller::getDeadband();
-}
-
-void setBalancerDeadband(float db) {
-  abbot::balancer::controller::setDeadband(db);
-}
-
-void calibrateBalancerDeadband() {
-  abbot::balancer::controller::calibrateDeadband();
 }
 
 void attachCalibrationQueue(QueueHandle_t q) {
@@ -272,21 +238,6 @@ float getFusedPitchRate() {
     }
   }
   return out;
-}
-
-void startTuningStream() {
-  // enable logging channel and print CSV header
-  abbot::log::enableChannel(abbot::log::CHANNEL_TUNING);
-  // Print CSV header for consumers (include raw accel/gyro and temp)
-  LOG_PRINTLN(abbot::log::CHANNEL_TUNING, "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd");
-}
-
-void stopTuningStream() {
-  abbot::log::disableChannel(abbot::log::CHANNEL_TUNING);
-}
-
-bool isTuningStreamActive() {
-  return abbot::log::isChannelEnabled(abbot::log::CHANNEL_TUNING);
 }
 
 void requestTuningWarmupSeconds(float seconds) {
