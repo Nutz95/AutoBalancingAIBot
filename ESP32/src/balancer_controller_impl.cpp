@@ -11,6 +11,8 @@
 #include "autotune_controller.h"
 #include <Preferences.h>
 
+#include "filter_manager.h"
+
 // Configs
 #include "../config/balancer_config.h"
 #include "../config/motor_config.h"
@@ -36,10 +38,36 @@ void init()
     g_last_cmd = 0.0f;
     if (g_prefs.begin("abbot", false)) {
         g_prefs_started = true;
-        float bp = g_prefs.getFloat("bp", BALANCER_DEFAULT_KP);
-        float bi = g_prefs.getFloat("bi", BALANCER_DEFAULT_KI);
-        float bd = g_prefs.getFloat("bd", BALANCER_DEFAULT_KD);
+        char key[32];
+        const char* fname = abbot::filter::getCurrentFilterName();
+        // NVS keys are limited in length (typically 15 bytes). Build a safe
+        // key by truncating the filter name if necessary so that suffixes like
+        // "_bp" fit within limits.
+        auto makePrefKey = [](char *out, size_t outsz, const char *fname, const char *suffix) {
+            const size_t max_nvs_key = 15; // NVS key length limit
+            size_t suf = strlen(suffix);
+            size_t max_name = (suf >= max_nvs_key) ? 0 : (max_nvs_key - suf);
+            // copy up to max_name characters from fname
+            size_t copylen = strlen(fname);
+            if (copylen > max_name) copylen = max_name;
+            if (copylen > 0) {
+                memcpy(out, fname, copylen);
+                out[copylen] = '\0';
+            } else {
+                out[0] = '\0';
+            }
+            // append suffix
+            strncat(out, suffix, outsz - strlen(out) - 1);
+        };
+
+        makePrefKey(key, sizeof(key), fname, "_bp");
+        float bp = g_prefs.getFloat(key, BALANCER_DEFAULT_KP);
+        makePrefKey(key, sizeof(key), fname, "_bi");
+        float bi = g_prefs.getFloat(key, BALANCER_DEFAULT_KI);
+        makePrefKey(key, sizeof(key), fname, "_bd");
+        float bd = g_prefs.getFloat(key, BALANCER_DEFAULT_KD);
         g_pid.setGains(bp, bi, bd);
+        // deadband remains global
         g_deadband = g_prefs.getFloat("db", g_deadband);
         char buf[128];
         snprintf(buf, sizeof(buf), "BALANCER: controller initialized (Kp=%.4f Ki=%.4f Kd=%.4f deadband=%.4f)", (double)bp, (double)bi, (double)bd, (double)g_deadband);
@@ -94,9 +122,25 @@ void setGains(float kp, float ki, float kd)
 {
     g_pid.setGains(kp, ki, kd);
     if (g_prefs_started) {
-        g_prefs.putFloat("bp", kp);
-        g_prefs.putFloat("bi", ki);
-        g_prefs.putFloat("bd", kd);
+        char key[32];
+        const char* fname = abbot::filter::getCurrentFilterName();
+        auto makePrefKey = [](char *out, size_t outsz, const char *fname, const char *suffix) {
+            const size_t max_nvs_key = 15; // NVS key length limit
+            size_t suf = strlen(suffix);
+            size_t max_name = (suf >= max_nvs_key) ? 0 : (max_nvs_key - suf);
+            size_t copylen = strlen(fname);
+            if (copylen > max_name) copylen = max_name;
+            if (copylen > 0) {
+                memcpy(out, fname, copylen);
+                out[copylen] = '\0';
+            } else {
+                out[0] = '\0';
+            }
+            strncat(out, suffix, outsz - strlen(out) - 1);
+        };
+        makePrefKey(key, sizeof(key), fname, "_bp"); g_prefs.putFloat(key, kp);
+        makePrefKey(key, sizeof(key), fname, "_bi"); g_prefs.putFloat(key, ki);
+        makePrefKey(key, sizeof(key), fname, "_bd"); g_prefs.putFloat(key, kd);
     }
     char buf[128];
     snprintf(buf, sizeof(buf), "BALANCER: gains set Kp=%.4f Ki=%.4f Kd=%.4f (persisted=%s)", (double)kp, (double)ki, (double)kd, g_prefs_started ? "yes" : "no");
@@ -107,9 +151,25 @@ void getGains(float &kp, float &ki, float &kd)
 {
     // Read persisted values if available, otherwise defaults
     if (g_prefs_started) {
-        kp = g_prefs.getFloat("bp", BALANCER_DEFAULT_KP);
-        ki = g_prefs.getFloat("bi", BALANCER_DEFAULT_KI);
-        kd = g_prefs.getFloat("bd", BALANCER_DEFAULT_KD);
+        char key[32];
+        const char* fname = abbot::filter::getCurrentFilterName();
+        auto makePrefKey = [](char *out, size_t outsz, const char *fname, const char *suffix) {
+            const size_t max_nvs_key = 15; // NVS key length limit
+            size_t suf = strlen(suffix);
+            size_t max_name = (suf >= max_nvs_key) ? 0 : (max_nvs_key - suf);
+            size_t copylen = strlen(fname);
+            if (copylen > max_name) copylen = max_name;
+            if (copylen > 0) {
+                memcpy(out, fname, copylen);
+                out[copylen] = '\0';
+            } else {
+                out[0] = '\0';
+            }
+            strncat(out, suffix, outsz - strlen(out) - 1);
+        };
+        makePrefKey(key, sizeof(key), fname, "_bp"); kp = g_prefs.getFloat(key, BALANCER_DEFAULT_KP);
+        makePrefKey(key, sizeof(key), fname, "_bi"); ki = g_prefs.getFloat(key, BALANCER_DEFAULT_KI);
+        makePrefKey(key, sizeof(key), fname, "_bd"); kd = g_prefs.getFloat(key, BALANCER_DEFAULT_KD);
     } else {
         kp = BALANCER_DEFAULT_KP; ki = BALANCER_DEFAULT_KI; kd = BALANCER_DEFAULT_KD;
     }
@@ -119,9 +179,26 @@ void resetGainsToDefaults()
 {
     g_pid.setGains(BALANCER_DEFAULT_KP, BALANCER_DEFAULT_KI, BALANCER_DEFAULT_KD);
     if (g_prefs_started) {
-        g_prefs.putFloat("bp", BALANCER_DEFAULT_KP);
-        g_prefs.putFloat("bi", BALANCER_DEFAULT_KI);
-        g_prefs.putFloat("bd", BALANCER_DEFAULT_KD);
+        char key[32];
+        const char* fname = abbot::filter::getCurrentFilterName();
+        auto makePrefKey = [](char *out, size_t outsz, const char *fname, const char *suffix) {
+            const size_t max_nvs_key = 15; // NVS key length limit
+            size_t suf = strlen(suffix);
+            size_t max_name = (suf >= max_nvs_key) ? 0 : (max_nvs_key - suf);
+            size_t copylen = strlen(fname);
+            if (copylen > max_name) copylen = max_name;
+            if (copylen > 0) {
+                memcpy(out, fname, copylen);
+                out[copylen] = '\0';
+            } else {
+                out[0] = '\0';
+            }
+            strncat(out, suffix, outsz - strlen(out) - 1);
+        };
+        makePrefKey(key, sizeof(key), fname, "_bp"); g_prefs.putFloat(key, BALANCER_DEFAULT_KP);
+        makePrefKey(key, sizeof(key), fname, "_bi"); g_prefs.putFloat(key, BALANCER_DEFAULT_KI);
+        makePrefKey(key, sizeof(key), fname, "_bd"); g_prefs.putFloat(key, BALANCER_DEFAULT_KD);
+        // preserve legacy global deadband key
         g_prefs.putFloat("db", BALANCER_MOTOR_MIN_OUTPUT);
     }
     g_deadband = BALANCER_MOTOR_MIN_OUTPUT;

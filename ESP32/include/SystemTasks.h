@@ -37,6 +37,19 @@ float getFusedPitchRate();
 // Callers (e.g. tuning_capture) may call this when a capture starts.
 void requestTuningWarmupSeconds(float seconds);
 
+// Print Madgwick filter and consumer diagnostics to the default log channel.
+// Useful to inspect filter state just before starting the balancer.
+void printMadgwickDiagnostics();
+
+// Fusion readiness helpers
+// Returns true when Madgwick has been seeded and gyro bias initialized
+bool isFusionReady();
+
+// Remaining warmup samples (0 when no warmup in progress)
+unsigned long getFusionWarmupRemaining();
+
+// Runtime filter selection helpers are provided by `filter_manager.h`.
+
 // Balancer control (PID-based). Control APIs are provided by
 // `abbot::balancer::controller`; callers should invoke controller methods
 // directly (e.g. `abbot::balancer::controller::start(...)`).

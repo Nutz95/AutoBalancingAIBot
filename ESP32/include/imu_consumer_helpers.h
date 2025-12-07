@@ -1,5 +1,6 @@
 #pragma once
 #include "imu_fusion.h"
+#include "imu_filter.h"
 #include "BMI088Driver.h"
 #include "imu_calibration.h"
 #include <Preferences.h>
@@ -46,7 +47,7 @@ float computeDt(ConsumerState &state, const IMUSample &sample, float sample_rate
 void accumulateWarmup(ConsumerState &state, const IMUSample &sample, float gx, float gy, float gz);
 
 // If warmup finished, seed Madgwick from average accel and mark bias initialized
-void finalizeWarmupIfDone(ConsumerState &state, fusion::Madgwick &madgwick, const fusion::FusionConfig &cfg);
+void finalizeWarmupIfDone(ConsumerState &state, abbot::IMUFilter &filter, const fusion::FusionConfig &cfg);
 
 // Update gyro bias EMA when stationary and persist into NVS when conditions met
 void updateBiasEmaAndPersistIfNeeded(ConsumerState &state, const IMUSample &sample, const float gyro_robot[3]);

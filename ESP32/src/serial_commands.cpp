@@ -12,6 +12,7 @@
 #include "SystemTasks.h"
 #include "serial_menu.h"
 #include "../include/balancer_controller.h"
+#include "filter_manager.h"
 
 namespace abbot {
 namespace serialcmds {
@@ -30,6 +31,7 @@ static SerialMenu *g_calibMenu = nullptr;
 static SerialMenu *g_motorMenu = nullptr;
 static SerialMenu *g_tuningMenu = nullptr;
 static SerialMenu *g_logMenu = nullptr;
+static SerialMenu *g_filterMenu = nullptr;
 
 // Forward-declare helper builders and ensureMenus
 static SerialMenu* buildCalibrationMenu(abbot::BMI088Driver *driver);
@@ -37,8 +39,11 @@ static SerialMenu* buildMotorMenu();
 static SerialMenu* buildTuningMenu();
 static SerialMenu* buildLogMenu();
 static SerialMenu* buildBalancerMenu();
+static SerialMenu* buildFilterMenu();
 static void ensureMenus(abbot::BMI088Driver *driver);
 static void onCaptureCompleteRefreshMenu();
+
+static bool handleFilter(const String& line, const String& up);
 
 // Forward-declare extracted menu action helpers
 static void calibStartGyro(abbot::BMI088Driver *driver, const String &p);
@@ -52,9 +57,11 @@ static void balancerSetGainsHandler(const String &p);
 static void balancerTuningStartHandler(const String &p);
 static void balancerTuningStopHandler(const String &p);
 static void balancerDeadbandSetHandler(const String &p);
+static void balancerStartHandler(const String &p);
 static void autotuneRelayHandler(const String &p);
 static void autotuneDeadbandHandler(const String &p);
 static void autotuneMaxAngleHandler(const String &p);
+static bool handleFusion(const String& line, const String& up);
 
 // Submenu builder helpers to reduce size of ensureMenus
 static SerialMenu* buildCalibrationMenu(abbot::BMI088Driver *driver) {
@@ -128,9 +135,69 @@ static SerialMenu* buildLogMenu() {
   return m;
 }
 
+static SerialMenu* buildFilterMenu() {
+  SerialMenu *m = new SerialMenu("Filter Selection");
+  // Use onEnter to rebuild dynamic entries each time the menu is shown so
+  // the "(current)" marker always reflects the latest selection.
+  m->setOnEnter([m](){
+    // clear and rebuild entries
+    m->clearEntries();
+    // show current
+    m->addEntry(1, "FILTER STATUS", [](const String&){ char buf[128]; snprintf(buf, sizeof(buf), "Current filter: %s", abbot::filter::getCurrentFilterName()); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf); });
+    // expose ALPHA tuning via menu (shows current value and usage)
+    m->addEntry(2, "SET ALPHA (usage: FILTER SET ALPHA <v>)", [](const String&){
+      auto a = abbot::filter::getActiveFilter();
+      if (a) {
+        float val = 0.0f;
+        if (a->getParam("ALPHA", val)) {
+          char out[128]; snprintf(out, sizeof(out), "FILTER: ALPHA=%.4f (use: FILTER SET ALPHA <value>)", (double)val);
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+        } else {
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: current filter does not support ALPHA parameter");
+        }
+      } else {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: no active filter");
+      }
+      if (g_filterMenu) { g_menuActive = true; g_currentMenu = g_filterMenu; g_filterMenu->enter(); }
+    });
+    // dynamic entries for available filters
+    int count = abbot::filter::getAvailableFilterCount();
+    int id = 3;
+    const char* cur = abbot::filter::getCurrentFilterName();
+    for (int i = 0; i < count; ++i) {
+      const char* name = abbot::filter::getAvailableFilterName(i);
+      char lbl[80];
+      if (cur && strcmp(name, cur) == 0) {
+        snprintf(lbl, sizeof(lbl), "SELECT %s (current)", name);
+        // If user selects the already-active filter, just inform them rather than re-selecting
+        m->addEntry(id++, lbl, [name](const String&){ char b[128]; snprintf(b, sizeof(b), "FILTER: %s already active", name); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, b); if (g_filterMenu) { g_menuActive = true; g_currentMenu = g_filterMenu; g_filterMenu->enter(); } });
+      } else {
+        snprintf(lbl, sizeof(lbl), "SELECT %s", name);
+        m->addEntry(id++, lbl, [name](const String&){
+          bool ok = abbot::filter::setCurrentFilterByName(name);
+          if (ok) {
+            auto a = abbot::filter::getActiveFilter();
+            if (a) {
+              unsigned long ms = a->getWarmupDurationMs();
+              if (ms > 0) {
+                float s = ((float)ms) / 1000.0f;
+                requestTuningWarmupSeconds(s);
+                char tbuf[128]; snprintf(tbuf, sizeof(tbuf), "FILTER: requested warmup %.3f s for %s", (double)s, name);
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, tbuf);
+              }
+            }
+          }
+          if (g_filterMenu) { g_menuActive = true; g_currentMenu = g_filterMenu; g_filterMenu->enter(); }
+        });
+      }
+    }
+  });
+  return m;
+}
+
 static SerialMenu* buildBalancerMenu() {
   SerialMenu *bal = new SerialMenu("Balancer (PID)");
-  bal->addEntry(1, "BALANCE START", [](const String&){ abbot::balancer::controller::start(abbot::getFusedPitch()); });
+  bal->addEntry(1, "BALANCE START", [](const String& p){ balancerStartHandler(p); });
   bal->addEntry(2, "BALANCE STOP", [](const String&){ abbot::balancer::controller::stop(); });
   bal->addEntry(3, "BALANCE GET_GAINS", [](const String&){
     float kp,ki,kd; abbot::balancer::controller::getGains(kp,ki,kd);
@@ -180,6 +247,9 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
   root->addSubmenu(3, "Madgwick tuning", g_tuningMenu);
   root->addSubmenu(4, "Log channels", g_logMenu);
   root->addSubmenu(5, "Balancer (PID)", bal);
+  // Filter selection
+  g_filterMenu = buildFilterMenu();
+  root->addSubmenu(6, "Filter Selection", g_filterMenu);
 
   // Commit to globals after fully-built to avoid races
   portENTER_CRITICAL(&g_menu_mux);
@@ -323,6 +393,25 @@ static void balancerSetGainsHandler(const String &p) {
   (void)matched; abbot::balancer::controller::setGains(kp, ki, kd);
 }
 
+static void balancerStartHandler(const String &p) {
+  // p may contain optional FORCE token (case-insensitive)
+  String s = p; s.trim(); s.toUpperCase(); bool force = false;
+  if (s.length() > 0) {
+    if (s.indexOf("FORCE") != -1) force = true;
+  }
+  // Print diagnostics for operator visibility
+  abbot::printMadgwickDiagnostics();
+  if (!force && !abbot::isFusionReady()) {
+    unsigned long rem = abbot::getFusionWarmupRemaining();
+    char buf[256];
+    snprintf(buf, sizeof(buf), "BALANCE: fusion not ready (warmup remaining=%lu). Use 'BALANCE START FORCE' to override.", rem);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+    return;
+  }
+  // Start balancer using current fused pitch
+  abbot::balancer::controller::start(abbot::getFusedPitch());
+}
+
 static void balancerTuningStartHandler(const String &p) {
   String s = p; s.trim(); int samples = 2000; if (s.length() > 0) samples = s.toInt(); if (samples < 100) samples = 100;
   startTuningCapture((uint32_t)samples, true);
@@ -440,20 +529,36 @@ static bool handleLog(const String& line, const String& up) {
 static bool handleBalance(const String& line, const String& up) {
   if (!up.startsWith("BALANCE")) return false;
   char buf4[128]; char *tok[8]; int nt = tokenizeUpper(up, buf4, sizeof(buf4), tok, 8);
-  if (nt < 2) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> <kd>] | BALANCE RESET | BALANCE GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE"); return true; }
+  if (nt < 2) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> <kd>] (persisted for current FILTER) | BALANCE RESET | BALANCE GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE"); return true; }
   char *arg = tok[1];
-  if (strcmp(arg, "START") == 0) { abbot::balancer::controller::start(abbot::getFusedPitch()); return true; }
+  if (strcmp(arg, "START") == 0) { abbot::printMadgwickDiagnostics(); abbot::balancer::controller::start(abbot::getFusedPitch()); return true; }
+  if (strcmp(arg, "START") == 0) {
+    bool force = (nt >= 3 && strcmp(tok[2], "FORCE") == 0);
+    abbot::printMadgwickDiagnostics();
+    if (!force && !abbot::isFusionReady()) {
+      unsigned long rem = abbot::getFusionWarmupRemaining();
+      char buf[256];
+      snprintf(buf, sizeof(buf), "BALANCE: fusion not ready (warmup remaining=%lu). Use 'BALANCE START FORCE' to override.", rem);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+      return true;
+    }
+    abbot::balancer::controller::start(abbot::getFusedPitch());
+    return true;
+  }
   else if (strcmp(arg, "STOP") == 0) { abbot::balancer::controller::stop(); return true; }
   else if (strcmp(arg, "RESET") == 0) { abbot::balancer::controller::resetGainsToDefaults(); return true; }
   else if (strcmp(arg, "GAINS") == 0) {
     if (nt < 5) {
       float kp,ki,kd; abbot::balancer::controller::getGains(kp,ki,kd);
-      char buf[128]; snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f", (double)kp, (double)ki, (double)kd);
+      char buf[128]; snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f (persisted for FILTER=%s)", (double)kp, (double)ki, (double)kd, abbot::filter::getCurrentFilterName());
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
       return true;
     }
     float kp = atof(tok[2]); float ki = atof(tok[3]); float kd = atof(tok[4]);
     abbot::balancer::controller::setGains(kp, ki, kd);
+    // Inform user where the gains are persisted
+    char msg[128]; snprintf(msg, sizeof(msg), "BALANCE: gains saved for FILTER=%s", abbot::filter::getCurrentFilterName());
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
     return true;
   } else if (strcmp(arg, "GET_GAINS") == 0) { float kp,ki,kd; abbot::balancer::controller::getGains(kp,ki,kd); char buf[128]; snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f", (double)kp, (double)ki, (double)kd); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf); return true; }
   else if (strcmp(arg, "DEADBAND") == 0) {
@@ -481,6 +586,88 @@ static bool handleAutotune(const String& line, const String& up) {
   else if (strcmp(arg, "DEADBAND") == 0) { if (nt < 3) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: AUTOTUNE DEADBAND <degrees>"); return true; } float db = atof(tok[2]); abbot::balancer::controller::setAutotuneDeadband(db); return true; }
   else if (strcmp(arg, "MAXANGLE") == 0) { if (nt < 3) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: AUTOTUNE MAXANGLE <degrees>"); return true; } float maxa = atof(tok[2]); abbot::balancer::controller::setAutotuneMaxAngle(maxa); return true; }
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE usage: AUTOTUNE START | AUTOTUNE STOP | AUTOTUNE STATUS | AUTOTUNE APPLY | AUTOTUNE RELAY <amp> | AUTOTUNE DEADBAND <deg> | AUTOTUNE MAXANGLE <deg>");
+  return true;
+}
+
+static bool handleFusion(const String& line, const String& up) {
+  if (!up.startsWith("FUSION")) return false;
+  char buf[128]; char *tok[4]; int nt = tokenizeUpper(up, buf, sizeof(buf), tok, 4);
+  char *cmd = (nt>=2)?tok[1]:nullptr;
+  if (!cmd) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FUSION usage: FUSION STATUS | FUSION WARMUP <secs>"); return true; }
+  if (strcmp(cmd, "STATUS") == 0) {
+    abbot::printMadgwickDiagnostics();
+    bool ready = abbot::isFusionReady();
+    unsigned long rem = abbot::getFusionWarmupRemaining();
+    char out[128]; snprintf(out, sizeof(out), "FUSION: ready=%d warmup_remaining=%lu", ready ? 1 : 0, rem);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+    return true;
+  } else if (strcmp(cmd, "WARMUP") == 0) {
+    if (nt < 3) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: FUSION WARMUP <seconds>"); return true; }
+    float s = atof(tok[2]);
+    if (s <= 0.0f) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Invalid warmup seconds"); return true; }
+    requestTuningWarmupSeconds(s);
+    char out[128]; snprintf(out, sizeof(out), "FUSION: warmup requested ~%.1f s", (double)s);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+    return true;
+  }
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FUSION usage: FUSION STATUS | FUSION WARMUP <secs>");
+  return true;
+}
+
+static bool handleFilter(const String& line, const String& up) {
+  if (!up.startsWith("FILTER")) return false;
+  char buf[128]; char *tok[8]; int nt = tokenizeUpper(up, buf, sizeof(buf), tok, 8);
+  char *cmd = (nt>=2)?tok[1]:nullptr;
+  if (!cmd) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER usage: FILTER STATUS | FILTER LIST | FILTER SELECT <name>"); return true; }
+  if (strcmp(cmd, "STATUS") == 0) {
+    char out[128]; snprintf(out, sizeof(out), "FILTER: current=%s", abbot::filter::getCurrentFilterName()); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out); return true;
+  } else if (strcmp(cmd, "LIST") == 0) {
+    int count = abbot::filter::getAvailableFilterCount();
+    for (int i = 0; i < count; ++i) {
+      char out[64]; snprintf(out, sizeof(out), "FILTER: %s", abbot::filter::getAvailableFilterName(i)); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+    }
+    return true;
+  } else if (strcmp(cmd, "SELECT") == 0) {
+    if (nt < 3) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: FILTER SELECT <name>"); return true; }
+    const char* name = tok[2];
+    bool ok = abbot::filter::setCurrentFilterByName(name);
+    if (!ok) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: unknown filter"); }
+    else {
+      auto a = abbot::filter::getActiveFilter();
+      if (a) {
+        unsigned long ms = a->getWarmupDurationMs();
+        if (ms > 0) {
+          float s = ((float)ms) / 1000.0f;
+          requestTuningWarmupSeconds(s);
+          char tbuf[128]; snprintf(tbuf, sizeof(tbuf), "FILTER: requested warmup %.3f s for %s", (double)s, name);
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, tbuf);
+        }
+      }
+    }
+    return true;
+  }
+  else if (strcmp(cmd, "SET") == 0) {
+    // FILTER SET ALPHA <value>
+    if (nt < 4) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: FILTER SET ALPHA <value>"); return true; }
+    char *param = tok[2];
+    if (strcmp(param, "ALPHA") == 0) {
+      char *valtok = tok[3];
+      float v = atof(valtok);
+      auto a = abbot::filter::getActiveFilter();
+      if (!a) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: no active filter"); return true; }
+      bool ok = a->setParam("ALPHA", v);
+      if (ok) {
+        char out[128]; snprintf(out, sizeof(out), "FILTER: ALPHA set to %.6f", (double)v);
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+      } else {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: active filter does not support ALPHA or value out of range");
+      }
+      return true;
+    }
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER SET usage: FILTER SET ALPHA <value>");
+    return true;
+  }
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER usage: FILTER STATUS | FILTER LIST | FILTER SELECT <name>");
   return true;
 }
 
@@ -586,6 +773,8 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
   }
   if (handleTuning(line, up)) return;
   if (handleLog(line, up)) return;
+  if (handleFusion(line, up)) return;
+  if (handleFilter(line, up)) return;
   if (handleBalance(line, up)) return;
   if (handleAutotune(line, up)) return;
 

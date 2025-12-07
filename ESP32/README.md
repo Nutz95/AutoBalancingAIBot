@@ -103,6 +103,15 @@ Basic serial commands (send as plain text lines):
 - `MOTOR SET <LEFT|RIGHT|ID> RAW <value>` - send raw signed servo units directly (use short pulses)
 - `MOTOR PARAMS <LEFT|RIGHT|ID>` - dump servo EEPROM/SRAM parameters and present status
 
+Filter selection & per-filter PID gains
+-------------------------------------
+
+- `FILTER LIST` — list available IMU/fusion filters (e.g. `MADGWICK`, `COMPLEMENTARY1D`, `KALMAN1D`).
+- `FILTER STATUS` — show the currently active filter.
+- `FILTER SELECT <name>` — switch the runtime filter to `<name>` and persist that choice across reboots.
+
+The balancer PID gains are persisted per active filter. Use `BALANCE GAINS <kp> <ki> <kd>` to set gains — the values will be saved in NVS under keys namespaced by the active filter, for example `MADGWICK_bp`, `MADGWICK_bi`, `MADGWICK_bd` (when `MADGWICK` is active). When you switch filters the controller will load the gains associated with that filter.
+
 Safety notes:
 - Keep wheels mechanically restrained during bench testing.
 - Start with low speeds and short pulses for `RAW` commands.

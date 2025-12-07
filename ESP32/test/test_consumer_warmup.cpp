@@ -29,11 +29,13 @@ static void test_finalize_warmup_bias_and_seed() {
     st.warm_gz_sum = bias_gz * N;
 
     fusion::FusionConfig cfg; // identity mapping
-    fusion::Madgwick mad;
     cfg.sample_rate = 200.0f; cfg.beta = 0.1f;
-    mad.begin(cfg);
-
-    abbot::imu_consumer::finalizeWarmupIfDone(st, mad, cfg);
+    // create Madgwick-based IMUFilter for the test
+    extern abbot::IMUFilter* createMadgwickFilter();
+    abbot::IMUFilter* f = createMadgwickFilter();
+    f->begin(cfg);
+    abbot::imu_consumer::finalizeWarmupIfDone(st, *f, cfg);
+    delete f;
 
     assert(st.gyro_bias_initialized);
     assert(fabs(st.gyro_bias[0] - bias_gx) < 1e-6f);

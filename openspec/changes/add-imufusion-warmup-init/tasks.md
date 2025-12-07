@@ -6,8 +6,9 @@
    - [ ] Update `ESP32/src/imu_fusion.cpp` to collect N samples during warmup, compute initial accel-based attitude and gyro bias, and set ready flag.
 3. Integrate: IMU task and balancer
    - [ ] Call `fusion.beginWarmup(samples)` after IMU initialization completes.
-   - [ ] Ensure IMU task continues to call `fusion.update(...)` for each sample and that warmup progresses.
+   - [x] Ensure IMU task continues to call `fusion.update(...)` for each sample and that warmup progresses.
    - [ ] Update balancer startup (`BALANCE START` path) to require `fusion.isReady()` before enabling motors; add documented user override CLI with safety confirmation.
+   - [x] Status LED: `statusLedInit` and `statusLedUpdateFromConsumer` are present and wired to indicate warmup/ready state.
 4. Update commands and docs
    - [ ] Replace any existing re-init commands so they use the running fusion instance or call `fusion.beginWarmup(...)` rather than creating a separate local instance.
    - [ ] Update `ESP32/README_TUNING.md` and `ESP32/tools/README_TUNING.md` to document warmup behavior and expected sample counts/time.

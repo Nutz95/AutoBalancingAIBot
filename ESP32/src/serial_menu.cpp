@@ -87,17 +87,27 @@ SerialMenu* SerialMenu::handleInput(const String& line) {
     }
   }
 
-  // find entry
+  // find entry by id. Copy the Entry object so we can safely invoke its
+  // action or open its submenu after finishing iteration. This prevents
+  // callbacks from mutating `entries` while we're iterating, which caused
+  // crashes when an onEnter handler cleared/rebuilt the menu.
+  bool found = false;
+  Entry selected;
   for (const auto &e : entries) {
     if (e.id == sel) {
-      if (e.submenu) {
-        e.submenu->enter();
-        return e.submenu;
-      }
-      if (e.action) {
-        e.action(param);
-        return this;
-      }
+      selected = e; // copy
+      found = true;
+      break;
+    }
+  }
+  if (found) {
+    if (selected.submenu) {
+      selected.submenu->enter();
+      return selected.submenu;
+    }
+    if (selected.action) {
+      selected.action(param);
+      return this;
     }
   }
 

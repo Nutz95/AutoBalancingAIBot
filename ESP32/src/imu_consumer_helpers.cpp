@@ -32,7 +32,7 @@ void accumulateWarmup(ConsumerState &state, const IMUSample &sample, float gx, f
   }
 }
 
-void finalizeWarmupIfDone(ConsumerState &state, fusion::Madgwick &madgwick, const fusion::FusionConfig &cfg) {
+void finalizeWarmupIfDone(ConsumerState &state, abbot::IMUFilter &filter, const fusion::FusionConfig &cfg) {
   if (state.warmup_samples_remaining == 0 && state.warmup_samples_total > 0) {
     float ax_avg = state.warm_ax_sum / (float)state.warmup_samples_total;
     float ay_avg = state.warm_ay_sum / (float)state.warmup_samples_total;
@@ -49,7 +49,8 @@ void finalizeWarmupIfDone(ConsumerState &state, fusion::Madgwick &madgwick, cons
       if (aim < 0 || aim > 2) aim = i;
       avg_accel_robot[i] = (float)asign * avg_sensor_a[aim];
     }
-    madgwick.setFromAccel(avg_accel_robot[0], avg_accel_robot[1], avg_accel_robot[2]);
+    // Let the filter seed itself from accel averages if it implements it
+    filter.setFromAccel(avg_accel_robot[0], avg_accel_robot[1], avg_accel_robot[2]);
 
     // reset accumulators
     state.warm_ax_sum = state.warm_ay_sum = state.warm_az_sum = 0.0f;
