@@ -31,6 +31,14 @@ static bool g_prefs_started = false;
 static AutotuneController g_autotune;
 static bool g_autotune_active = false;
 static AutotuneController::Config g_autocfg; // configurable autotune params
+// Drive setpoints (high-level): normalized forward and turn commands
+static float g_drive_target_v = 0.0f; // desired normalized forward [-1..1]
+static float g_drive_target_w = 0.0f; // desired normalized turn [-1..1]
+static float g_drive_v_filtered = 0.0f;
+static float g_drive_last_pitch_sp = 0.0f;
+// Configuration for drive->pitch mapping (from balancer_config.h)
+static float g_drive_max_pitch_rad = degToRad(DRIVE_MAX_PITCH_DEG); // configured max pitch (deg)
+static const float g_drive_v_slew = DRIVE_V_SLEW; // units per second (configured)
 
 void init()
 {
@@ -78,6 +86,19 @@ void init()
         snprintf(buf, sizeof(buf), "BALANCER: controller initialized (defaults used) - Kp=%.4f Ki=%.4f Kd=%.4f deadband=%.4f", (double)BALANCER_DEFAULT_KP, (double)BALANCER_DEFAULT_KI, (double)BALANCER_DEFAULT_KD, (double)g_deadband);
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
     }
+}
+
+void setDriveSetpoints(float v_norm, float w_norm)
+{
+    // clamp inputs to [-1,1]
+    if (v_norm > 1.0f) v_norm = 1.0f;
+    if (v_norm < -1.0f) v_norm = -1.0f;
+    if (w_norm > 1.0f) w_norm = 1.0f;
+    if (w_norm < -1.0f) w_norm = -1.0f;
+    g_drive_target_v = v_norm;
+    g_drive_target_w = w_norm;
+    // Log the requested setpoints for debugging
+    LOG_PRINTF(abbot::log::CHANNEL_BALANCER, "SETDRIVE: v_req=%.3f w_req=%.3f\n", (double)g_drive_target_v, (double)g_drive_target_w);
 }
 
 void start(float fused_pitch_rad)
@@ -226,6 +247,54 @@ void calibrateDeadband()
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "DEADBAND calibration not yet implemented. Use 'BALANCE DEADBAND SET <v>' to store a value.");
 }
 
+// Helper: apply drive->pitch mapping with slew limiting and compute PID output
+// Returns the raw PID controller output (not yet slew/ deadband/clamped for motor)
+static float computePidWithDriveSetpoint(float fused_pitch, float fused_pitch_rate, float dt)
+{
+    // Filter normalized v toward target with simple first-order slew limiter
+    if (g_drive_v_filtered != g_drive_target_v) {
+        float max_dv = g_drive_v_slew * dt;
+        float dv = g_drive_target_v - g_drive_v_filtered;
+        if (dv > max_dv) dv = max_dv;
+        if (dv < -max_dv) dv = -max_dv;
+        g_drive_v_filtered += dv;
+    }
+    // pitch setpoint from filtered velocity command
+    float pitch_sp = g_drive_v_filtered * g_drive_max_pitch_rad;
+    // clamp pitch setpoint
+    if (pitch_sp > g_drive_max_pitch_rad) pitch_sp = g_drive_max_pitch_rad;
+    if (pitch_sp < -g_drive_max_pitch_rad) pitch_sp = -g_drive_max_pitch_rad;
+    // estimate pitch_sp rate
+    float pitch_sp_rate = 0.0f;
+    if (dt > 0.0f) {
+        pitch_sp_rate = (pitch_sp - g_drive_last_pitch_sp) / dt;
+    }
+    g_drive_last_pitch_sp = pitch_sp;
+
+    // PID input: error = fused_pitch - pitch_sp (target = pitch_sp)
+    float pid_in = fused_pitch - pitch_sp;
+    float pid_rate = fused_pitch_rate - pitch_sp_rate;
+    float pid_out = g_pid.update(pid_in, pid_rate, dt);
+
+    // Rate-limited debug logging to avoid spamming serial
+    static uint32_t last_dbg_ms = 0;
+    uint32_t now_ms = millis();
+    if (now_ms - last_dbg_ms > 1000) {
+        LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
+                   "DRIVE DBG tgtV=%.3f filtV=%.3f pitch_sp=%.3fdeg pitch_sp_rate=%.3fdeg/s pid_in=%.3fdeg pid_rate=%.3fdeg/s pid_out=%.3f\n",
+                   (double)g_drive_target_v,
+                   (double)g_drive_v_filtered,
+                   (double)radToDeg(pitch_sp),
+                   (double)radToDeg(pitch_sp_rate),
+                   (double)radToDeg(pid_in),
+                   (double)radToDeg(pid_rate),
+                   (double)pid_out);
+        last_dbg_ms = now_ms;
+    }
+
+    return pid_out;
+}
+
 // Called each IMU loop to compute and (if active) command motors. Returns
 // the computed command (normalized) regardless of whether it was sent.
 // Note: Pitch sign is now handled by axis mapping in FusionConfig (accel_sign/gyro_sign),
@@ -295,10 +364,8 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
     //       DO NOT change motor inversion in motor_config.h!
     //       Pitch sign is handled by accel_sign/gyro_sign in FusionConfig.h
     
-    // PID input: use pitch directly as error (target = 0)
-    // For inverted pendulum: error and command should have SAME sign
-    // (tilt forward = positive -> command forward = positive to catch)
-    float pid_out = g_pid.update(fused_pitch, fused_pitch_rate, dt);
+    // Compute PID output taking into account the drive-setpoint->pitch mapping
+    float pid_out = computePidWithDriveSetpoint(fused_pitch, fused_pitch_rate, dt);
     float cmd = pid_out;  // No negation - same sign as pitch for catching behavior
     // clamp
     if (cmd > 1.0f) cmd = 1.0f;

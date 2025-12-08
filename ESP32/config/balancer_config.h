@@ -49,3 +49,16 @@
 #ifndef BALANCER_AUTO_ENABLE_ANGLE_DEG
 #define BALANCER_AUTO_ENABLE_ANGLE_DEG 30.0f
 #endif
+
+// Drive interface configuration
+// How quickly the normalized forward command (v) may change (units/sec).
+// Higher = more responsive. Safe default = 2.0f (full step ~0.5s).
+#ifndef DRIVE_V_SLEW
+#define DRIVE_V_SLEW 2.8f
+#endif
+
+// Maximum pitch (degrees) the drive command will request from the balancer.
+// This limits how far the robot will lean to accelerate/decelerate. Default 6°.
+#ifndef DRIVE_MAX_PITCH_DEG
+#define DRIVE_MAX_PITCH_DEG 2.0f
+#endif

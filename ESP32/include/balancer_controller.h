@@ -30,6 +30,12 @@ namespace controller {
     // Note: Pitch sign is handled by axis mapping in FusionConfig (accel_sign/gyro_sign).
     float processCycle(float fused_pitch_rad, float fused_pitch_rate_rads, float dt_s);
     
+    // High-level drive interface: set desired forward (v) and turn (w) commands
+    // v, w are normalized in [-1, 1]. This interface is intentionally
+    // minimal: the controller will convert v -> pitch setpoint and apply
+    // slew limiting internally. w (turn) may be ignored depending on
+    // platform/configuration.
+    void setDriveSetpoints(float v_norm, float w_norm);
     // Autotuning API
     void startAutotune();
     void stopAutotune();

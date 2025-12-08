@@ -137,7 +137,8 @@ void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t le
   
   // Tank drive: forward = y, turn = x
   float forward = y;
-  float turn = x * 0.6f; // Reduce turn sensitivity
+  // Disable turning for now (user requested). Keep placeholder scale if re-enabled.
+  float turn = 0.0f; // x * 0.6f; // Reduce turn sensitivity
   
   float leftMotor = forward + turn;
   float rightMotor = forward - turn;
@@ -159,12 +160,19 @@ void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t le
   if (fabs(leftMotor - lastLeft) > 0.05f || fabs(rightMotor - lastRight) > 0.05f) {
     LOG_PRINTF(abbot::log::CHANNEL_BLE, "\n>>> Stick X:%.2f Y:%.2f -> L:%.2f R:%.2f\n", x, y, leftMotor, rightMotor);
 
-    // Direct motor driver invocation (avoid loopback via Serial)
-    if (abbot::motor::areMotorsEnabled()) {
-      abbot::motor::setMotorCommand(LEFT_MOTOR_ID, leftMotor);
-      abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, rightMotor);
+    // If balancer controller is active, route stick forward/back through
+    // the controller so it can convert v -> pitch setpoint safely.
+    if (abbot::balancer::controller::isActive()) {
+      // Send normalized forward and turn (turn currently forced zero)
+      abbot::balancer::controller::setDriveSetpoints(forward, 0.0f);
     } else {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: movement ignored (motors disabled)");
+      // Direct motor driver invocation (avoid loopback via Serial)
+      if (abbot::motor::areMotorsEnabled()) {
+        abbot::motor::setMotorCommand(LEFT_MOTOR_ID, leftMotor);
+        abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, rightMotor);
+      } else {
+        LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: movement ignored (motors disabled)");
+      }
     }
     // Keep logging for debug
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "MOTOR DBG LEFT %.3f\n", leftMotor);
