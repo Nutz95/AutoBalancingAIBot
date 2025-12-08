@@ -157,4 +157,16 @@ This project includes a small interactive numeric serial menu used by the `HELP`
 This keeps interactive flows simple while reusing the existing serial command handlers
 for the actual operations (calibration, motor control, tuning).
 
+Status LED
+----------
+The board exposes a single RGB status LED (NeoPixel/WS2812) when configured in
+`board_config.h`. The firmware uses the LED to communicate basic system state:
+
+- **Red**: IMU fusion warmup in progress (place the robot upright and wait).
+- **Green**: Fusion is ready and gyro bias is initialized — safe to use `BALANCE START`.
+- **Blinking Red**: Fatal IMU initialization error (for example, gyro CS wiring issue).
+
+If the LED is not present on your board the functions are no-ops and the
+firmware falls back to serial logging for all messages.
+
 
