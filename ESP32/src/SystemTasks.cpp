@@ -201,6 +201,15 @@ bool startIMUTasks(BMI088Driver *driver) {
     }
   }
 
+  // Try to initialize BMI088 (gyro + accel)
+  bool rc = driver->begin();
+  if (!rc) {
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088 init failed, blinking LED red.");
+    statusLedBlinkErrorLoop();
+    return false;
+  }
+
+
   // track whether we've requested a filter-specific warmup during init
   bool warmup_requested = false;
 
@@ -293,7 +302,7 @@ bool startIMUTasks(BMI088Driver *driver) {
   BaseType_t r2 = xTaskCreate(imuConsumerTask, "IMUConsumer", 4096, nullptr, configMAX_PRIORITIES - 3, nullptr);
 
   // Create serial command task for calibration UI (low priority)
-  BaseType_t r3 = xTaskCreate(abbot::serialcmds::serialTaskEntry, "IMUSerial", 4096, driver, configMAX_PRIORITIES - 4, nullptr);
+  BaseType_t r3 = xTaskCreate(abbot::serialcmds::serialTaskEntry, "IMUSerial", 12288, driver, configMAX_PRIORITIES - 4, nullptr);
 
   return (r1 == pdPASS) && (r2 == pdPASS) && (r3 == pdPASS);
 }

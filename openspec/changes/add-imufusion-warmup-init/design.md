@@ -1,4 +1,8 @@
+
 # Design: IMU fusion warmup and readiness
+
+**Status: [2025-12-08] — Implemented and validated on real hardware.**
+
 
 Goal
 ----

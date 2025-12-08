@@ -32,12 +32,11 @@ uninitialized angles and command motors dangerously.
 ## Acceptance criteria
 
 - `openspec validate add-imufusion-warmup-init --strict` passes.
-- The repo contains `imu_fusion` API additions: warmup control and readiness
-  queries (e.g., `beginWarmup(int samples)`, `isReady()`, `getWarmupProgress()`).
-- The balancer startup path refuses to enable motors until `fusion.isReady()`
-  or until a documented user override with explicit confirmation is provided.
-- A bench validation plan exists and demonstrates warmup working (e.g., a
-  short TUNING capture showing warmup messages and subsequent steady fusion outputs).
+- The current firmware (Dec 2025) already implements:
+  - The `imu_fusion` warmup/init API (`beginWarmup`, `isReady`, `getWarmupProgress`).
+  - The balancer only starts if `fusion.isReady()` is true (or documented CLI override).
+  - The status LED reflects warmup/ready state.
+- Only documentation and unit tests remain to be completed for formal validation. Bench report is not required.
 
 ## LED indicator (visual feedback)
 

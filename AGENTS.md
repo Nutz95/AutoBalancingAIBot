@@ -8,6 +8,13 @@ Always open `@/openspec/AGENTS.md` when the request:
 - Introduces new capabilities, breaking changes, architecture shifts, or big performance/security work
 - Sounds ambiguous and you need the authoritative spec before coding
 
+
+## Language Policy
+
+All code and OpenSpec files (proposals, specs, design, tasks, documentation, etc.) MUST be written in **English** only. This ensures consistency, maintainability, and ease of collaboration for all contributors.
+
+Chat and interactive discussions with the AI assistant may continue in French if desired, but all committed files and code must remain in English.
+
 Use `@/openspec/AGENTS.md` to learn:
 - How to create and apply change proposals
 - Spec format and conventions

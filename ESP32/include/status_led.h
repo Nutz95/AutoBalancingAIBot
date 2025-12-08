@@ -27,3 +27,7 @@ bool statusLedPresent();
 // the status LED module. No-op on boards without an LED.
 namespace abbot { namespace imu_consumer { struct ConsumerState; } }
 void statusLedUpdateFromConsumer(const abbot::imu_consumer::ConsumerState &state);
+
+// Blink the LED red in a loop to indicate a fatal error. This function
+// does not return (intended to be used when startup must halt).
+void statusLedBlinkErrorLoop();

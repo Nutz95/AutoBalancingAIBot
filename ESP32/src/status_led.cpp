@@ -5,6 +5,8 @@
 #include "status_led.h"
 #include "../config/board_config.h"
 #include "imu_consumer_helpers.h"
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 #if defined(STATUS_LED_PIN)
 #include <Adafruit_NeoPixel.h>
@@ -51,6 +53,18 @@ void statusLedUpdateFromConsumer(const abbot::imu_consumer::ConsumerState &state
   if (r != last_r || g != last_g || b != last_b) {
     statusLedSetColor(r, g, b);
     last_r = r; last_g = g; last_b = b;
+  }
+}
+
+// Blink red forever to indicate a fatal hardware/init error. Does not return.
+void statusLedBlinkErrorLoop() {
+  // Ensure LED is initialized
+  statusLedInit();
+  for (;;) {
+    statusLedSetColor(255, 0, 0); // red
+    vTaskDelay(pdMS_TO_TICKS(300));
+    statusLedSetColor(0, 0, 0);   // off
+    vTaskDelay(pdMS_TO_TICKS(300));
   }
 }
 
