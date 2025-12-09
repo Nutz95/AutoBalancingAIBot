@@ -9,7 +9,7 @@ estimates converge before closed-loop control begins. If the balancer starts
 before the fusion estimator is ready the controller can receive biased or
 uninitialized angles and command motors dangerously.
 
-## What
+## What Changes
 
 - Add a lightweight warmup/init protocol for `imu_fusion` so it can collect a
   configurable number of IMU samples (gyro+accel) after IMU initialization,

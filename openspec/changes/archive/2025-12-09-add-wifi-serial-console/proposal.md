@@ -17,11 +17,11 @@ It includes:
 - recommended host-client behavior and test scenarios,
 - user-facing documentation that will be added to `ESP32/README.md` describing how to set Wi‑Fi credentials from the USB serial console and how to use the included Python client.
 
-## Motivation
+## Why
 
 We already ship a lightweight TCP console that forwards logs and accepts textual commands. Users were unclear how to persist Wi‑Fi credentials, how auto-connect works, and how the host-side client should behave when the device is reflashed (connection closes). This proposal clarifies those points and documents the recommended client behavior implemented in `ESP32/tools/wifi_console_client.py`.
 
-## Firmware requirements (summary)
+## What Changes
 
 - Read `wifi_ssid` and `wifi_pass` keys from NVS on boot and attempt to connect automatically if values are present.
 - When connected, start the TCP console server (default port 2333) and accept a single client.
