@@ -10,3 +10,10 @@
 
 // Number of pixels (default 1)
  #define STATUS_LED_NUMPIXELS 1
+
+// Enable the optional Wi‑Fi console module. When enabled, the firmware will
+// attempt to read stored Wi‑Fi credentials from NVS and start a TCP console
+// server allowing remote log/command access. Set to 1 to enable, 0 to disable.
+#ifndef WIFI_CONSOLE_ENABLED
+#define WIFI_CONSOLE_ENABLED 1
+#endif

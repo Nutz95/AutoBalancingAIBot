@@ -9,6 +9,9 @@
 #include <Arduino.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <Preferences.h>
+#include "esp_wifi_console.h"
+#include <WiFi.h>
 #include "SystemTasks.h"
 #include "serial_menu.h"
 #include "../include/balancer_controller.h"
@@ -19,6 +22,10 @@ namespace serialcmds {
 
 // forward-declare startInteractiveMenu (implemented after ensureMenus)
 void startInteractiveMenu(abbot::BMI088Driver *driver);
+
+// Module-local copy of the driver pointer used by the serial task so other
+// modules (wifi console) can inject lines without needing the driver handle.
+static abbot::BMI088Driver *g_serial_task_driver = nullptr;
 
 // Globals for interactive menu state (previously in this file)
 static SerialMenu *g_rootMenu = nullptr;
@@ -32,6 +39,7 @@ static SerialMenu *g_motorMenu = nullptr;
 static SerialMenu *g_tuningMenu = nullptr;
 static SerialMenu *g_logMenu = nullptr;
 static SerialMenu *g_filterMenu = nullptr;
+static SerialMenu *g_wifiMenu = nullptr;
 
 // Forward-declare helper builders and ensureMenus
 static SerialMenu* buildCalibrationMenu(abbot::BMI088Driver *driver);
@@ -195,6 +203,33 @@ static SerialMenu* buildFilterMenu() {
   return m;
 }
 
+static SerialMenu* buildWifiMenu() {
+  SerialMenu *m = new SerialMenu("WiFi Configuration");
+  m->addEntry(1, "WIFI SHOW", [](const String&){
+    Preferences p; if (p.begin("abbot", true)) {
+      String ssid = p.getString("wifi_ssid", "");
+      bool has = ssid.length() > 0;
+      char out[128]; snprintf(out, sizeof(out), "WIFI: stored_ssid=%s", has ? ssid.c_str() : "(none)");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+      p.end();
+    }
+  });
+  m->addEntry(2, "WIFI SET SSID <ssid>", [](const String& p){
+    String s = p; s.trim(); if (s.length() == 0) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: WIFI SET SSID <ssid>"); return; }
+    Preferences pref; if (pref.begin("abbot", false)) { pref.putString("wifi_ssid", s); pref.end(); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: SSID saved"); }
+  });
+  m->addEntry(3, "WIFI SET PASS <pwd>", [](const String& p){
+    String s = p; s.trim(); if (s.length() == 0) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: WIFI SET PASS <password>"); return; }
+    Preferences pref; if (pref.begin("abbot", false)) { pref.putString("wifi_pass", s); pref.end(); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: password saved (hidden)"); }
+  });
+  m->addEntry(4, "WIFI CONNECT NOW", [](const String&){ abbot::wifi_console::connectNow(); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: connect requested"); });
+  m->addEntry(5, "WIFI DISCONNECT", [](const String&){ abbot::wifi_console::disconnectNow(); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: disconnect requested"); });
+  m->addEntry(6, "WIFI RESET", [](const String&){ Preferences pref; if (pref.begin("abbot", false)) { pref.remove("wifi_ssid"); pref.remove("wifi_pass"); pref.end(); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: cleared stored credentials"); } });
+  m->addEntry(7, "WIFI STATUS", [](const String&){ if (WiFi.status() == WL_CONNECTED) { IPAddress ip = WiFi.localIP(); char buf[128]; char ipbuf[32]; ip.toString().toCharArray(ipbuf, sizeof(ipbuf)); snprintf(buf, sizeof(buf), "WIFI: connected ssid=%s ip=%s", WiFi.SSID().c_str(), ipbuf); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf); } else { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: not connected"); } });
+  m->addEntry(8, "WIFI DIAG", [](const String&){ char d[256]; abbot::wifi_console::getDiagnostics(d, sizeof(d)); char out[300]; snprintf(out, sizeof(out), "WIFI-DIAG: %s", d); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out); });
+  return m;
+}
+
 static SerialMenu* buildBalancerMenu() {
   SerialMenu *bal = new SerialMenu("Balancer (PID)");
   bal->addEntry(1, "BALANCE START", [](const String& p){ balancerStartHandler(p); });
@@ -239,6 +274,7 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
   g_motorMenu = buildMotorMenu();
   g_tuningMenu = buildTuningMenu();
   g_logMenu = buildLogMenu();
+  g_wifiMenu = buildWifiMenu();
   SerialMenu *bal = buildBalancerMenu();
 
   // Root menu entries link to submenus
@@ -250,6 +286,7 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
   // Filter selection
   g_filterMenu = buildFilterMenu();
   root->addSubmenu(6, "Filter Selection", g_filterMenu);
+  root->addSubmenu(7, "WiFi Configuration", g_wifiMenu);
 
   // Commit to globals after fully-built to avoid races
   portENTER_CRITICAL(&g_menu_mux);
@@ -671,6 +708,131 @@ static bool handleFilter(const String& line, const String& up) {
   return true;
 }
 
+static bool handleWifi(const String& line, const String& up) {
+  if (!up.startsWith("WIFI")) return false;
+
+  // Preserve original case for SSID/PASS values
+  String orig = line;
+  orig.trim();
+
+  // Extract second token (command)
+  int p1 = orig.indexOf(' ');
+  if (p1 == -1) {
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "WIFI usage: WIFI SHOW | WIFI SET SSID <ssid> | WIFI SET PASS <pwd> | WIFI CONNECT | WIFI DISCONNECT | WIFI RESET | WIFI STATUS | WIFI DIAG");
+    return true;
+  }
+
+  int p2 = orig.indexOf(' ', p1 + 1);
+  String cmd2 = (p2 == -1) ? orig.substring(p1 + 1) : orig.substring(p1 + 1, p2);
+  cmd2.trim();
+  String cmd2up = cmd2; cmd2up.toUpperCase();
+
+  if (cmd2up == "SHOW") {
+    Preferences p;
+    if (p.begin("abbot", true)) {
+      String ssid = p.getString("wifi_ssid", "");
+      char out[128];
+      snprintf(out, sizeof(out), "WIFI: stored_ssid=%s", ssid.length() ? ssid.c_str() : "(none)");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+      p.end();
+    }
+    return true;
+  }
+
+  if (cmd2up == "SET") {
+    if (p2 == -1) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI SET usage: WIFI SET SSID <ssid> | WIFI SET PASS <pwd>");
+      return true;
+    }
+    int p3 = orig.indexOf(' ', p2 + 1);
+    String which = (p3 == -1) ? orig.substring(p2 + 1) : orig.substring(p2 + 1, p3);
+    which.trim();
+    String whichUp = which; whichUp.toUpperCase();
+    String value = (p3 == -1) ? String("") : orig.substring(p3 + 1);
+    value.trim();
+
+    if (whichUp == "SSID") {
+      if (value.length() == 0) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: WIFI SET SSID <ssid>");
+        return true;
+      }
+      Preferences pref;
+      if (pref.begin("abbot", false)) {
+        pref.putString("wifi_ssid", value);
+        pref.end();
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: SSID saved");
+      }
+      return true;
+    } else if (whichUp == "PASS" || whichUp == "PASSWORD") {
+      if (value.length() == 0) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: WIFI SET PASS <password>");
+        return true;
+      }
+      Preferences pref;
+      if (pref.begin("abbot", false)) {
+        pref.putString("wifi_pass", value);
+        pref.end();
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: password saved (hidden)");
+      }
+      return true;
+    }
+
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI SET usage: WIFI SET SSID <ssid> | WIFI SET PASS <pwd>");
+    return true;
+  }
+
+  if (cmd2up == "CONNECT" || cmd2up == "CONNECTNOW" || cmd2up == "CONNECT_NOW") {
+    abbot::wifi_console::connectNow();
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: connect requested");
+    return true;
+  }
+
+  if (cmd2up == "DISCONNECT") {
+    abbot::wifi_console::disconnectNow();
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: disconnect requested");
+    return true;
+  }
+
+  if (cmd2up == "RESET") {
+    Preferences pref;
+    if (pref.begin("abbot", false)) {
+      pref.remove("wifi_ssid");
+      pref.remove("wifi_pass");
+      pref.end();
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: cleared stored credentials");
+    }
+    return true;
+  }
+
+  if (cmd2up == "STATUS") {
+    if (WiFi.status() == WL_CONNECTED) {
+      IPAddress ip = WiFi.localIP();
+      char ipbuf[32];
+      ip.toString().toCharArray(ipbuf, sizeof(ipbuf));
+      char buf[128];
+      snprintf(buf, sizeof(buf), "WIFI: connected ssid=%s ip=%s", WiFi.SSID().c_str(), ipbuf);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+    } else {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: not connected");
+    }
+    return true;
+  }
+
+  if (cmd2up == "DIAG") {
+    char d[256];
+    abbot::wifi_console::getDiagnostics(d, sizeof(d));
+    char out[300];
+    snprintf(out, sizeof(out), "WIFI-DIAG: %s", d);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+    return true;
+  }
+
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "WIFI usage: WIFI SHOW | WIFI SET SSID <ssid> | WIFI SET PASS <pwd> | WIFI CONNECT | WIFI DISCONNECT | WIFI RESET | WIFI STATUS | WIFI DIAG");
+  return true;
+}
+
 // Start the interactive menu programmatically (prints the menu and makes it active)
 void startInteractiveMenu(abbot::BMI088Driver *driver) {
   // Ensure menus exist. Another task may be building them concurrently
@@ -704,9 +866,6 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     return;
   }
   String line = Serial.readStringUntil('\n');
-  // Optional RX echo for debugging user-typed commands. Define
-  // `ENABLE_RX_ECHO` at compile time to enable this (see platformio.ini
-  // build_flags). Disabled by default to keep serial output clean.
 #ifdef ENABLE_RX_ECHO
   {
     String tline = line;
@@ -725,14 +884,20 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
     return;
   }
 
+  // Delegate to shared processor so remote callers can reuse the same logic.
+  processSerialLine(driver, line);
+}
+
+void processSerialLine(abbot::BMI088Driver *driver, const String &line) {
+  String sline = line;
+  String up = sline;
+  up.toUpperCase();
+
   // If interactive menu is active, only feed the menu when the input
   // looks like a numeric selection. Otherwise fall through so textual
-  // commands (e.g. "TUNING START 2000") are still processed while the
-  // menu is visible.
+  // commands are still processed while the menu is visible.
   if (g_menuActive && g_currentMenu) {
-    // determine if first token is numeric
-    String s = line;
-    s.trim();
+    String s = sline; s.trim();
     int sp = s.indexOf(' ');
     String first = (sp == -1) ? s : s.substring(0, sp);
     bool firstIsNum = true;
@@ -741,9 +906,8 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       if (!isDigit(first.charAt(i))) firstIsNum = false;
     }
     if (firstIsNum) {
-      SerialMenu* next = g_currentMenu->handleInput(line);
+      SerialMenu* next = g_currentMenu->handleInput(sline);
       if (next == nullptr) {
-        // exit menu
         g_menuActive = false;
         g_currentMenu = nullptr;
       } else {
@@ -751,44 +915,36 @@ void processSerialOnce(class abbot::BMI088Driver *driver) {
       }
       return;
     }
-    // else: not a numeric selection - fall through to command parsing
+    // else fall through to textual command parsing
   }
-  // First try imu_cal commands
-  // imu_cal functions expect upper-case tokens; we forward the raw line but
-  // the imu_cal module uppercases internally when parsing.
-  // Try to handle CALIB commands first
-  String up = line;
-  up.toUpperCase();
-  // Try handlers for known command groups in order. Each returns true
-  // when it handled the command and the caller should return early.
-  if (handleCalib(driver, line, up)) return;
 
-  // HELP command: enter interactive menu (numeric selections)
+  // Now the same sequence of handlers as the original implementation.
+  if (handleCalib(driver, sline, up)) return;
   if (up == "HELP" || up == "?" || up.startsWith("HELP ")) {
     ensureMenus(driver);
     g_menuActive = true;
     g_currentMenu = g_rootMenu;
-    g_currentMenu->enter();
+    if (g_currentMenu) g_currentMenu->enter();
     return;
   }
-  if (handleTuning(line, up)) return;
-  if (handleLog(line, up)) return;
-  if (handleFusion(line, up)) return;
-  if (handleFilter(line, up)) return;
-  if (handleBalance(line, up)) return;
-  if (handleAutotune(line, up)) return;
+  if (handleTuning(sline, up)) return;
+  if (handleLog(sline, up)) return;
+  if (handleWifi(sline, up)) return;
+  if (handleFusion(sline, up)) return;
+  if (handleFilter(sline, up)) return;
+  if (handleBalance(sline, up)) return;
+  if (handleAutotune(sline, up)) return;
+  if (abbot::motor::processSerialCommand(sline)) return;
+  LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "Unknown command: "); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, sline);
+}
 
-
-  // Forward to motor driver processor
-  if (abbot::motor::processSerialCommand(line)) {
-    return;
-  }
-
-  LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "Unknown command: "); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, line);
+void receiveRemoteLine(const String &line) {
+  processSerialLine(g_serial_task_driver, line);
 }
 
 void serialTaskEntry(void *pvParameters) {
   abbot::BMI088Driver *driver = reinterpret_cast<abbot::BMI088Driver*>(pvParameters);
+  g_serial_task_driver = driver;
   for (;;) {
     processSerialOnce(driver);
     vTaskDelay(pdMS_TO_TICKS(100));

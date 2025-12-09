@@ -18,6 +18,7 @@
 #include "../config/balancer_config.h"
 #include "logging.h"
 #include "filter_manager.h"
+#include "../include/esp_wifi_console.h"
 #include <cmath>
 #include <Preferences.h>
 #include <freertos/FreeRTOS.h>
@@ -88,6 +89,14 @@ static void imuProducerTask(void *pvParameters) {
     }
     // Short delay to yield; real timing enforced by driver->read
     vTaskDelay(pdMS_TO_TICKS(2));
+  }
+}
+
+static void wifiConsoleTask(void *pvParameters) {
+  (void)pvParameters;
+  for (;;) {
+    abbot::wifi_console::loop();
+    vTaskDelay(pdMS_TO_TICKS(20));
   }
 }
 
@@ -241,6 +250,9 @@ bool startIMUTasks(BMI088Driver *driver) {
   // Initialize status LED (no-op if not configured)
   statusLedInit();
 
+  // Start optional Wi-Fi console module (no-op if disabled)
+  abbot::wifi_console::begin();
+
     // Initialize Preferences (NVS) and attempt to load persisted gyro bias via helper
   if (g_prefs.begin("abbot", false)) {
     g_prefs_started = true;
@@ -304,7 +316,14 @@ bool startIMUTasks(BMI088Driver *driver) {
   // Create serial command task for calibration UI (low priority)
   BaseType_t r3 = xTaskCreate(abbot::serialcmds::serialTaskEntry, "IMUSerial", 12288, driver, configMAX_PRIORITIES - 4, nullptr);
 
-  return (r1 == pdPASS) && (r2 == pdPASS) && (r3 == pdPASS);
+  // Create a small background task to service the Wi‑Fi console (drain queue,
+  // accept clients, handle incoming lines). Low priority so it won't interfere
+  // with IMU timing.
+  // Wi‑Fi console uses moderate stack (WiFi library + small buffers). Allocate
+  // more stack to avoid watchpoint / canary failures on some chips.
+  BaseType_t r4 = xTaskCreate(wifiConsoleTask, "WiFiConsole", 8192, nullptr, configMAX_PRIORITIES - 5, nullptr);
+
+  return (r1 == pdPASS) && (r2 == pdPASS) && (r3 == pdPASS) && (r4 == pdPASS);
 }
 
 void attachCalibrationQueue(QueueHandle_t q) {

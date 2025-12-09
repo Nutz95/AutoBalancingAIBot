@@ -169,4 +169,107 @@ The board exposes a single RGB status LED (NeoPixel/WS2812) when configured in
 If the LED is not present on your board the functions are no-ops and the
 firmware falls back to serial logging for all messages.
 
+Wi‑Fi console (TCP)
+-------------------
+
+This firmware optionally includes a small TCP "console" server that forwards
+device logs and accepts textual commands over the network. Enable it by
+setting `WIFI_CONSOLE_ENABLED 1` in `ESP32/config/board_config.h` or by
+customizing your board header.
+
+Behavior summary
+- On boot the firmware reads NVS keys `wifi_ssid` and `wifi_pass`. If both
+	values are present the device will attempt to connect automatically to the
+	configured network and, once connected, start a TCP console server (default
+	port `2333`).
+- The console forwards the device log lines and accepts plain-text command
+	lines (the same commands available on the USB serial console).
+
+Compile-time flag
+-----------------
+
+The Wi‑Fi console build can be enabled or disabled at compile-time using the
+`WIFI_CONSOLE_ENABLED` flag in `ESP32/config/board_config.h`. When set to
+`1` the console module is compiled in and the device will attempt to connect
+and start the TCP server on boot (when credentials are present). Setting the
+flag to `0` removes the console from the build and reduces firmware size and
+runtime resource usage.
+
+Configure Wi‑Fi via USB serial (recommended for first setup)
+----------------------------------------------------------
+
+1. Connect the board over USB and open the serial monitor (default baud as in
+	 project config).
+2. Enter Wi‑Fi SSID:
+
+	 WIFI SET SSID MyNetworkSSID
+
+3. Enter Wi‑Fi password:
+
+	 WIFI SET PASS MySecretPassword
+
+4. Optional: verify the saved values and current connection status:
+
+	 WIFI STATUS
+
+	 WIFI DIAG
+
+Notes:
+- The commands persist values to NVS (non-encrypted). Use these commands to
+	change credentials when needed. The device will attempt to connect
+	automatically on subsequent boots if credentials are present.
+- If you change credentials and want the connection to take effect immediately
+	you can reboot or use any provided `WIFI CONNECT` action in the serial menu
+	(if implemented).
+
+Using the Python client (included)
+---------------------------------
+
+An example client lives at `ESP32/tools/wifi_console_client.py`.
+
+Run it from the `ESP32` folder like this (PowerShell):
+
+```powershell
+python .\tools\wifi_console_client.py <ESP_IP> [2333]
+```
+
+Features of the provided client:
+- Enables TCP keepalive on the socket to help the OS detect dead peers.
+- Implements an automatic reconnect loop with exponential backoff when the
+	connection is lost.
+- On a send failure (for example because the ESP was reflashed during a send)
+	the client remembers the failed command and will attempt to resend it after
+	a successful reconnect. The client prints clear status messages such as
+	`[Disconnected]`, `[Reconnecting]`, and `[Resent pending command]`.
+
+Usage notes and testing guidance
+--------------------------------
+- Start the client and connect to the ESP IP. You should see log lines from
+	the device appear in your terminal.
+- If you flash or reboot the ESP while the client is connected, the client
+	will detect the disconnection and try to reconnect automatically. If you
+	typed a command at the moment the connection failed, the client will attempt
+	to resend that command once the connection is restored.
+- Example test flow:
+	1. Start the Python client and connect.
+	2. While connected, issue a command (for example `?` or `HELP`) and verify
+		 the response.
+	3. Reflash the ESP (or reboot it). The client should print `[Disconnected]`
+		 followed by reconnect attempts and then `[Resent pending command]` if a
+		 command needed resending.
+
+Security note
+-------------
+- Wi‑Fi credentials are persisted in NVS in plaintext; this is more convenient
+	than hardcoding but not encrypted—use the TCP console only on trusted
+	networks or add authentication when exposing the device to untrusted
+	environments.
+
+Notes
+-----
+- The TCP console is intended for tuning and debugging during development.
+- The existing BLE HID code continues to work when the TCP console is active.
+- If you prefer not to enable Wi‑Fi, continue to use the USB serial connection
+	for logs and command input.
+
 

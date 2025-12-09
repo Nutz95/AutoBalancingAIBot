@@ -117,6 +117,13 @@ void start(float fused_pitch_rad)
     }
     g_pid.reset();
     g_last_cmd = 0.0f;
+    // Reset drive setpoint state on start to avoid carrying over joystick
+    // commands or previous pitch setpoints which can cause the robot to
+    // request a non-zero pitch immediately after re-enabling.
+    g_drive_target_v = 0.0f;
+    g_drive_target_w = 0.0f;
+    g_drive_v_filtered = 0.0f;
+    g_drive_last_pitch_sp = 0.0f;
     char buf[128];
     snprintf(buf, sizeof(buf), "BALANCER: started (defaults used) - motors %s", abbot::motor::areMotorsEnabled() ? "ENABLED" : "NOT ENABLED");
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
@@ -131,6 +138,12 @@ void stop()
     abbot::motor::disableMotors();
     g_pid.reset();
     g_last_cmd = 0.0f;
+    // Clear drive setpoints when stopping so a subsequent start doesn't
+    // immediately command a non-zero pitch based on previous joystick input.
+    g_drive_target_v = 0.0f;
+    g_drive_target_w = 0.0f;
+    g_drive_v_filtered = 0.0f;
+    g_drive_last_pitch_sp = 0.0f;
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: stopped - motors DISABLED");
 }
 

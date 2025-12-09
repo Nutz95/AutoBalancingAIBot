@@ -1,4 +1,5 @@
 #include "logging.h"
+#include "esp_wifi_console.h"
 #include <cstring>
 #include <cctype>
 #include <freertos/semphr.h>
@@ -176,6 +177,8 @@ void lockedPrintln(const char *s) {
             xSemaphoreTake(g_log_mutex, portMAX_DELAY);
         }
         Serial.println();
+        // Forward blank line to wifi console (no-op if disabled)
+        abbot::wifi_console::sendLine("");
         if (g_log_mutex) {
             xSemaphoreGive(g_log_mutex);
         }
@@ -185,6 +188,8 @@ void lockedPrintln(const char *s) {
         xSemaphoreTake(g_log_mutex, portMAX_DELAY);
     }
     Serial.println(s);
+    // Forward line to WiFi console (no-op if module disabled)
+    abbot::wifi_console::sendLine(s);
     if (g_log_mutex) {
         xSemaphoreGive(g_log_mutex);
     }
@@ -205,6 +210,8 @@ void lockedPrintln(const String &s) {
         xSemaphoreTake(g_log_mutex, portMAX_DELAY);
     }
     Serial.println(s);
+    // Forward line to WiFi console (no-op if module disabled)
+    abbot::wifi_console::sendLine(s.c_str());
     if (g_log_mutex) {
         xSemaphoreGive(g_log_mutex);
     }
@@ -223,6 +230,9 @@ void lockedPrintf(const char *fmt, ...) {
         xSemaphoreTake(g_log_mutex, portMAX_DELAY);
     }
     Serial.print(tmp);
+    // Forward formatted output to WiFi console. We forward the raw
+    // buffer; if it contains newlines the remote will receive them.
+    abbot::wifi_console::sendLine(tmp);
     if (g_log_mutex) {
         xSemaphoreGive(g_log_mutex);
     }
