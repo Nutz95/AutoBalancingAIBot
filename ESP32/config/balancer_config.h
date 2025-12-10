@@ -7,17 +7,17 @@
 // Kp=8.0 means 1 degree error (0.017 rad) -> 0.13 command (13% speed)
 // Saturation (100% speed) occurs at ~7.7 degrees error.
 #ifndef BALANCER_DEFAULT_KP
-#define BALANCER_DEFAULT_KP 26.0f
+#define BALANCER_DEFAULT_KP 25.5f
 #endif
 
 // Ki=0 by default to avoid integral windup causing direction reversal
 // Add small Ki (0.01-0.05) only after Kp/Kd are tuned
 #ifndef BALANCER_DEFAULT_KI
-#define BALANCER_DEFAULT_KI 1.15f
+#define BALANCER_DEFAULT_KI 1.0f
 #endif
 
 #ifndef BALANCER_DEFAULT_KD
-#define BALANCER_DEFAULT_KD 0.85f
+#define BALANCER_DEFAULT_KD 0.9f
 #endif
 
 // Integrator anti-windup clamp (absolute limit applied to integrator state)
@@ -50,15 +50,37 @@
 #define BALANCER_AUTO_ENABLE_ANGLE_DEG 30.0f
 #endif
 
+// Smaller threshold (degrees) indicating the robot must be close to vertical
+// before permitting motors to enable after a start request.
+#ifndef BALANCER_START_STABLE_ANGLE_DEG
+#define BALANCER_START_STABLE_ANGLE_DEG 3.0f
+#endif
+
+// Maximum absolute pitch rate (deg/s) allowed for the initial enable window.
+#ifndef BALANCER_START_STABLE_PITCH_RATE_DEG_S
+#define BALANCER_START_STABLE_PITCH_RATE_DEG_S 8.0f
+#endif
+
+// If the robot exceeds this absolute pitch (degrees), automatically stop the
+// balancer to avoid fighting on the ground after a fall.
+#ifndef BALANCER_FALL_STOP_ANGLE_DEG
+#define BALANCER_FALL_STOP_ANGLE_DEG 45.0f
+#endif
+
+// Optional pitch-rate guard (deg/s). Set to 0 to disable rate-based stop.
+#ifndef BALANCER_FALL_STOP_RATE_DEG_S
+#define BALANCER_FALL_STOP_RATE_DEG_S 0.0f
+#endif
+
 // Drive interface configuration
 // How quickly the normalized forward command (v) may change (units/sec).
 // Higher = more responsive. Safe default = 2.0f (full step ~0.5s).
 #ifndef DRIVE_V_SLEW
-#define DRIVE_V_SLEW 2.8f
+#define DRIVE_V_SLEW 3.2f
 #endif
 
 // Maximum pitch (degrees) the drive command will request from the balancer.
 // This limits how far the robot will lean to accelerate/decelerate. Default 6°.
 #ifndef DRIVE_MAX_PITCH_DEG
-#define DRIVE_MAX_PITCH_DEG 2.0f
+#define DRIVE_MAX_PITCH_DEG 3.0f
 #endif

@@ -15,6 +15,11 @@ void initMotorDriver();
 void enableMotors();
 void disableMotors();
 bool areMotorsEnabled();
+    
+	// Reset knowledge of the last commanded velocities/positions so that when
+	// the servos are re-enabled we start from zero rather than resuming the
+	// previous command state.
+	void clearCommandState();
 
 // Send a normalized motor command in range [-1.0, +1.0]
 // In VELOCITY_CLOSED_LOOP mode, command is converted to position increment

@@ -12,6 +12,7 @@
 #include <Preferences.h>
 
 #include "filter_manager.h"
+#include "SystemTasks.h"
 
 // Configs
 #include "../config/balancer_config.h"
@@ -39,6 +40,13 @@ static float g_drive_last_pitch_sp = 0.0f;
 // Configuration for drive->pitch mapping (from balancer_config.h)
 static float g_drive_max_pitch_rad = degToRad(DRIVE_MAX_PITCH_DEG); // configured max pitch (deg)
 static const float g_drive_v_slew = DRIVE_V_SLEW; // units per second (configured)
+// Small non-blocking delay (ms) before enabling motors after a START
+static const uint32_t g_enable_delay_ms = 250;
+static uint32_t g_pending_enable_ts = 0;
+static const float g_start_stable_angle_rad = degToRad(BALANCER_START_STABLE_ANGLE_DEG);
+static const float g_start_stable_rate_rad_s = degToRad(BALANCER_START_STABLE_PITCH_RATE_DEG_S);
+static const float g_fall_stop_angle_rad = degToRad(BALANCER_FALL_STOP_ANGLE_DEG);
+static const float g_fall_stop_rate_rad_s = degToRad(BALANCER_FALL_STOP_RATE_DEG_S);
 
 void init()
 {
@@ -106,11 +114,18 @@ void start(float fused_pitch_rad)
     if (g_active) return;
     g_active = true;
     abbot::log::enableChannel(abbot::log::CHANNEL_BALANCER);
-    // Auto-enable motors only if upright
+    // Defer motor enabling briefly and only enable when fusion reports ready
+    // and the robot is within the auto-enable angle. This avoids enabling
+    // motors while the fusion/filter state is still settling after a stop
+    // or other transient which can lead to immediate undesired motion.
     float cur_pitch_deg = radToDeg(fused_pitch_rad);
     if (fabsf(cur_pitch_deg) <= BALANCER_AUTO_ENABLE_ANGLE_DEG) {
-        abbot::motor::enableMotors();
+        g_pending_enable_ts = millis() + g_enable_delay_ms;
+        char msg[128];
+        snprintf(msg, sizeof(msg), "BALANCER: start requested - delaying motor enable %lums (pitch=%.2fdeg)", (unsigned long)g_enable_delay_ms, (double)cur_pitch_deg);
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
     } else {
+        g_pending_enable_ts = 0;
         char msg[128];
         snprintf(msg, sizeof(msg), "BALANCER: NOT enabling motors - pitch %.2f deg > limit %.1f deg", (double)cur_pitch_deg, (double)BALANCER_AUTO_ENABLE_ANGLE_DEG);
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
@@ -138,6 +153,8 @@ void stop()
     abbot::motor::disableMotors();
     g_pid.reset();
     g_last_cmd = 0.0f;
+    // Cancel any pending enable that may have been scheduled by start()
+    g_pending_enable_ts = 0;
     // Clear drive setpoints when stopping so a subsequent start doesn't
     // immediately command a non-zero pitch based on previous joystick input.
     g_drive_target_v = 0.0f;
@@ -366,6 +383,44 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
     }
     
     if (!g_active) return 0.0f;
+
+    // Fall-detection guard: if the robot is clearly down, stop the balancer to
+    // avoid fighting on the ground. Uses both angle and optional rate threshold.
+    if (fabsf(fused_pitch) > g_fall_stop_angle_rad ||
+        (g_fall_stop_rate_rad_s > 0.0f && fabsf(fused_pitch_rate) > g_fall_stop_rate_rad_s)) {
+        stop();
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                   "BALANCER: auto-stopped (fell) pitch=%.2fdeg rate=%.2fdeg/s",
+                   (double)radToDeg(fused_pitch), (double)radToDeg(fused_pitch_rate));
+        return 0.0f;
+    }
+    // If a motor enable was deferred by start(), check whether it's time to
+    // attempt enabling. Only enable when fusion reports ready; otherwise
+    // cancel the pending enable to avoid enabling into a transient.
+    if (g_pending_enable_ts != 0) {
+        uint32_t now = millis();
+        if ((int32_t)(now - g_pending_enable_ts) >= 0) {
+            float cur_pitch_deg = radToDeg(fused_pitch);
+            if (!abbot::isFusionReady()) {
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: delayed enable deferred - fusion not ready");
+                g_pending_enable_ts = now + g_enable_delay_ms;
+            } else if (fabsf(cur_pitch_deg) > g_start_stable_angle_rad) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "BALANCER: delayed enable deferred - pitch %.2f deg outside %.2f deg", (double)cur_pitch_deg, (double)radToDeg(g_start_stable_angle_rad));
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
+                g_pending_enable_ts = now + g_enable_delay_ms;
+            } else if (fabsf(fused_pitch_rate) > g_start_stable_rate_rad_s) {
+                char msg[128];
+                snprintf(msg, sizeof(msg), "BALANCER: delayed enable deferred - pitch rate %.2f deg/s > %.2f deg/s", (double)radToDeg(fused_pitch_rate), (double)radToDeg(g_start_stable_rate_rad_s));
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
+                g_pending_enable_ts = now + g_enable_delay_ms;
+            } else {
+                abbot::motor::enableMotors();
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: motors ENABLED after settle");
+                g_pending_enable_ts = 0;
+            }
+        }
+    }
     // For INVERTED PENDULUM (balancing robot):
     // - Pitch > 0 (tilted forward) -> motors must go FORWARD (cmd > 0) to catch
     // - Pitch < 0 (tilted backward) -> motors must go BACKWARD (cmd < 0) to catch

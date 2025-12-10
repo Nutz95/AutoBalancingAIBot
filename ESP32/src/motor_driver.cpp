@@ -119,9 +119,40 @@ void initMotorDriver() {
   s_servoBus.EnableTorque(0xFE, 0);
   delay(20);
   Serial1.end();
+
+  // Clear command/target state after reset
+  s_last_command_left = 0.0f;
+  s_last_command_right = 0.0f;
+  s_target_pos_left = s_accumulated_pos_left;
+  s_target_pos_right = s_accumulated_pos_right;
+  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: command state cleared");
 #endif
 #else
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "motor_driver: compiled in STUB mode");
+#endif
+}
+
+void clearCommandState() {
+  // Reset tracked logical commands
+  s_last_command_left = 0.0f;
+  s_last_command_right = 0.0f;
+  // Reset targets to current accumulated positions to avoid latent motion on re-enable
+  s_target_pos_left = s_accumulated_pos_left;
+  s_target_pos_right = s_accumulated_pos_right;
+
+#if MOTOR_DRIVER_REAL
+  // If the servo bus is initialized, push an explicit zero-speed command to both
+  // motors to clear any residual velocity register contents, even if torque is off.
+  if (s_servoInitialized) {
+    // Send zero twice to maximize chance the bus applies it even if torque is off
+    s_servoBus.WriteSpe(LEFT_MOTOR_ID, 0, 0);
+    delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
+    s_servoBus.WriteSpe(RIGHT_MOTOR_ID, 0, 0);
+    delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
+    s_servoBus.WriteSpe(LEFT_MOTOR_ID, 0, 0);
+    delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
+    s_servoBus.WriteSpe(RIGHT_MOTOR_ID, 0, 0);
+  }
 #endif
 }
 
@@ -139,6 +170,8 @@ void enableMotors() {
   if (s_motors_enabled) {
     return;
   }
+  // Ensure any prior command state is cleared before re-enable
+  clearCommandState();
   s_motors_enabled = true;
   LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: motors ENABLED");
 
@@ -219,6 +252,9 @@ void enableMotors() {
 }
 
 void disableMotors() {
+  // Always clear command state and send explicit zeros to avoid residual speed
+  clearCommandState();
+
   if (!s_motors_enabled) {
     return;
   }
@@ -228,6 +264,11 @@ void disableMotors() {
 #if MOTOR_DRIVER_REAL
   if (s_servoInitialized) {
     // Stop motion first
+    s_servoBus.WriteSpe(LEFT_MOTOR_ID, 0, 0);
+    delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
+    s_servoBus.WriteSpe(RIGHT_MOTOR_ID, 0, 0);
+    delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
+    // Second zero just before torque-off in case first was ignored
     s_servoBus.WriteSpe(LEFT_MOTOR_ID, 0, 0);
     delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
     s_servoBus.WriteSpe(RIGHT_MOTOR_ID, 0, 0);

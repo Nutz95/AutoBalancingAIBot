@@ -149,12 +149,6 @@ void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t le
   if(rightMotor > 1.0f) rightMotor = 1.0f;
   if(rightMotor < -1.0f) rightMotor = -1.0f;
   
-  // Auto-enable motors on first meaningful stick movement
-  if (!abbot::motor::areMotorsEnabled() && (fabs(x) > 0.01f || fabs(y) > 0.01f)) {
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: auto-enable due to controller input");
-    abbot::motor::enableMotors();
-  }
-
   // Only print and send if stick moved significantly
   static float lastLeft = 0, lastRight = 0;
   if (fabs(leftMotor - lastLeft) > 0.05f || fabs(rightMotor - lastRight) > 0.05f) {
@@ -166,13 +160,10 @@ void notifyCallback(NimBLERemoteCharacteristic* pChar, uint8_t* pData, size_t le
       // Send normalized forward and turn (turn currently forced zero)
       abbot::balancer::controller::setDriveSetpoints(forward, 0.0f);
     } else {
-      // Direct motor driver invocation (avoid loopback via Serial)
-      if (abbot::motor::areMotorsEnabled()) {
-        abbot::motor::setMotorCommand(LEFT_MOTOR_ID, leftMotor);
-        abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, rightMotor);
-      } else {
-        LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: movement ignored (motors disabled)");
-      }
+      // When the balancer is inactive, ignore stick movement to prevent
+      // unintended wheel motion before BALANCE START. Keep motors disabled
+      // until the operator explicitly starts balancing.
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: stick ignored (balancer inactive)");
     }
     // Keep logging for debug
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "MOTOR DBG LEFT %.3f\n", leftMotor);
