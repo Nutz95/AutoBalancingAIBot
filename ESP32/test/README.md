@@ -121,6 +121,14 @@ Failures: 0
 Running PID Controller Test...
 PID tests: PASS
 
+----------------------------------------------------------------------
+3. Driver Manager Test
+----------------------------------------------------------------------
+✅ Compilation succeeded
+
+Running Driver Manager Test...
+driver_manager tests: PASS
+
 ======================================================================
 ✅ All tests completed successfully!
 ======================================================================
