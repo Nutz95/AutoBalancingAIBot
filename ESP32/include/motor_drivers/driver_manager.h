@@ -26,6 +26,14 @@ const char* getActiveDriverName(const char* fallback = "none");
 // servo code to act as the driver for the manager.
 void installDefaultServoAdapter();
 
+// --- Compatibility wrappers (ID-based) ---
+// These helpers ease migration for code that still references numeric motor
+// IDs. They map numeric IDs to the configured `MotorSide` via the active
+// driver's `getMotorId()` and forward to the `IMotorDriver` methods.
+void setMotorCommandById(int id, float command);
+void setMotorCommandRawById(int id, int16_t rawSpeed);
+int32_t readEncoderById(int id);
+
 // No free-function forwards here; callers should query `getActiveMotorDriver()`
 // and call the appropriate `IMotorDriver` methods, or use the small
 // `motor_control` wrapper for high-level enable/disable queries.

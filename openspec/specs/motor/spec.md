@@ -18,11 +18,11 @@ defaults (motors disabled at boot). This spec was created when archiving the
 
 ### Requirement: Configuration
 
-- The system SHALL allow configuring motor IDs and per-motor inversion (left/right) via the compile-time header `ESP32/config/motor_config.h` (macros: `LEFT_MOTOR_ID`, `RIGHT_MOTOR_ID`, `LEFT_MOTOR_INVERT`, `RIGHT_MOTOR_INVERT`).
+- The system SHALL allow configuring motor IDs and per-motor inversion (left/right) via the compile-time header `ESP32/config/motor_configs/servo_motor_config.h` (macros: `LEFT_MOTOR_ID`, `RIGHT_MOTOR_ID`, `LEFT_MOTOR_INVERT`, `RIGHT_MOTOR_INVERT`). For DC drivers the equivalent settings live in `ESP32/config/motor_configs/dc_motor_config.h`.
 
 #### Scenario: Inversion configuration
 
-- Given the driver is configured with `LEFT_MOTOR_INVERT=1` and motor commands are symmetric, when `setMotorCommand(left_id, +0.5)` and `setMotorCommand(right_id, +0.5)` are invoked, then the actual applied directions reflect the inversion config (left inverted). The header `ESP32/config/motor_config.h` is authoritative for default IDs and inversion flags.
+- Given the driver is configured with `LEFT_MOTOR_INVERT=1` and motor commands are symmetric, when `setMotorCommand(left_id, +0.5)` and `setMotorCommand(right_id, +0.5)` are invoked, then the actual applied directions reflect the inversion config (left inverted). The header `ESP32/config/motor_configs/servo_motor_config.h` is authoritative for default IDs and inversion flags for the servo driver; DC drivers use `ESP32/config/motor_configs/dc_motor_config.h`.
 
 ### Requirement: Safety default
 

@@ -70,5 +70,49 @@ const char* getActiveDriverName(const char* fallback) {
   return fallback;
 }
 
+// Helper: map numeric id -> MotorSide using active driver's getMotorId
+static bool idToSide(int id, IMotorDriver::MotorSide &out_side) {
+  if (!g_active) return false;
+  IMotorDriver::MotorSide sides[2] = { IMotorDriver::MotorSide::LEFT, IMotorDriver::MotorSide::RIGHT };
+  for (int i = 0; i < 2; ++i) {
+    IMotorDriver::MotorSide s = sides[i];
+    if (g_active->getMotorId(s) == id) {
+      out_side = s;
+      return true;
+    }
+  }
+  return false;
+}
+
+void setMotorCommandById(int id, float command) {
+  if (!g_active) return;
+  IMotorDriver::MotorSide side;
+  if (idToSide(id, side)) {
+    g_active->setMotorCommand(side, command);
+  } else {
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "driver_manager: setMotorCommandById unknown id=%d", id);
+  }
+}
+
+void setMotorCommandRawById(int id, int16_t rawSpeed) {
+  if (!g_active) return;
+  IMotorDriver::MotorSide side;
+  if (idToSide(id, side)) {
+    g_active->setMotorCommandRaw(side, rawSpeed);
+  } else {
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "driver_manager: setMotorCommandRawById unknown id=%d", id);
+  }
+}
+
+int32_t readEncoderById(int id) {
+  if (!g_active) return 0;
+  IMotorDriver::MotorSide side;
+  if (idToSide(id, side)) {
+    return g_active->readEncoder(side);
+  }
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "driver_manager: readEncoderById unknown id=%d", id);
+  return 0;
+}
+
 } // namespace motor
 } // namespace abbot

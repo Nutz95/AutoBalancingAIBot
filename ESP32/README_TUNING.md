@@ -100,7 +100,7 @@ Auto-persistence du biais gyro (nouveau)
 Balancer / PID — prochaines étapes pour activer les moteurs
 - Le projet contient maintenant un squelette de contrôleur PID séparé dans `ESP32/src/balancer_controller.h/.cpp`.
 - Étapes recommandées pour activer les moteurs en toute sécurité :
-  - Vérifier le câblage moteur / servo et la configuration dans `ESP32/config/motor_config.h` (IDs, pins, inversion).
+  - Vérifier le câblage moteur / servo et la configuration dans `ESP32/config/motor_configs/servo_motor_config.h` (IDs, pins, inversion). Pour les pilotes DC, voir `ESP32/config/motor_configs/dc_motor_config.h`.
   - Tester la commande manuelle des moteurs (via `MOTOR ENABLE` puis `MOTOR SET LEFT 0.2` et `MOTOR SET RIGHT 0.2`) pour vérifier la réponse et la direction.
   - Intégrer le contrôleur PID : implémenter une routine qui lit `abbot::getFusedPitch()` et `abbot::getFusedPitchRate()` puis calcule une commande à l'aide de `abbot::balancer::PIDController::update(error, error_dot, dt)`.
   - Ne pas activer les moteurs automatiquement au démarrage. Utiliser d'abord la commande série `MOTOR ENABLE` depuis un terminal pour armer les moteurs.
@@ -122,7 +122,7 @@ Motor acceleration (runtime) control
  - The firmware now exposes a runtime command to adjust servo acceleration without rebuilding: `MOTOR ACC <LEFT|RIGHT|ID> <value>`
  - Example: `MOTOR ACC LEFT 0` (sets acceleration register to 0 — fastest changes, higher current spikes)
  - Example: `MOTOR ACC LEFT 200` (sets a smoothing acceleration value; this repository's default is `200`)
- - The compile-time defaults are configured in `ESP32/config/motor_config.h`:
+ - The compile-time defaults are configured in `ESP32/config/motor_configs/servo_motor_config.h` (for the servo driver). For DC-specific settings see `ESP32/config/motor_configs/dc_motor_config.h`.
    - `VELOCITY_MAX_SPEED` (default `7000`) — raw servo units used to map normalized velocity commands
    - `MOTOR_SERVO_DEFAULT_ACC` (default `200`) — default acceleration register written on enable
  - Use the runtime `MOTOR ACC` command during bench testing to quickly switch between aggressive and smooth acceleration settings. Monitor servo current and temperature when trying aggressive values (e.g. `0`) — higher currents and heating are expected under load.
