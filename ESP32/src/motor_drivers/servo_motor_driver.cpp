@@ -1,8 +1,8 @@
-// motor_driver.cpp
+// servo_motor_driver.cpp
 // Velocity Closed-Loop Mode: ESP-side position control with encoder unwrapping
 // Servos run in Wheel mode, position is tracked as int64_t (unlimited range)
 
-#include "motor_driver.h"
+#include "motor_drivers/servo_motor_driver.h"
 #include "../config/motor_config.h"
 #include "logging.h"
 #include <Arduino.h>
@@ -643,6 +643,13 @@ bool processSerialCommand(const String &line) {
     }
     int rc = s_servoBus.WriteSpe((uint8_t)id, speed, 0);
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: VEL id=%d speed=%d (invert=%d) rc=%d\n", id, speed, invert, rc);
+
+    // Immediately attempt to update the firmware-side accumulated encoder so
+    // that subsequent "MOTOR READ" calls reflect recent motion even when the
+    // command was issued via the direct VEL console path.
+    // A small inter-command delay helps the servo update its registers first.
+    delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
+    (void)readAndUpdateEncoder(id);
 #else
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: STUB VEL id=%d speed=%d\n", id, speed);
 #endif

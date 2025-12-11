@@ -4,7 +4,7 @@
 #include "units.h"
 #include "imu_calibration.h"
 #include <cmath>
-#include "motor_driver.h"
+#include "motor_drivers/servo_motor_driver.h"
 #include "../config/motor_config.h"
 #include "../include/balancer_controller.h"
 

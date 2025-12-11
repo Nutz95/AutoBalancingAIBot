@@ -1,7 +1,7 @@
 // serial_commands.cpp
 #include "serial_commands.h"
 #include "imu_calibration.h"
-#include "motor_driver.h"
+#include "motor_drivers/servo_motor_driver.h"
 #include "../config/motor_config.h"
 #include "BMI088Driver.h"
 #include "logging.h"

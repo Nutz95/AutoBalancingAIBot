@@ -1,7 +1,7 @@
 // motor_control.cpp
 // Thin compatibility wrapper that forwards to the canonical motor driver API.
 #include "motor_control.h"
-#include "motor_driver.h"
+#include "motor_drivers/servo_motor_driver.h"
 #include "logging.h"
 
 namespace abbot {

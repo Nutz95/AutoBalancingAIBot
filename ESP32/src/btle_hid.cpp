@@ -2,7 +2,7 @@
 #include "btle_hid.h"
 #include "SystemTasks.h"
 #include <NimBLEDevice.h>
-#include "motor_driver.h" // auto-enable motors when controller active
+#include "motor_drivers/servo_motor_driver.h" // auto-enable motors when controller active
 #include "../config/motor_config.h" // LEFT_MOTOR_ID / RIGHT_MOTOR_ID
 #include "logging.h"
 #include "btle_callbacks.h"

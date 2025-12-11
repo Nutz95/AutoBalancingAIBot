@@ -4,7 +4,7 @@
 #include "BMI088Driver.h"
 #include "SystemTasks.h"
 #include "imu_calibration.h"
-#include "motor_driver.h"
+#include "motor_drivers/servo_motor_driver.h"
 #include "btle_hid.h"
 #include "serial_commands.h"
 #include "logging.h"

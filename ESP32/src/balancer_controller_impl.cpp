@@ -6,7 +6,7 @@
 
 #include "logging.h"
 #include "pid_controller.h"
-#include "motor_driver.h"
+#include "motor_drivers/servo_motor_driver.h"
 #include "units.h"
 #include "autotune_controller.h"
 #include <Preferences.h>
@@ -27,6 +27,7 @@ static bool g_active = false;
 static float g_last_cmd = 0.0f;
 static const float g_cmd_slew = BALANCER_CMD_SLEW_LIMIT;
 static float g_deadband = BALANCER_MOTOR_MIN_OUTPUT;
+static float g_pitch_trim_rad = 0.0f;
 static Preferences g_prefs;
 static bool g_prefs_started = false;
 static AutotuneController g_autotune;
@@ -47,6 +48,7 @@ static const float g_start_stable_angle_rad = degToRad(BALANCER_START_STABLE_ANG
 static const float g_start_stable_rate_rad_s = degToRad(BALANCER_START_STABLE_PITCH_RATE_DEG_S);
 static const float g_fall_stop_angle_rad = degToRad(BALANCER_FALL_STOP_ANGLE_DEG);
 static const float g_fall_stop_rate_rad_s = degToRad(BALANCER_FALL_STOP_RATE_DEG_S);
+static const float g_trim_max_rad = degToRad(BALANCER_TRIM_MAX_DEG);
 
 void init()
 {
@@ -114,6 +116,13 @@ void start(float fused_pitch_rad)
     if (g_active) return;
     g_active = true;
     abbot::log::enableChannel(abbot::log::CHANNEL_BALANCER);
+    // Capture a small trim to compensate floor tilt/sensor bias. Clamp to avoid
+    // masking large errors or upside-down starts.
+    if (fabsf(fused_pitch_rad) > g_trim_max_rad) {
+        g_pitch_trim_rad = copysignf(g_trim_max_rad, fused_pitch_rad);
+    } else {
+        g_pitch_trim_rad = fused_pitch_rad;
+    }
     // Defer motor enabling briefly and only enable when fusion reports ready
     // and the robot is within the auto-enable angle. This avoids enabling
     // motors while the fusion/filter state is still settling after a stop
@@ -148,6 +157,7 @@ void stop()
 {
     if (!g_active) return;
     g_active = false;
+    g_pitch_trim_rad = 0.0f;
     abbot::log::disableChannel(abbot::log::CHANNEL_BALANCER);
     abbot::motor::setMotorCommandBoth(0.0f, 0.0f);
     abbot::motor::disableMotors();
@@ -309,7 +319,7 @@ static float computePidWithDriveSetpoint(float fused_pitch, float fused_pitch_ra
     // Rate-limited debug logging to avoid spamming serial
     static uint32_t last_dbg_ms = 0;
     uint32_t now_ms = millis();
-    if (now_ms - last_dbg_ms > 1000) {
+    if (now_ms - last_dbg_ms > 20) {
         LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
                    "DRIVE DBG tgtV=%.3f filtV=%.3f pitch_sp=%.3fdeg pitch_sp_rate=%.3fdeg/s pid_in=%.3fdeg pid_rate=%.3fdeg/s pid_out=%.3f\n",
                    (double)g_drive_target_v,
@@ -404,7 +414,7 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
             if (!abbot::isFusionReady()) {
                 LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: delayed enable deferred - fusion not ready");
                 g_pending_enable_ts = now + g_enable_delay_ms;
-            } else if (fabsf(cur_pitch_deg) > g_start_stable_angle_rad) {
+            } else if (fabsf(fused_pitch) > g_start_stable_angle_rad) {
                 char msg[128];
                 snprintf(msg, sizeof(msg), "BALANCER: delayed enable deferred - pitch %.2f deg outside %.2f deg", (double)cur_pitch_deg, (double)radToDeg(g_start_stable_angle_rad));
                 LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
@@ -433,9 +443,17 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
     //       Pitch sign is handled by accel_sign/gyro_sign in FusionConfig.h
     
     // Compute PID output taking into account the drive-setpoint->pitch mapping
-    float pid_out = computePidWithDriveSetpoint(fused_pitch, fused_pitch_rate, dt);
+    float pitch_for_control = fused_pitch - g_pitch_trim_rad;
+    float pid_out = computePidWithDriveSetpoint(pitch_for_control, fused_pitch_rate, dt);
+    // Compute pid_in here (pitch error) for logging (pitch_sp computed from filtered drive)
+    float pitch_sp = g_drive_v_filtered * g_drive_max_pitch_rad;
+    float pid_in = pitch_for_control - pitch_sp;
     float cmd = pid_out;  // No negation - same sign as pitch for catching behavior
-    // clamp
+    // clamp (pre-slew). Keep a copy for logging to inspect clamp vs slew behavior
+    float cmd_pre_slew = cmd;
+    if (cmd_pre_slew > 1.0f) cmd_pre_slew = 1.0f;
+    if (cmd_pre_slew < -1.0f) cmd_pre_slew = -1.0f;
+    // apply the clamp to cmd (we'll apply slew after)
     if (cmd > 1.0f) cmd = 1.0f;
     if (cmd < -1.0f) cmd = -1.0f;
     // slew (apply rate limit to prevent abrupt changes)
@@ -444,6 +462,16 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
     if (delta > max_delta) delta = max_delta;
     if (delta < -max_delta) delta = -max_delta;
     cmd = g_last_cmd + delta;
+    // Rate-limited debug logging for PID vs final commanded value (every ~200ms)
+    static uint32_t last_cmd_dbg_ms = 0;
+    uint32_t now_cmd_dbg_ms = millis();
+    if ((int32_t)(now_cmd_dbg_ms - last_cmd_dbg_ms) >= 200) {
+        LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
+                   "BALANCER_DBG pitch=%.2fdeg pitch_rate=%.2fdeg/s pid_in=%.3f pid_out=%.3f cmd_pre_slew=%.3f cmd_after_slew=%.3f last_cmd=%.3f\n",
+                   (double)radToDeg(fused_pitch), (double)radToDeg(fused_pitch_rate), (double)radToDeg(pid_in), (double)pid_out,
+                   (double)cmd_pre_slew, (double)cmd, (double)g_last_cmd);
+        last_cmd_dbg_ms = now_cmd_dbg_ms;
+    }
     // deadband: only apply when command is non-zero after slew
     // If magnitude below threshold, zero it (allows smooth zero-crossing)
     // BUT: skip deadband if last_cmd was zero (startup/recovery) to allow initial response

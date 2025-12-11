@@ -34,31 +34,38 @@
 // NOTE: In POSITION mode with servo asservissement, deadband can be reduced
 // since the servo actively holds position even with small commands.
 #ifndef BALANCER_MOTOR_MIN_OUTPUT
-#define BALANCER_MOTOR_MIN_OUTPUT 0.02f
+#define BALANCER_MOTOR_MIN_OUTPUT 0.01f
 #endif
 
 // Command slew limit (normalized units per second). Prevents instant full-power
 // steps from small transients. Set to 10.0f for faster response (command can change by 10.0 per second).
 #ifndef BALANCER_CMD_SLEW_LIMIT
-#define BALANCER_CMD_SLEW_LIMIT 10.0f
+#define BALANCER_CMD_SLEW_LIMIT 2000.0f
 #endif
 
 // Angle limit (degrees) for auto-enabling motors when starting balancer.
 // If the absolute fused pitch is greater than this value, motors will not
 // be auto-enabled to avoid trying to balance a fallen robot.
 #ifndef BALANCER_AUTO_ENABLE_ANGLE_DEG
-#define BALANCER_AUTO_ENABLE_ANGLE_DEG 30.0f
+#define BALANCER_AUTO_ENABLE_ANGLE_DEG 6.0f
 #endif
 
 // Smaller threshold (degrees) indicating the robot must be close to vertical
 // before permitting motors to enable after a start request.
 #ifndef BALANCER_START_STABLE_ANGLE_DEG
-#define BALANCER_START_STABLE_ANGLE_DEG 3.0f
+#define BALANCER_START_STABLE_ANGLE_DEG 2.0f
 #endif
 
 // Maximum absolute pitch rate (deg/s) allowed for the initial enable window.
 #ifndef BALANCER_START_STABLE_PITCH_RATE_DEG_S
 #define BALANCER_START_STABLE_PITCH_RATE_DEG_S 8.0f
+#endif
+
+// Maximum absolute trim applied at start (degrees). The controller will capture
+// the current fused pitch at BALANCE START, clamp it to this value, and subtract
+// it from subsequent control to compensate for minor floor tilt or sensor bias.
+#ifndef BALANCER_TRIM_MAX_DEG
+#define BALANCER_TRIM_MAX_DEG 8.0f
 #endif
 
 // If the robot exceeds this absolute pitch (degrees), automatically stop the
@@ -76,7 +83,7 @@
 // How quickly the normalized forward command (v) may change (units/sec).
 // Higher = more responsive. Safe default = 2.0f (full step ~0.5s).
 #ifndef DRIVE_V_SLEW
-#define DRIVE_V_SLEW 3.2f
+#define DRIVE_V_SLEW 1.5f
 #endif
 
 // Maximum pitch (degrees) the drive command will request from the balancer.

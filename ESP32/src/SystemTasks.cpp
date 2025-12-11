@@ -9,7 +9,7 @@
 #include "imu_consumer_helpers.h"
 #include "imu_filter.h"
 #include "../config/imu_filter_config.h"
-#include "motor_driver.h"
+#include "motor_drivers/servo_motor_driver.h"
 #include "tuning_capture.h"
 #include "../include/balancer_controller.h"
 #include "../config/motor_config.h"
