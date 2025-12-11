@@ -3,7 +3,7 @@
 // Servos run in Wheel mode, position is tracked as int64_t (unlimited range)
 
 #include "motor_drivers/servo_motor_driver.h"
-#include "../config/motor_config.h"
+#include "../config/motor_configs/servo_motor_config.h"
 #include "logging.h"
 #include <Arduino.h>
 #if MOTOR_DRIVER_REAL

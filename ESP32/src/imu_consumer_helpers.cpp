@@ -5,7 +5,6 @@
 #include "imu_calibration.h"
 #include <cmath>
 #include "motor_drivers/driver_manager.h"
-#include "../config/motor_config.h"
 #include "../include/balancer_controller.h"
 
 namespace abbot {
@@ -153,8 +152,9 @@ void runBalancerCycleIfActive(float fused_pitch_local,
   if (abbot::balancer::controller::isActive() || abbot::balancer::controller::isAutotuning()) {
     (void)abbot::balancer::controller::processCycle(fused_pitch_local, fused_pitch_rate_local, dt);
     if (auto drv = abbot::motor::getActiveMotorDriver()) {
-      left_cmd = drv->getLastMotorCommand(LEFT_MOTOR_ID);
-      right_cmd = drv->getLastMotorCommand(RIGHT_MOTOR_ID);
+      // Query last commands by MotorSide to avoid depending on driver-specific IDs
+      left_cmd = drv->getLastMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT);
+      right_cmd = drv->getLastMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT);
     } else {
       left_cmd = 0.0f;
       right_cmd = 0.0f;

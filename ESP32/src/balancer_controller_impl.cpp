@@ -16,7 +16,7 @@
 
 // Configs
 #include "../config/balancer_config.h"
-#include "../config/motor_config.h"
+#include "../config/motor_configs/servo_motor_config.h"
 
 namespace abbot {
 namespace balancer {
@@ -540,8 +540,8 @@ void stopAutotune()
     
     // Zero and disable motors
     if (auto d = abbot::motor::getActiveMotorDriver()) {
-        d->setMotorCommand(LEFT_MOTOR_ID, 0.0f);
-        d->setMotorCommand(RIGHT_MOTOR_ID, 0.0f);
+        d->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT, 0.0f);
+        d->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT, 0.0f);
         d->disableMotors();
     }
     

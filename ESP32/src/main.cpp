@@ -8,7 +8,7 @@
 #include "btle_hid.h"
 #include "serial_commands.h"
 #include "logging.h"
-#include "../config/motor_config.h"
+#include "../config/motor_configs/servo_motor_config.h"
 
 static abbot::BMI088Config bmi_cfg; 
 static abbot::BMI088Driver bmi_driver(bmi_cfg);
@@ -56,8 +56,8 @@ void setup() {
     #if MOTOR_DRIVER_REAL
         {
             if (auto drv = abbot::motor::getActiveMotorDriver()) {
-                int32_t left_pos = drv->readEncoder(LEFT_MOTOR_ID);
-                int32_t right_pos = drv->readEncoder(RIGHT_MOTOR_ID);
+                int32_t left_pos = drv->readEncoder(abbot::motor::IMotorDriver::MotorSide::LEFT);
+                int32_t right_pos = drv->readEncoder(abbot::motor::IMotorDriver::MotorSide::RIGHT);
                 LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: encoder LEFT_ID=%d pos=%ld\n", LEFT_MOTOR_ID, left_pos);
                 LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: encoder RIGHT_ID=%d pos=%ld\n", RIGHT_MOTOR_ID, right_pos);
             }

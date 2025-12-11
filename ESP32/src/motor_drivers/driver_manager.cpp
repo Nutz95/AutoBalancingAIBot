@@ -27,5 +27,48 @@ void installDefaultServoAdapter();
 // to use the manager can call `installDefaultServoAdapter()` during init
 // or rely on this implicit install below by calling it explicitly in setup.
 
+// --- Helper implementations ---
+int getActiveMotorId(IMotorDriver::MotorSide side, int fallback) {
+  if (g_active) {
+    return g_active->getMotorId(side);
+  }
+  return fallback;
+}
+
+bool isActiveMotorInverted(IMotorDriver::MotorSide side, bool fallback) {
+  if (g_active) {
+    return g_active->isMotorInverted(side);
+  }
+  return fallback;
+}
+
+float getActiveVelocityMaxSpeed(float fallback) {
+  if (g_active) {
+    return g_active->getVelocityMaxSpeed();
+  }
+  return fallback;
+}
+
+float getActiveVelocityTargetIncrementScale(float fallback) {
+  if (g_active) {
+    return g_active->getVelocityTargetIncrementScale();
+  }
+  return fallback;
+}
+
+float getActiveVelocityPositionKp(float fallback) {
+  if (g_active) {
+    return g_active->getVelocityPositionKp();
+  }
+  return fallback;
+}
+
+const char* getActiveDriverName(const char* fallback) {
+  if (g_active) {
+    return g_active->getDriverName();
+  }
+  return fallback;
+}
+
 } // namespace motor
 } // namespace abbot

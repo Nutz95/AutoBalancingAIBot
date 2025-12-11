@@ -12,7 +12,7 @@
 #include "motor_drivers/driver_manager.h"
 #include "tuning_capture.h"
 #include "../include/balancer_controller.h"
-#include "../config/motor_config.h"
+#include "../config/motor_configs/servo_motor_config.h"
 #include "../config/board_config.h"
 #include "status_led.h"
 #include "../config/balancer_config.h"
@@ -169,8 +169,8 @@ static void imuConsumerTask(void *pvParameters) {
       float left_cmd = 0.0f;
       float right_cmd = 0.0f;
       if (auto drv = abbot::motor::getActiveMotorDriver()) {
-        left_cmd = drv->getLastMotorCommand(LEFT_MOTOR_ID);
-        right_cmd = drv->getLastMotorCommand(RIGHT_MOTOR_ID);
+        left_cmd = drv->getLastMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT);
+        right_cmd = drv->getLastMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT);
       }
       abbot::imu_consumer::runBalancerCycleIfActive(fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd);
 

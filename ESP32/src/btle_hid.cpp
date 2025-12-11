@@ -3,7 +3,7 @@
 #include "SystemTasks.h"
 #include <NimBLEDevice.h>
 #include "motor_drivers/driver_manager.h"
-#include "../config/motor_config.h" // LEFT_MOTOR_ID / RIGHT_MOTOR_ID
+#include "../config/motor_configs/servo_motor_config.h" // LEFT_MOTOR_ID / RIGHT_MOTOR_ID
 #include "logging.h"
 #include "btle_callbacks.h"
 #include "balancer_controller.h" // for balance toggle

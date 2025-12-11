@@ -2,7 +2,7 @@
 #include "serial_commands.h"
 #include "imu_calibration.h"
 #include "motor_drivers/driver_manager.h"
-#include "../config/motor_config.h"
+#include "../config/motor_configs/servo_motor_config.h"
 #include "BMI088Driver.h"
 #include "logging.h"
 #include "tuning_capture.h"
@@ -371,11 +371,15 @@ static void motorSetHandler(const String &p) {
   String side = s.substring(0, sp); String val = s.substring(sp+1);
   side.toUpperCase();
   if (side == "LEFT") {
-    if (auto d = abbot::motor::getActiveMotorDriver()) d->setMotorCommand(LEFT_MOTOR_ID, val.toFloat()); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    if (auto d = abbot::motor::getActiveMotorDriver()) d->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT, val.toFloat()); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
   } else if (side == "RIGHT") {
-    if (auto d = abbot::motor::getActiveMotorDriver()) d->setMotorCommand(RIGHT_MOTOR_ID, val.toFloat()); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    if (auto d = abbot::motor::getActiveMotorDriver()) d->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT, val.toFloat()); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
   } else {
-    int id = side.toInt(); if (auto d = abbot::motor::getActiveMotorDriver()) d->setMotorCommandRaw(id, (int16_t)val.toInt()); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    int id = side.toInt(); if (auto d = abbot::motor::getActiveMotorDriver()) {
+      if (id == LEFT_MOTOR_ID) d->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::LEFT, (int16_t)val.toInt());
+      else if (id == RIGHT_MOTOR_ID) d->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::RIGHT, (int16_t)val.toInt());
+      else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Unknown motor id");
+    } else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
   }
 }
 
