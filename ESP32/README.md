@@ -103,6 +103,48 @@ Basic serial commands (send as plain text lines):
 - `MOTOR SET <LEFT|RIGHT|ID> RAW <value>` - send raw signed servo units directly (use short pulses)
 - `MOTOR PARAMS <LEFT|RIGHT|ID>` - dump servo EEPROM/SRAM parameters and present status
 
+Notes on alternative motorizations
+---------------------------------
+
+ - DC motors with Hall-effect encoder: supported hardware example — JGB37-520 (12V) with 56:1 gearbox.
+	- These motors include a dual Hall-effect encoder (two sensors). Vendor wiring and signal mapping (translated from the product documentation):
+		- Red wire — motor positive supply (+). Reversing motor + and - changes rotation direction.
+		- White wire — motor negative supply (-).
+		- Yellow wire — encoder signal A (vendor notes ~11 pulses per motor revolution).
+		- Green wire — encoder signal B (vendor notes ~11 pulses per motor revolution from the second sensor).
+		- Blue wire — encoder supply positive for the sensors (+3.3–5 V). Do not swap polarity.
+		- Black wire — encoder supply negative (GND). Do not swap polarity.
+	- Encoder resolution: the vendor specifies ~11 pulses per motor revolution per sensor; in quadrature this corresponds to approximately 44 counts per motor revolution. This value is measured at the motor shaft (before the gearbox reduction). To obtain counts per output-shaft revolution, multiply by the gearbox ratio (or divide accordingly depending on how you convert motor→output shaft).
+	- Mechanical details: output shaft diameter 6 mm (D-type), length 14 mm.
+	- The vendor motor specification table (speeds, no-load currents, stall torque, gearbox lengths for each reduction) is included in this repository under `ESP32/tools/JGB37-520_Table.png` — consult it for exact numbers matching your gearbox choice.
+	- These motors require an H-bridge motor driver with sufficient continuous/peak current capability and an encoder reader on the MCU to implement closed-loop control (velocity/position).
+
+ - DC motor driver example: BTS7960 (43A)
+	- The project commonly uses the BTS7960 dual-MOSFET H-bridge modules (marketed as "BTS7960 43A" motor drivers). Typical characteristics to consider:
+		- Dual half-bridge power stage suitable for 6–24 V motor supplies (verify module rating and power connectors for your variant).
+		- Peak current rating often advertised around 43 A (short bursts); sustained/continuous current depends on cooling and the exact module — expect much lower continuous ratings without significant heatsinking (e.g., 10–30 A depending on cooling).
+		- Typical control interface: PWM input(s) for direction/speed, enable signals, and gate/logic powered at 5 V (check your module). Some boards provide current-sense outputs, but many low-cost modules do not — use appropriate fusing and current measurement if needed.
+		- Provide proper heat-sinking, wiring, and fusing — high-current operation requires careful thermal and supply design.
+	- When using BTS7960 modules with the JGB37 motors, ensure your power supply can supply the motor stall/transient currents and include a fuse or current-limiter for safety.
+	- Vendor / module features (typical IBT-2 / BTS7960 modules):
+		- Uses Infineon BTS7960 high-power H-bridge driver chips with onboard protections.
+		- Over-temperature, over-voltage, under-voltage and over-current protection.
+		- Short-circuit protection.
+		- Current diagnostics/support and slope (current ramp) adjustment.
+		- Dead-time generation between half-bridges for safe switching.
+		- Typical module designation: IBT-2.
+		- Input voltage range commonly 6 V–27 V (check your module label).
+		- Maximum (peak) current advertised: up to 43 A (short bursts). Continuous current depends on cooling and wiring.
+		- Logic/input level: 3.3–5 V (PWM or level control). Duty cycle: 0–100%.
+	- These features mean BTS7960 modules are a robust choice for medium-power DC motors, but verify your exact module's datasheet and observe safe wiring, cooling, and fusing practices when using them with the JGB37 family.
+
+- Stepper motors (NEMA17) with step driver / MKS SERVO42D: the project can be adapted to drive steppers using `EN/DIR/STEP` pins and typical stepper driver wiring. Steppers are suited when precise open-loop positioning or microstepping velocity control is desired.
+
+STS3215HS servo evaluation
+-------------------------
+
+An initial attempt to use the STS3215HS / SCServo family for velocity-mode balancing was _not_ successful in this project. In practice we observed a significant latency between issuing a velocity command and the servo's physical response in Wheel/velocity mode. That latency (and internal smoothing/acceleration behavior) made closed-loop balancing unreliable. For that reason the codebase now includes a modular `motor_drivers/` layout so you can implement and test alternate drivers (DC+encoder, stepper) more easily.
+
 Filter selection & per-filter PID gains
 -------------------------------------
 

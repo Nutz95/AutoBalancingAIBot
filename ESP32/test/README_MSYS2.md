@@ -41,6 +41,19 @@ g++ -std=c++17 -O2 -I include test/pid_controller_tests.cpp src/pid_controller.c
 build/pid_controller_tests.exe
 ```
 
+Driver manager test
+-------------------
+We added a small host-native test that verifies `driver_manager` set/get behavior. It is built and run by the `build_test.sh` script automatically. To compile and run it manually in the MSYS2 MinGW64 shell:
+
+```bash
+g++ -std=c++17 -O2 -I include test/driver_manager_tests.cpp src/motor_drivers/driver_manager.cpp -o build/driver_manager_tests.exe -DUNIT_TEST_HOST
+./build/driver_manager_tests.exe
+```
+
+Notes:
+- The test compiles with `-DUNIT_TEST_HOST` so headers that normally include `Arduino.h` are adapted for host builds.
+- If you run into missing-symbol or include errors, ensure you're using the `MSYS2 MinGW 64-bit` shell and that `build/` exists.
+
 ### ❌ Known Issue: PowerShell/Python compilation fails
 
 ~~The provided `build_test.ps1` and `build_test.py` scripts~~ PowerShell and Python scripts were tested but **fail to compile** when run from Windows due to g++ environment issues. Only the bash script `build_test.sh` works reliably in MSYS2.

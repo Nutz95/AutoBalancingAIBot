@@ -2,7 +2,12 @@
 #pragma once
 #include <cstdint>
 #include <cstddef>
+#if defined(UNIT_TEST_HOST)
+#include <string>
+using String = std::string;
+#else
 #include <Arduino.h>
+#endif
 
 // Lightweight logging helpers: prefer using the channel-gated macros below
 // so that messages are only evaluated/printed when the channel is enabled.
