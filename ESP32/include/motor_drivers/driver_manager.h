@@ -16,5 +16,9 @@ IMotorDriver *getActiveMotorDriver();
 // servo code to act as the driver for the manager.
 void installDefaultServoAdapter();
 
+// No free-function forwards here; callers should query `getActiveMotorDriver()`
+// and call the appropriate `IMotorDriver` methods, or use the small
+// `motor_control` wrapper for high-level enable/disable queries.
+
 } // namespace motor
 } // namespace abbot

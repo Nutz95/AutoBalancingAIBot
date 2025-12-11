@@ -1,7 +1,7 @@
 #include "btle_callbacks.h"
 #include <NimBLEDevice.h>
 #include "logging.h"
-#include "motor_drivers/servo_motor_driver.h"
+#include "motor_drivers/driver_manager.h"
 
 // Implement externs (actual storage is in btle_hid.cpp)
 // (Declarations are extern in header; storage is defined in btle_hid.cpp)

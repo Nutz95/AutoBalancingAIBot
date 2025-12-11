@@ -20,6 +20,9 @@ IMotorDriver *getActiveMotorDriver() {
 // installDefaultServoAdapter is implemented in servo_adapter.cpp
 void installDefaultServoAdapter();
 
+// No free-function forwards implemented here. Callers should query
+// `getActiveMotorDriver()` and invoke methods on the returned driver.
+
 // Auto-install the servo adapter by default so existing code that wants
 // to use the manager can call `installDefaultServoAdapter()` during init
 // or rely on this implicit install below by calling it explicitly in setup.

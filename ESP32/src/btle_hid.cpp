@@ -2,7 +2,7 @@
 #include "btle_hid.h"
 #include "SystemTasks.h"
 #include <NimBLEDevice.h>
-#include "motor_drivers/servo_motor_driver.h" // auto-enable motors when controller active
+#include "motor_drivers/driver_manager.h"
 #include "../config/motor_config.h" // LEFT_MOTOR_ID / RIGHT_MOTOR_ID
 #include "logging.h"
 #include "btle_callbacks.h"
@@ -58,14 +58,14 @@ static void handleControllerButtons(const uint8_t* pData, size_t length) {
   uint8_t wasPressed = g_lastButtonState & BALANCE_TOGGLE_MASK;
   
   // Balance toggle: falling edge (button released)
-  if (wasPressed && !currentButton) {
+    if (wasPressed && !currentButton) {
     if (abbot::balancer::controller::isActive()) {
       abbot::balancer::controller::stop();
-      abbot::motor::disableMotors();
+      if (auto d = abbot::motor::getActiveMotorDriver()) d->disableMotors();
       LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> BALANCE STOP (controller button)");
     } else {
-      if (!abbot::motor::areMotorsEnabled()) {
-        abbot::motor::enableMotors();
+      if (auto d = abbot::motor::getActiveMotorDriver()) {
+        if (!d->areMotorsEnabled()) d->enableMotors();
       }
       abbot::balancer::controller::start(abbot::getFusedPitch());
       LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> BALANCE START (controller button)");

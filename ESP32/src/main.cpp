@@ -4,7 +4,7 @@
 #include "BMI088Driver.h"
 #include "SystemTasks.h"
 #include "imu_calibration.h"
-#include "motor_drivers/servo_motor_driver.h"
+#include "motor_drivers/driver_manager.h"
 #include "btle_hid.h"
 #include "serial_commands.h"
 #include "logging.h"
@@ -40,16 +40,27 @@ void setup() {
         }
 
         // start IMU producer/consumer tasks for demo
-        // initialize motor driver early so the servo bus is ready for serial commands
-        abbot::motor::initMotorDriver();
+        // Install default servo adapter and initialize motor driver early so the bus is ready
+        abbot::motor::installDefaultServoAdapter();
+        if (auto drv = abbot::motor::getActiveMotorDriver()) {
+            drv->initMotorDriver();
+        }
         // Log motor driver status and attempt to read encoder/status for both motors
-        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: enabled=%s\n", abbot::motor::areMotorsEnabled() ? "YES" : "NO");
+        {
+            bool enabled = false;
+            if (auto drv = abbot::motor::getActiveMotorDriver()) {
+                enabled = drv->areMotorsEnabled();
+            }
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: enabled=%s\n", enabled ? "YES" : "NO");
+        }
     #if MOTOR_DRIVER_REAL
         {
-            int32_t left_pos = abbot::motor::readEncoder(LEFT_MOTOR_ID);
-            int32_t right_pos = abbot::motor::readEncoder(RIGHT_MOTOR_ID);
-            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: encoder LEFT_ID=%d pos=%ld\n", LEFT_MOTOR_ID, left_pos);
-            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: encoder RIGHT_ID=%d pos=%ld\n", RIGHT_MOTOR_ID, right_pos);
+            if (auto drv = abbot::motor::getActiveMotorDriver()) {
+                int32_t left_pos = drv->readEncoder(LEFT_MOTOR_ID);
+                int32_t right_pos = drv->readEncoder(RIGHT_MOTOR_ID);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: encoder LEFT_ID=%d pos=%ld\n", LEFT_MOTOR_ID, left_pos);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: encoder RIGHT_ID=%d pos=%ld\n", RIGHT_MOTOR_ID, right_pos);
+            }
         }
     #endif
 

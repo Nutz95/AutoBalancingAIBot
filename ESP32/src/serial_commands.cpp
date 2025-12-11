@@ -1,7 +1,7 @@
 // serial_commands.cpp
 #include "serial_commands.h"
 #include "imu_calibration.h"
-#include "motor_drivers/servo_motor_driver.h"
+#include "motor_drivers/driver_manager.h"
 #include "../config/motor_config.h"
 #include "BMI088Driver.h"
 #include "logging.h"
@@ -85,19 +85,16 @@ static SerialMenu* buildCalibrationMenu(abbot::BMI088Driver *driver) {
 
 static SerialMenu* buildMotorMenu() {
   SerialMenu *m = new SerialMenu("Motor Commands");
-  m->addEntry(1, "MOTOR ENABLE", [](const String&){ abbot::motor::enableMotors(); });
-  m->addEntry(2, "MOTOR DISABLE", [](const String&){ abbot::motor::disableMotors(); });
-  m->addEntry(3, "MOTOR STATUS", [](const String&){ abbot::motor::printStatus(); });
-  m->addEntry(4, "MOTOR DUMP", [](const String&){ abbot::motor::dumpConfig(); });
-  m->addEntry(5, "MOTOR RESETPOS", [](const String&){ abbot::motor::resetPositionTracking(); });
-  m->addEntry(6, "MOTOR POS", [](const String&){ abbot::motor::processSerialCommand("POS"); });
-  m->addEntry(7, "MOTOR VEL <LEFT|RIGHT> <speed>", [](const String& p){
-    String cmd = "VEL " + p;
-    abbot::motor::processSerialCommand(cmd);
-  });
+  m->addEntry(1, "MOTOR ENABLE", [](const String&){ if (auto d = abbot::motor::getActiveMotorDriver()) d->enableMotors(); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
+  m->addEntry(2, "MOTOR DISABLE", [](const String&){ if (auto d = abbot::motor::getActiveMotorDriver()) d->disableMotors(); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
+  m->addEntry(3, "MOTOR STATUS", [](const String&){ if (auto d = abbot::motor::getActiveMotorDriver()) d->printStatus(); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
+  m->addEntry(4, "MOTOR DUMP", [](const String&){ if (auto d = abbot::motor::getActiveMotorDriver()) d->dumpConfig(); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
+  m->addEntry(5, "MOTOR RESETPOS", [](const String&){ if (auto d = abbot::motor::getActiveMotorDriver()) d->resetPositionTracking(); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
+  m->addEntry(6, "MOTOR POS", [](const String&){ if (auto d = abbot::motor::getActiveMotorDriver()) d->processSerialCommand("POS"); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
+  m->addEntry(7, "MOTOR VEL <LEFT|RIGHT> <speed>", [](const String& p){ String cmd = "VEL " + p; if (auto d = abbot::motor::getActiveMotorDriver()) d->processSerialCommand(cmd); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
   m->addEntry(8, "MOTOR SET <LEFT|RIGHT|ID> <v>", [](const String& p){ motorSetHandler(p); });
-  m->addEntry(9, "MOTOR PARAMS <LEFT|RIGHT>", [](const String& p){ String cmd = "PARAMS " + p; abbot::motor::processSerialCommand(cmd); });
-  m->addEntry(10, "MOTOR ACC <LEFT|RIGHT> <value>", [](const String& p){ String cmd = "ACC " + p; abbot::motor::processSerialCommand(cmd); });
+  m->addEntry(9, "MOTOR PARAMS <LEFT|RIGHT>", [](const String& p){ String cmd = "PARAMS " + p; if (auto d = abbot::motor::getActiveMotorDriver()) d->processSerialCommand(cmd); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
+  m->addEntry(10, "MOTOR ACC <LEFT|RIGHT> <value>", [](const String& p){ String cmd = "ACC " + p; if (auto d = abbot::motor::getActiveMotorDriver()) d->processSerialCommand(cmd); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
   return m;
 }
 
@@ -374,11 +371,11 @@ static void motorSetHandler(const String &p) {
   String side = s.substring(0, sp); String val = s.substring(sp+1);
   side.toUpperCase();
   if (side == "LEFT") {
-    abbot::motor::setMotorCommand(LEFT_MOTOR_ID, val.toFloat());
+    if (auto d = abbot::motor::getActiveMotorDriver()) d->setMotorCommand(LEFT_MOTOR_ID, val.toFloat()); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
   } else if (side == "RIGHT") {
-    abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, val.toFloat());
+    if (auto d = abbot::motor::getActiveMotorDriver()) d->setMotorCommand(RIGHT_MOTOR_ID, val.toFloat()); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
   } else {
-    int id = side.toInt(); abbot::motor::setMotorCommandRaw(id, (int)val.toInt());
+    int id = side.toInt(); if (auto d = abbot::motor::getActiveMotorDriver()) d->setMotorCommandRaw(id, (int16_t)val.toInt()); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
   }
 }
 
@@ -934,7 +931,9 @@ void processSerialLine(abbot::BMI088Driver *driver, const String &line) {
   if (handleFilter(sline, up)) return;
   if (handleBalance(sline, up)) return;
   if (handleAutotune(sline, up)) return;
-  if (abbot::motor::processSerialCommand(sline)) return;
+  if (auto d = abbot::motor::getActiveMotorDriver()) {
+    if (d->processSerialCommand(sline)) return;
+  }
   LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "Unknown command: "); LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, sline);
 }
 

@@ -9,7 +9,7 @@
 #include "imu_consumer_helpers.h"
 #include "imu_filter.h"
 #include "../config/imu_filter_config.h"
-#include "motor_drivers/servo_motor_driver.h"
+#include "motor_drivers/driver_manager.h"
 #include "tuning_capture.h"
 #include "../include/balancer_controller.h"
 #include "../config/motor_config.h"
@@ -166,8 +166,12 @@ static void imuConsumerTask(void *pvParameters) {
       abbot::imu_consumer::publishFusedOutputsUnderMutex(g_consumer, fused_pitch_local, fused_pitch_rate_local, g_fused_pitch_rad, g_fused_pitch_rate_rads, &g_fusion_mutex);
 
       // Read last motor commands (normalized) via motor driver API
-      float left_cmd = abbot::motor::getLastMotorCommand(LEFT_MOTOR_ID);
-      float right_cmd = abbot::motor::getLastMotorCommand(RIGHT_MOTOR_ID);
+      float left_cmd = 0.0f;
+      float right_cmd = 0.0f;
+      if (auto drv = abbot::motor::getActiveMotorDriver()) {
+        left_cmd = drv->getLastMotorCommand(LEFT_MOTOR_ID);
+        right_cmd = drv->getLastMotorCommand(RIGHT_MOTOR_ID);
+      }
       abbot::imu_consumer::runBalancerCycleIfActive(fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd);
 
       // Emit tuning stream or capture outputs

@@ -6,7 +6,7 @@
 
 #include "logging.h"
 #include "pid_controller.h"
-#include "motor_drivers/servo_motor_driver.h"
+#include "motor_drivers/driver_manager.h"
 #include "units.h"
 #include "autotune_controller.h"
 #include <Preferences.h>
@@ -149,7 +149,11 @@ void start(float fused_pitch_rad)
     g_drive_v_filtered = 0.0f;
     g_drive_last_pitch_sp = 0.0f;
     char buf[128];
-    snprintf(buf, sizeof(buf), "BALANCER: started (defaults used) - motors %s", abbot::motor::areMotorsEnabled() ? "ENABLED" : "NOT ENABLED");
+    {
+        bool men = false;
+        if (auto d = abbot::motor::getActiveMotorDriver()) men = d->areMotorsEnabled();
+        snprintf(buf, sizeof(buf), "BALANCER: started (defaults used) - motors %s", men ? "ENABLED" : "NOT ENABLED");
+    }
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
 }
 
@@ -159,8 +163,10 @@ void stop()
     g_active = false;
     g_pitch_trim_rad = 0.0f;
     abbot::log::disableChannel(abbot::log::CHANNEL_BALANCER);
-    abbot::motor::setMotorCommandBoth(0.0f, 0.0f);
-    abbot::motor::disableMotors();
+    if (auto d = abbot::motor::getActiveMotorDriver()) {
+        d->setMotorCommandBoth(0.0f, 0.0f);
+        d->disableMotors();
+    }
     g_pid.reset();
     g_last_cmd = 0.0f;
     // Cancel any pending enable that may have been scheduled by start()
@@ -358,9 +364,9 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
         uint32_t now_ms = millis();
         if (now_ms - last_log_ms > 500) {
             char dbg[128];
+            int men = 0; if (auto d = abbot::motor::getActiveMotorDriver()) men = d->areMotorsEnabled() ? 1 : 0;
             snprintf(dbg, sizeof(dbg), "AUTOTUNE: state=%d err=%.2f° cmd=%.3f motors_en=%d", 
-                (int)g_autotune.getState(), (double)error_deg, (double)autotune_cmd, 
-                abbot::motor::areMotorsEnabled() ? 1 : 0);
+                (int)g_autotune.getState(), (double)error_deg, (double)autotune_cmd, men);
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, dbg);
             last_log_ms = now_ms;
         }
@@ -378,15 +384,14 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
             }
             
             // Zero and disable motors
-            abbot::motor::setMotorCommandBoth(0.0f, 0.0f);
-            abbot::motor::disableMotors();
+            if (auto d = abbot::motor::getActiveMotorDriver()) { d->setMotorCommandBoth(0.0f, 0.0f); d->disableMotors(); }
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: motors disabled automatically");
             return 0.0f;
         }
         
         // Apply autotune command to motors
-        if (abbot::motor::areMotorsEnabled()) {
-            abbot::motor::setMotorCommandBoth(autotune_cmd, autotune_cmd);
+        if (auto d = abbot::motor::getActiveMotorDriver()) {
+            if (d->areMotorsEnabled()) d->setMotorCommandBoth(autotune_cmd, autotune_cmd);
         }
         
         return autotune_cmd;
@@ -425,8 +430,8 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
                 LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
                 g_pending_enable_ts = now + g_enable_delay_ms;
             } else {
-                abbot::motor::enableMotors();
-                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: motors ENABLED after settle");
+                    if (auto d = abbot::motor::getActiveMotorDriver()) d->enableMotors();
+                    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: motors ENABLED after settle");
                 g_pending_enable_ts = 0;
             }
         }
@@ -479,14 +484,21 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt)
         cmd = 0.0f;
     }
     // if motors disabled, skip commanding but return computed value
-    if (!abbot::motor::areMotorsEnabled()) {
-        static bool warned = false;
-        if (!warned) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: motors disabled - not commanding (use MOTOR ENABLE to arm)"); warned = true; }
+    if (auto d = abbot::motor::getActiveMotorDriver()) {
+        if (!d->areMotorsEnabled()) {
+            static bool warned = false;
+            if (!warned) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: motors disabled - not commanding (use MOTOR ENABLE to arm)"); warned = true; }
+            g_last_cmd = cmd;
+            return cmd;
+        }
+        // command both motors simultaneously
+        d->setMotorCommandBoth(cmd, cmd);
+    } else {
+        static bool warned_no_drv = false;
+        if (!warned_no_drv) { LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: no active motor driver - not commanding"); warned_no_drv = true; }
         g_last_cmd = cmd;
         return cmd;
     }
-    // command both motors simultaneously
-    abbot::motor::setMotorCommandBoth(cmd, cmd);
     // LOG_PRINTF(abbot::log::CHANNEL_BALANCER, "BALANCER: cmd=%.4f err=%.6f pitch_deg=%.4f\n", cmd, (double)error, (double)radToDeg(fused_pitch));
     g_last_cmd = cmd;
     return cmd;
@@ -510,7 +522,7 @@ void startAutotune()
     g_autotune_active = true;
     
     // Always enable motors for autotuning
-    abbot::motor::enableMotors();
+    if (auto d = abbot::motor::getActiveMotorDriver()) d->enableMotors();
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: motors enabled automatically");
     
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: started - applying relay control (HOLD THE ROBOT!)");
@@ -527,9 +539,11 @@ void stopAutotune()
     g_autotune_active = false;
     
     // Zero and disable motors
-    abbot::motor::setMotorCommand(LEFT_MOTOR_ID, 0.0f);
-    abbot::motor::setMotorCommand(RIGHT_MOTOR_ID, 0.0f);
-    abbot::motor::disableMotors();
+    if (auto d = abbot::motor::getActiveMotorDriver()) {
+        d->setMotorCommand(LEFT_MOTOR_ID, 0.0f);
+        d->setMotorCommand(RIGHT_MOTOR_ID, 0.0f);
+        d->disableMotors();
+    }
     
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: stopped - motors disabled");
 }
