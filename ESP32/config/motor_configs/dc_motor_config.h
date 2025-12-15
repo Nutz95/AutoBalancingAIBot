@@ -37,30 +37,84 @@
 // Pins for DC driver (per motor). Each DC motor uses two PWM outputs and two
 // enable pins (e.g. for BTS7960). These defaults are placeholders and should
 // be adjusted per-board.
-#ifndef DC_LEFT_PWM_A_PIN
-#define DC_LEFT_PWM_A_PIN 25
+#ifndef DC_LEFT_PWM_R_PIN
+#define DC_LEFT_PWM_R_PIN 40 // GPIO40 green wire R_PWM
 #endif
-#ifndef DC_LEFT_PWM_B_PIN
-#define DC_LEFT_PWM_B_PIN 26
+#ifndef DC_LEFT_PWM_L_PIN
+#define DC_LEFT_PWM_L_PIN 39 // GPIO39 blue wire L_PWM
 #endif
-#ifndef DC_LEFT_EN_A_PIN
-#define DC_LEFT_EN_A_PIN 27
+#ifndef DC_LEFT_EN_R_PIN
+#define DC_LEFT_EN_R_PIN 42 // GPIO42 white wire R_En
 #endif
-#ifndef DC_LEFT_EN_B_PIN
-#define DC_LEFT_EN_B_PIN 14
+#ifndef DC_LEFT_EN_L_PIN
+#define DC_LEFT_EN_L_PIN 41 // GPIO41 yellow wire L_En
 #endif
 
-#ifndef DC_RIGHT_PWM_A_PIN
-#define DC_RIGHT_PWM_A_PIN 32
+#ifndef DC_RIGHT_PWM_R_PIN
+#define DC_RIGHT_PWM_R_PIN 17 // GPIO17 green wire R_PWM
 #endif
-#ifndef DC_RIGHT_PWM_B_PIN
-#define DC_RIGHT_PWM_B_PIN 33
+#ifndef DC_RIGHT_PWM_L_PIN
+#define DC_RIGHT_PWM_L_PIN 18 // GPIO18 blue wire L_PWM
 #endif
-#ifndef DC_RIGHT_EN_A_PIN
-#define DC_RIGHT_EN_A_PIN 12
+#ifndef DC_RIGHT_EN_R_PIN
+#define DC_RIGHT_EN_R_PIN 15 // GPIO15 white wire R_En
 #endif
-#ifndef DC_RIGHT_EN_B_PIN
-#define DC_RIGHT_EN_B_PIN 13
+#ifndef DC_RIGHT_EN_L_PIN
+#define DC_RIGHT_EN_L_PIN 16 // GPIO16 yellow wire L_En
+#endif
+
+// -----------------------------------------------------------------------------
+// Encoder pin configuration
+// Provide two input pins per motor for the quadrature encoder (A and B).
+// Set to -1 if not present on this platform.
+#ifndef DC_LEFT_ENCODER_A_PIN
+#define DC_LEFT_ENCODER_A_PIN 1 // GPIO1 -> Yellow Wire
+#endif
+#ifndef DC_LEFT_ENCODER_B_PIN
+#define DC_LEFT_ENCODER_B_PIN 2 // GPIO2 ->Green Wire
+#endif
+
+#ifndef DC_RIGHT_ENCODER_A_PIN
+#define DC_RIGHT_ENCODER_A_PIN 6 // GPIO6 -> Yellow Wire
+#endif
+#ifndef DC_RIGHT_ENCODER_B_PIN
+#define DC_RIGHT_ENCODER_B_PIN 7 // GPIO7 -> Green Wire
+#endif
+
+// Number of raw signals (pulses) produced on each encoder pin per motor
+// revolution. For a typical incremental encoder this is the pulses-per-rev
+// per channel. The total quadrature counts per motor revolution is:
+//   QUAD_COUNTS = DC_ENCODER_SIGNALS_PER_PIN * 4
+// To obtain counts at the output shaft (e.g. wheel) multiply by the
+// gear reduction (motor_rev -> wheel_rev):
+//   COUNTS_PER_WHEEL_REV = QUAD_COUNTS * DC_ENCODER_GEAR_REDUCTION
+#ifndef DC_ENCODER_SIGNALS_PER_PIN
+#define DC_ENCODER_SIGNALS_PER_PIN 11
+#endif
+
+// Gear reduction ratio (motor revolutions per wheel revolution). Use 1.0f if
+// the encoder is mounted on the wheel shaft directly. This can be a float.
+#ifndef DC_ENCODER_GEAR_REDUCTION
+#define DC_ENCODER_GEAR_REDUCTION 56.0f
+#endif
+
+// Convenience macro for quadrature counts per motor revolution (integer).
+#ifndef DC_ENCODER_QUADRATURE_COUNTS_PER_MOTOR_REV
+#define DC_ENCODER_QUADRATURE_COUNTS_PER_MOTOR_REV (DC_ENCODER_SIGNALS_PER_PIN * 4)
+#endif
+
+// Delay (in milliseconds) to wait when performing a safe direction change
+// on the H-bridge (deadtime to avoid shoot-through when switching which
+// PWM channel is driven). Units: milliseconds.
+#ifndef DC_DIRECTION_CHANGE_DELAY_MS
+#define DC_DIRECTION_CHANGE_DELAY_MS 1
+#endif
+
+// Enable verbose debug logging inside the DC mirror driver (0/1).
+// Set to 1 to log direction changes, computed duty, channel selections
+// and EN pin actions to the motor log channel.
+#ifndef DC_MIRROR_DRIVER_DEBUG
+#define DC_MIRROR_DRIVER_DEBUG 1
 #endif
 
 // PWM frequency / resolution defaults used by DC driver. Adjust as needed.
@@ -95,5 +149,5 @@
 #define DC_LEFT_MOTOR_INVERT 0
 #endif
 #ifndef DC_RIGHT_MOTOR_INVERT
-#define DC_RIGHT_MOTOR_INVERT 0
+#define DC_RIGHT_MOTOR_INVERT 1
 #endif

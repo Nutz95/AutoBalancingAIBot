@@ -7,3 +7,12 @@
 // Intentionally minimal: concrete driver-specific settings (servo/DC)
 // live in their respective config headers to avoid coupling.
 
+// Select which motor driver to install at startup.
+// Options:
+//   0  -> legacy servo adapter (installDefaultServoAdapter())
+//   1  -> DC mirror driver    (installDefaultDCMirrorDriver())
+// Default: 0
+#ifndef MOTOR_USE_DC_DRIVER
+#define MOTOR_USE_DC_DRIVER 1
+#endif
+

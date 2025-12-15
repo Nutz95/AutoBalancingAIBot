@@ -8,7 +8,7 @@
 #include "btle_hid.h"
 #include "serial_commands.h"
 #include "logging.h"
-#include "../config/motor_configs/servo_motor_config.h"
+#include "../config/motor_configs/motor_common_config.h"
 
 static abbot::BMI088Config bmi_cfg; 
 static abbot::BMI088Driver bmi_driver(bmi_cfg);
@@ -40,10 +40,11 @@ void setup() {
         }
 
         // start IMU producer/consumer tasks for demo
-        // Install default servo adapter and initialize motor driver early so the bus is ready
-        abbot::motor::installDefaultServoAdapter();
+        // Install default motor driver selected via manager/config and initialize
+        abbot::motor::installDefaultMotorDriver();
         if (auto drv = abbot::motor::getActiveMotorDriver()) {
             drv->initMotorDriver();
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: active=%s", abbot::motor::getActiveDriverName("none"));
         }
         // Log motor driver status and attempt to read encoder/status for both motors
         {

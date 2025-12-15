@@ -26,6 +26,11 @@ const char* getActiveDriverName(const char* fallback = "none");
 // servo code to act as the driver for the manager.
 void installDefaultServoAdapter();
 
+// Install the default motor driver selected by configuration.
+// This abstracts which concrete driver is used so callers (e.g. `main.cpp`)
+// only depend on the manager API and not on concrete driver headers.
+void installDefaultMotorDriver();
+
 // --- Compatibility wrappers (ID-based) ---
 // These helpers ease migration for code that still references numeric motor
 // IDs. They map numeric IDs to the configured `MotorSide` via the active

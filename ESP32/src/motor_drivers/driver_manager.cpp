@@ -2,6 +2,10 @@
 #include "../include/motor_drivers/driver_manager.h"
 #include "../include/motor_drivers/IMotorDriver.h"
 #include "logging.h"
+#include "../config/motor_configs/motor_common_config.h"
+#if MOTOR_USE_DC_DRIVER
+#include "../include/motor_drivers/dc_mirror_driver.h"
+#endif
 
 namespace abbot {
 namespace motor {
@@ -68,6 +72,15 @@ const char* getActiveDriverName(const char* fallback) {
     return g_active->getDriverName();
   }
   return fallback;
+}
+
+// Install the default motor driver according to compile-time config.
+void installDefaultMotorDriver() {
+#if MOTOR_USE_DC_DRIVER
+  installDefaultDCMirrorDriver();
+#else
+  installDefaultServoAdapter();
+#endif
 }
 
 // Helper: map numeric id -> MotorSide using active driver's getMotorId

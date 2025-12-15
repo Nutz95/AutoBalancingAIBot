@@ -95,6 +95,7 @@ static SerialMenu* buildMotorMenu() {
   m->addEntry(8, "MOTOR SET <LEFT|RIGHT|ID> <v>", [](const String& p){ motorSetHandler(p); });
   m->addEntry(9, "MOTOR PARAMS <LEFT|RIGHT>", [](const String& p){ String cmd = "PARAMS " + p; if (auto d = abbot::motor::getActiveMotorDriver()) d->processSerialCommand(cmd); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
   m->addEntry(10, "MOTOR ACC <LEFT|RIGHT> <value>", [](const String& p){ String cmd = "ACC " + p; if (auto d = abbot::motor::getActiveMotorDriver()) d->processSerialCommand(cmd); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
+  m->addEntry(11, "MOTOR INVERT <LEFT|RIGHT|ID> [0|1]", [](const String& p){ String cmd = "INVERT " + p; if (auto d = abbot::motor::getActiveMotorDriver()) d->processSerialCommand(cmd); else LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver"); });
   return m;
 }
 

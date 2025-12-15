@@ -2,7 +2,7 @@
 // Adapter implementing IMotorDriver by delegating to the existing
 // servo-based functions in `abbot::motor::*`.
 
-#include "../include/motor_drivers/IMotorDriver.h"
+#include "../include/motor_drivers/AbstractMotorDriver.h"
 #include "../include/motor_drivers/driver_manager.h"
 #include "motor_drivers/servo_motor_driver.h"
 #include "../../config/motor_configs/servo_motor_config.h"
@@ -10,7 +10,7 @@
 namespace abbot {
 namespace motor {
 
-class ServoAdapter : public IMotorDriver {
+class ServoAdapter : public AbstractMotorDriver {
 public:
   void initMotorDriver() override { ::abbot::motor::initMotorDriver(); }
   void clearCommandState() override { ::abbot::motor::clearCommandState(); }
@@ -39,7 +39,6 @@ public:
   // 64-bit position helpers are optional; use readEncoder/resetPositionTracking
   // (no-op) 64-bit helpers are not part of the common interface
   void resetPositionTracking() override { ::abbot::motor::resetPositionTracking(); }
-  bool processSerialCommand(const String &line) override { return ::abbot::motor::processSerialCommand(line); }
 
   // Configuration/query implementations mapped from servo compile-time macros
   int getMotorId(MotorSide side) const override {
