@@ -44,6 +44,7 @@ static void setup_pcnt_unit(int &out_unit, bool &out_configured, pcnt_unit_t uni
   pcnt_counter_resume(unitId);
   out_unit = (int)unitId;
   out_configured = true;
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: configured PCNT unit=%d pulse=%d ctrl=%d\n", (int)unitId, pulse_pin, ctrl_pin);
   // enable high/low limit events and register ISR handler once
   pcnt_event_enable(unitId, PCNT_EVT_H_LIM);
   pcnt_event_enable(unitId, PCNT_EVT_L_LIM);
@@ -143,6 +144,8 @@ void DCMirrorDriver::initMotorDriver() {
 #endif
 
   LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: initMotorDriver() - hardware configured");
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: PCNT configured left=%d unit=%d right=%d unit=%d\n",
+             (int)m_left_pcnt_configured, m_left_pcnt_unit, (int)m_right_pcnt_configured, m_right_pcnt_unit);
 }
 
 void DCMirrorDriver::clearCommandState() {
@@ -196,6 +199,8 @@ void DCMirrorDriver::printStatus() {
   snprintf(buf, sizeof(buf), "DCMirrorDriver: enabled=%d left_cmd=%.3f right_cmd=%.3f left_enc=%lld right_enc=%lld",
            (int)m_enabled, (double)m_last_left_cmd, (double)m_last_right_cmd, (long long)m_left_encoder, (long long)m_right_encoder);
   LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, buf);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: PCNT left_configured=%d left_unit=%d right_configured=%d right_unit=%d\n",
+             (int)m_left_pcnt_configured, m_left_pcnt_unit, (int)m_right_pcnt_configured, m_right_pcnt_unit);
 }
 
 void DCMirrorDriver::dumpConfig() {
@@ -229,8 +234,13 @@ void DCMirrorDriver::setMotorCommandBoth(float left_command, float right_command
   const float scale = DC_VELOCITY_TARGET_INCREMENT_SCALE; // counts per cycle per unit command
   int32_t left_inc = (int32_t)roundf(left_command * scale);
   int32_t right_inc = (int32_t)roundf(right_command * scale);
+  // Only apply simulated increments when a hardware encoder is NOT present
+#if !DC_ENCODER_PRESENT_LEFT
   m_left_encoder += left_inc;
+#endif
+#if !DC_ENCODER_PRESENT_RIGHT
   m_right_encoder += right_inc;
+#endif
   applyMirrorIfNeeded();
   checkDivergenceAndSafety();
 }
@@ -255,11 +265,12 @@ int32_t DCMirrorDriver::readEncoder(MotorSide side) {
   // mirror of the authoritative encoder if mirror mode enabled.
   if (side == MotorSide::LEFT) {
     if (DC_ENCODER_PRESENT_LEFT) {
-        if (m_left_pcnt_configured) {
-          readAndAccumulatePCNT((pcnt_unit_t)m_left_pcnt_unit, m_left_encoder, DC_ENCODER_SIGNALS_PER_PIN);
+          if (m_left_pcnt_configured) {
+            readAndAccumulatePCNT((pcnt_unit_t)m_left_pcnt_unit, m_left_encoder, DC_ENCODER_SIGNALS_PER_PIN);
+            return (int32_t)m_left_encoder;
+          }
+          LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: readEncoder LEFT - PCNT not configured, returning simulated=%lld\n", (long long)m_left_encoder);
           return (int32_t)m_left_encoder;
-        }
-      return (int32_t)m_left_encoder;
     }
     if (DC_MIRROR_MODE_ENABLED) {
       // mirror from auth side
@@ -277,6 +288,7 @@ int32_t DCMirrorDriver::readEncoder(MotorSide side) {
         readAndAccumulatePCNT((pcnt_unit_t)m_right_pcnt_unit, m_right_encoder, DC_ENCODER_SIGNALS_PER_PIN);
         return (int32_t)m_right_encoder;
       }
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: readEncoder RIGHT - PCNT not configured, returning simulated=%lld\n", (long long)m_right_encoder);
       return (int32_t)m_right_encoder;
     }
     if (DC_MIRROR_MODE_ENABLED) {
