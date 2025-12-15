@@ -71,12 +71,17 @@ void begin() {
   loadCredentials();
   if (s_ssid.length() > 0) {
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "WIFI-CONSOLE: attempting connect to SSID '%s'\n", s_ssid.c_str());
+    // Ensure WiFi subsystem is in station mode before starting network operations
+    WiFi.mode(WIFI_STA);
     WiFi.begin(s_ssid.c_str(), s_pass.c_str());
-    // Non-blocking: we'll poll in loop() for connection
+    // Non-blocking: we'll poll in loop() for connection; start server once connected
   } else {
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI-CONSOLE: no stored SSID (use WIFI SET commands)");
   }
-  startServer();
+  // Do not start the TCP server here when no credentials are present —
+  // starting the server before the TCP/IP stack is initialized can cause
+  // lwIP assertions (Invalid mbox). The server will be started when the
+  // WiFi status becomes WL_CONNECTED in loop().
 }
 
 void connectNow() {
@@ -118,10 +123,21 @@ void loop() {
   // If not connected, attempt periodic reconnects (non-aggressive)
   if (curStatus != WL_CONNECTED) {
     if (s_ssid.length() > 0 && (now - s_lastConnectAttemptMs) >= kReconnectIntervalMs) {
-      s_lastConnectAttemptMs = now;
-      LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "WIFI-CONSOLE: periodic reconnect attempt to SSID='%s'\n", s_ssid.c_str());
-      WiFi.mode(WIFI_STA);
-      WiFi.begin(s_ssid.c_str(), s_pass.c_str());
+      // Only attempt a new begin() when we're in a state that allows a fresh
+      // connection attempt (avoid calling begin() repeatedly while in
+      // CONNECTING/SCANNING/IDLE which can interfere with the network stack).
+      if (curStatus == WL_DISCONNECTED || curStatus == WL_CONNECT_FAILED) {
+        s_lastConnectAttemptMs = now;
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "WIFI-CONSOLE: periodic reconnect attempt to SSID='%s'\n", s_ssid.c_str());
+        // Only set station mode if STA bit isn't already enabled to avoid
+        // toggling AP state unexpectedly.
+        if ((WiFi.getMode() & WIFI_MODE_STA) == 0) {
+          WiFi.mode(WIFI_MODE_STA);
+        }
+        WiFi.begin(s_ssid.c_str(), s_pass.c_str());
+      } else {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "WIFI-CONSOLE: periodic reconnect skipped (status=%d)\n", curStatus);
+      }
     }
   }
 
