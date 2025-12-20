@@ -19,9 +19,16 @@ void sendLine(const char *line);
 void connectNow();
 void disconnectNow();
 
-// Diagnostics: fill provided buffer with a short status summary (null-terminated)
-// bufLen should be large enough (256 recommended).
+// Diagnostics: fill provided buffer with a short status summary
+// (null-terminated) bufLen should be large enough (256 recommended).
 void getDiagnostics(char *buf, size_t bufLen);
+
+// Notes:
+// - The module will attempt periodic reconnects when credentials are
+//   present. To avoid flooding serial output, skipped reconnect logs are
+//   throttled by default (implementation detail). The reconnect interval
+//   and throttle are implementation constants and may be exposed via runtime
+//   Preferences in a future update.
 
 } // namespace wifi_console
 } // namespace abbot

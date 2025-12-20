@@ -23,8 +23,9 @@ void processSerialLine(abbot::BMI088Driver *driver, const String &line);
 // the task's configured driver. Safe to call from the Wi‑Fi console.
 void receiveRemoteLine(const String &line);
 
-// Start the interactive numeric serial menu (prints the menu and makes it active).
-// Pass a pointer to the `BMI088Driver` so calibration commands can be bound.
+// Start the interactive numeric serial menu (prints the menu and makes it
+// active). Pass a pointer to the `BMI088Driver` so calibration commands can be
+// bound.
 void startInteractiveMenu(abbot::BMI088Driver *driver);
 
 } // namespace serialcmds

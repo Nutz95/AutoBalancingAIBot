@@ -1,8 +1,8 @@
 #pragma once
-#include "imu_fusion.h"
-#include "imu_filter.h"
 #include "BMI088Driver.h"
 #include "imu_calibration.h"
+#include "imu_filter.h"
+#include "imu_fusion.h"
 #include <Preferences.h>
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
@@ -24,7 +24,7 @@ struct ConsumerState {
   float warm_gy_sum = 0.0f;
   float warm_gz_sum = 0.0f;
   // runtime gyro bias (rad/s)
-  float gyro_bias[3] = { 0.0f, 0.0f, 0.0f };
+  float gyro_bias[3] = {0.0f, 0.0f, 0.0f};
   bool gyro_bias_initialized = false;
   // EMA and persistence parameters (tunable)
   float bias_ema_alpha = 0.01f;
@@ -34,23 +34,29 @@ struct ConsumerState {
   bool pending_initial_persist = false;
   uint32_t initial_persist_deadline_ms = 0;
   uint32_t initial_persist_timeout_ms = 5000;
-  float initial_persist_candidate[3] = { 0.0f, 0.0f, 0.0f };
+  float initial_persist_candidate[3] = {0.0f, 0.0f, 0.0f};
   // Preferences pointer (may be null if NVS unavailable)
   Preferences *prefs = nullptr;
   bool prefs_started = false;
 };
 
 // Compute dt (seconds) and update state's last timestamp
-float computeDt(ConsumerState &state, const IMUSample &sample, float sample_rate_hz);
+float computeDt(ConsumerState &state, const IMUSample &sample,
+                float sample_rate_hz);
 
 // Accumulate warmup sums if warmup requested
-void accumulateWarmup(ConsumerState &state, const IMUSample &sample, float gx, float gy, float gz);
+void accumulateWarmup(ConsumerState &state, const IMUSample &sample, float gx,
+                      float gy, float gz);
 
-// If warmup finished, seed Madgwick from average accel and mark bias initialized
-void finalizeWarmupIfDone(ConsumerState &state, abbot::IMUFilter &filter, const fusion::FusionConfig &cfg);
+// If warmup finished, seed Madgwick from average accel and mark bias
+// initialized
+void finalizeWarmupIfDone(ConsumerState &state, abbot::IMUFilter &filter,
+                          const fusion::FusionConfig &cfg);
 
 // Update gyro bias EMA when stationary and persist into NVS when conditions met
-void updateBiasEmaAndPersistIfNeeded(ConsumerState &state, const IMUSample &sample, const float gyro_robot[3]);
+void updateBiasEmaAndPersistIfNeeded(ConsumerState &state,
+                                     const IMUSample &sample,
+                                     const float gyro_robot[3]);
 
 // Publish fused outputs under a provided mutex & storage locations
 void publishFusedOutputsUnderMutex(ConsumerState &state,
@@ -62,36 +68,31 @@ void publishFusedOutputsUnderMutex(ConsumerState &state,
 
 // Run balancer cycle (calls controller) and refresh last motor commands
 void runBalancerCycleIfActive(float fused_pitch_local,
-                              float fused_pitch_rate_local,
-                              float dt,
-                              float &left_cmd,
-                              float &right_cmd);
+                              float fused_pitch_rate_local, float dt,
+                              float &left_cmd, float &right_cmd);
 
 // Emit tuning/capture output (CSV or capture submit)
-void emitTuningOrStream(const ConsumerState &state,
-                        const IMUSample &sample,
-                        float fused_pitch_local,
-                        float fused_pitch_rate_local,
-                        const float accel_robot[3],
-                        const float gyro_robot[3],
-                        float left_cmd,
-                        float right_cmd);
+void emitTuningOrStream(const ConsumerState &state, const IMUSample &sample,
+                        float fused_pitch_local, float fused_pitch_rate_local,
+                        const float accel_robot[3], const float gyro_robot[3],
+                        float left_cmd, float right_cmd);
 
 // --- New Initialization & Diagnostics Helpers ---
-// Initialize consumer state from Preferences (loads persisted gyro bias if present).
-void initializeConsumerStateFromPreferences(ConsumerState &state, Preferences &prefs);
-// Initialize consumer state gyro bias from IMU calibration if Preferences missing or zero.
-void initializeConsumerStateFromCalibrationIfNeeded(ConsumerState &state,
-                                                    const abbot::imu_cal::Calibration &cal,
-                                                    bool prefs_started,
-                                                    Preferences *prefs);
-// Request warmup period (seconds) converting to sample count via provided sample rate.
+// Initialize consumer state from Preferences (loads persisted gyro bias if
+// present).
+void initializeConsumerStateFromPreferences(ConsumerState &state,
+                                            Preferences &prefs);
+// Initialize consumer state gyro bias from IMU calibration if Preferences
+// missing or zero.
+void initializeConsumerStateFromCalibrationIfNeeded(
+    ConsumerState &state, const abbot::imu_cal::Calibration &cal,
+    bool prefs_started, Preferences *prefs);
+// Request warmup period (seconds) converting to sample count via provided
+// sample rate.
 void requestWarmup(ConsumerState &state, float seconds, float sample_rate_hz);
 // Emit balancer diagnostics if BALANCER channel enabled.
-void emitDiagnosticsIfEnabled(uint32_t ts_ms,
-                              float fused_pitch_local,
-                              float fused_pitch_rate_local,
-                              float left_cmd,
+void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
+                              float fused_pitch_rate_local, float left_cmd,
                               float right_cmd);
 
 } // namespace imu_consumer

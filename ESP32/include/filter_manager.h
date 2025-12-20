@@ -1,8 +1,8 @@
 // filter_manager.h
 #pragma once
 
-#include "imu_filter.h"
 #include "../config/FusionConfig.h"
+#include "imu_filter.h"
 #include <memory>
 
 namespace abbot {
@@ -18,11 +18,11 @@ std::shared_ptr<IMUFilter> getActiveFilter();
 
 // Query available filters
 int getAvailableFilterCount();
-const char* getAvailableFilterName(int idx);
+const char *getAvailableFilterName(int idx);
 
 // Get/set current filter (name strings are simple ascii upper-case)
-const char* getCurrentFilterName();
-bool setCurrentFilterByName(const char* name);
+const char *getCurrentFilterName();
+bool setCurrentFilterByName(const char *name);
 
 } // namespace filter
 } // namespace abbot

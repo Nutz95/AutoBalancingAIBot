@@ -18,10 +18,7 @@ class IMotorDriver {
 public:
   virtual ~IMotorDriver() {}
   // Motor side selector for per-motor queries
-  enum class MotorSide {
-    LEFT = 0,
-    RIGHT = 1
-  };
+  enum class MotorSide { LEFT = 0, RIGHT = 1 };
   virtual void initMotorDriver() = 0;
   virtual void clearCommandState() = 0;
   // Return the last normalized motor command for the given motor side
@@ -59,7 +56,7 @@ public:
   virtual float getVelocityPositionKp() const = 0;
 
   // Human-readable driver name (e.g. "servo", "dc_mirror", ...)
-  virtual const char* getDriverName() const = 0;
+  virtual const char *getDriverName() const = 0;
 };
 
 } // namespace motor

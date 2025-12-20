@@ -19,7 +19,7 @@ bool isActiveMotorInverted(IMotorDriver::MotorSide side, bool fallback = false);
 float getActiveVelocityMaxSpeed(float fallback = 0.0f);
 float getActiveVelocityTargetIncrementScale(float fallback = 0.0f);
 float getActiveVelocityPositionKp(float fallback = 0.0f);
-const char* getActiveDriverName(const char* fallback = "none");
+const char *getActiveDriverName(const char *fallback = "none");
 
 // Convenience: install the default servo-backed adapter (delegates to the
 // existing servo functions). Call this at startup if you want the current

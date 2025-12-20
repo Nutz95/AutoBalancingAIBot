@@ -44,9 +44,9 @@ static bool s_encoder_initialized = false;
 // Update accumulated position with unwrap detection
 // Returns true if successful, false if feedback failed
 static bool updateEncoderPosition(int id, int16_t raw_pos) {
-  int16_t* last_raw;
-  int64_t* accumulated;
-  
+  int16_t *last_raw;
+  int64_t *accumulated;
+
   if (id == LEFT_MOTOR_ID) {
     last_raw = &s_last_raw_pos_left;
     accumulated = &s_accumulated_pos_left;
@@ -56,43 +56,46 @@ static bool updateEncoderPosition(int id, int16_t raw_pos) {
   } else {
     return false;
   }
-  
+
   // Calculate delta with unwrap
   int16_t delta = raw_pos - *last_raw;
-  
+
   // Unwrap: if |delta| > 2048, we crossed the 0/4095 boundary
   if (delta > 2048) {
-    delta -= SERVO_ENCODER_RESOLUTION;  // Wrapped backwards (4095 -> 0)
+    delta -= SERVO_ENCODER_RESOLUTION; // Wrapped backwards (4095 -> 0)
   } else if (delta < -2048) {
-    delta += SERVO_ENCODER_RESOLUTION;  // Wrapped forwards (0 -> 4095)
+    delta += SERVO_ENCODER_RESOLUTION; // Wrapped forwards (0 -> 4095)
   }
-  
+
   *accumulated += delta;
   *last_raw = raw_pos;
-  
+
   return true;
 }
 
 // Read encoder and update accumulated position
 static bool readAndUpdateEncoder(int id) {
 #if MOTOR_DRIVER_REAL
-  if (!s_servoInitialized) return false;
-  
+  if (!s_servoInitialized)
+    return false;
+
   int fb = s_servoBus.FeedBack(id);
   if (fb <= 0) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: FeedBack failed id=%d fb=%d\n", id, fb);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: FeedBack failed id=%d fb=%d\n", id, fb);
     return false;
   }
-  
+
   int raw_pos = s_servoBus.ReadPos(-1);
   if (raw_pos < 0) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: ReadPos failed id=%d\n", id);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: ReadPos failed id=%d\n", id);
     return false;
   }
-  
+
   // Mask to 0-4095 range (in wheel mode, position is single-turn)
   raw_pos = raw_pos & 0x0FFF;
-  
+
   return updateEncoderPosition(id, (int16_t)raw_pos);
 #else
   return false;
@@ -101,13 +104,17 @@ static bool readAndUpdateEncoder(int id) {
 
 void initMotorDriver() {
 #if MOTOR_DRIVER_REAL
-  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "motor_driver: init (motors disabled by default)");
-  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "motor_driver: VELOCITY CLOSED-LOOP mode (ESP-side position control)");
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+              "motor_driver: init (motors disabled by default)");
+  LOG_PRINTLN(
+      abbot::log::CHANNEL_DEFAULT,
+      "motor_driver: VELOCITY CLOSED-LOOP mode (ESP-side position control)");
   s_servoInitialized = false;
   s_encoder_initialized = false;
-  
+
 #if MOTOR_SERVO_RESET_ON_BOOT
-  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: performing servo bus soft-reset");
+  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+              "motor_driver: performing servo bus soft-reset");
   Serial1.begin(SC_SERVO_BAUD, SERIAL_8N1, SC_SERVO_RX_PIN, SC_SERVO_TX_PIN);
   s_servoBus.pSerial = &Serial1;
   s_servoBus.IOTimeOut = 200;
@@ -128,7 +135,8 @@ void initMotorDriver() {
   LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: command state cleared");
 #endif
 #else
-  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "motor_driver: compiled in STUB mode");
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+              "motor_driver: compiled in STUB mode");
 #endif
 }
 
@@ -136,15 +144,18 @@ void clearCommandState() {
   // Reset tracked logical commands
   s_last_command_left = 0.0f;
   s_last_command_right = 0.0f;
-  // Reset targets to current accumulated positions to avoid latent motion on re-enable
+  // Reset targets to current accumulated positions to avoid latent motion on
+  // re-enable
   s_target_pos_left = s_accumulated_pos_left;
   s_target_pos_right = s_accumulated_pos_right;
 
 #if MOTOR_DRIVER_REAL
-  // If the servo bus is initialized, push an explicit zero-speed command to both
-  // motors to clear any residual velocity register contents, even if torque is off.
+  // If the servo bus is initialized, push an explicit zero-speed command to
+  // both motors to clear any residual velocity register contents, even if
+  // torque is off.
   if (s_servoInitialized) {
-    // Send zero twice to maximize chance the bus applies it even if torque is off
+    // Send zero twice to maximize chance the bus applies it even if torque is
+    // off
     s_servoBus.WriteSpe(LEFT_MOTOR_ID, 0, 0);
     delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
     s_servoBus.WriteSpe(RIGHT_MOTOR_ID, 0, 0);
@@ -177,76 +188,82 @@ void enableMotors() {
 
 #if MOTOR_DRIVER_REAL
   if (!s_servoInitialized) {
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: initializing servo UART (Serial1)");
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                "motor_driver: initializing servo UART (Serial1)");
     Serial1.begin(SC_SERVO_BAUD, SERIAL_8N1, SC_SERVO_RX_PIN, SC_SERVO_TX_PIN);
     s_servoBus.pSerial = &Serial1;
     s_servoBus.IOTimeOut = 200;
     delay(50);
     s_servoInitialized = true;
-    
+
     // Ensure torque off before switching mode
     s_servoBus.EnableTorque(LEFT_MOTOR_ID, 0);
     s_servoBus.EnableTorque(RIGHT_MOTOR_ID, 0);
     delay(10);
-    
+
     // Switch both servos to Wheel mode (velocity control)
     s_servoBus.WheelMode(LEFT_MOTOR_ID);
     delay(10);
     s_servoBus.WheelMode(RIGHT_MOTOR_ID);
     delay(10);
-    
+
     // Set acceleration to MAX (0) for immediate response
     // This is critical for balancing to avoid phase lag
     s_servoBus.writeByte(LEFT_MOTOR_ID, SMS_STS_ACC, 0);
     delay(10);
     s_servoBus.writeByte(RIGHT_MOTOR_ID, SMS_STS_ACC, 0);
     delay(10);
-    
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: servos set to Wheel mode with MAX acceleration");
+
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                "motor_driver: servos set to Wheel mode with MAX acceleration");
   }
-  
+
   // Read initial encoder positions
   if (!s_encoder_initialized) {
     int fb_l = s_servoBus.FeedBack(LEFT_MOTOR_ID);
     if (fb_l > 0) {
       int pos_l = s_servoBus.ReadPos(-1) & 0x0FFF;
       s_last_raw_pos_left = pos_l;
-      s_accumulated_pos_left = 0;  // Start at zero
+      s_accumulated_pos_left = 0; // Start at zero
       s_target_pos_left = 0;
     } else {
-      LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: WARNING FeedBack LEFT failed fb=%d\n", fb_l);
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "motor_driver: WARNING FeedBack LEFT failed fb=%d\n", fb_l);
     }
-    
+
     int fb_r = s_servoBus.FeedBack(RIGHT_MOTOR_ID);
     if (fb_r > 0) {
       int pos_r = s_servoBus.ReadPos(-1) & 0x0FFF;
       s_last_raw_pos_right = pos_r;
-      s_accumulated_pos_right = 0;  // Start at zero
+      s_accumulated_pos_right = 0; // Start at zero
       s_target_pos_right = 0;
     } else {
-      LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: WARNING FeedBack RIGHT failed fb=%d\n", fb_r);
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "motor_driver: WARNING FeedBack RIGHT failed fb=%d\n", fb_r);
     }
-    
+
     s_encoder_initialized = true;
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: encoder init raw L=%d R=%d\n", 
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: encoder init raw L=%d R=%d\n",
                s_last_raw_pos_left, s_last_raw_pos_right);
   }
-  
+
   // Enable torque
   s_servoBus.EnableTorque(LEFT_MOTOR_ID, 1);
   s_servoBus.EnableTorque(RIGHT_MOTOR_ID, 1);
-  
+
   // Send zero velocity to start stationary
   s_servoBus.WriteSpe(LEFT_MOTOR_ID, 0, 0);
   delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
   s_servoBus.WriteSpe(RIGHT_MOTOR_ID, 0, 0);
-  
+
   // Log status
   int mode_l = s_servoBus.readByte(LEFT_MOTOR_ID, SMS_STS_MODE);
   int torque_l = s_servoBus.readByte(LEFT_MOTOR_ID, SMS_STS_TORQUE_ENABLE);
   int mode_r = s_servoBus.readByte(RIGHT_MOTOR_ID, SMS_STS_MODE);
   int torque_r = s_servoBus.readByte(RIGHT_MOTOR_ID, SMS_STS_TORQUE_ENABLE);
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: LEFT mode=%d torque=%d | RIGHT mode=%d torque=%d\n",
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "motor_driver: LEFT mode=%d torque=%d | RIGHT mode=%d torque=%d\n",
              mode_l, torque_l, mode_r, torque_r);
 #endif
 }
@@ -280,22 +297,30 @@ void disableMotors() {
 #endif
 }
 
-bool areMotorsEnabled() {
-  return s_motors_enabled;
-}
+bool areMotorsEnabled() { return s_motors_enabled; }
 
 void printStatus() {
   LOG_PRINT(abbot::log::CHANNEL_MOTOR, "motor_driver: status enabled=");
   LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, areMotorsEnabled() ? "YES" : "NO");
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: LEFT_ID=%d RIGHT_ID=%d\n", LEFT_MOTOR_ID, RIGHT_MOTOR_ID);
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: LEFT_INVERT=%d RIGHT_INVERT=%d\n", LEFT_MOTOR_INVERT, RIGHT_MOTOR_INVERT);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "motor_driver: LEFT_ID=%d RIGHT_ID=%d\n", LEFT_MOTOR_ID,
+             RIGHT_MOTOR_ID);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "motor_driver: LEFT_INVERT=%d RIGHT_INVERT=%d\n",
+             LEFT_MOTOR_INVERT, RIGHT_MOTOR_INVERT);
 }
 
 void dumpConfig() {
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: config LEFT_ID=%d RIGHT_ID=%d\n", LEFT_MOTOR_ID, RIGHT_MOTOR_ID);
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: pins S_TXD=%d S_RXD=%d\n", SC_SERVO_TX_PIN, SC_SERVO_RX_PIN);
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: VELOCITY_POSITION_KP=%.2f INCREMENT_SCALE=%.1f\n",
-             (double)VELOCITY_POSITION_KP, (double)VELOCITY_TARGET_INCREMENT_SCALE);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "motor_driver: config LEFT_ID=%d RIGHT_ID=%d\n", LEFT_MOTOR_ID,
+             RIGHT_MOTOR_ID);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "motor_driver: pins S_TXD=%d S_RXD=%d\n", SC_SERVO_TX_PIN,
+             SC_SERVO_RX_PIN);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "motor_driver: VELOCITY_POSITION_KP=%.2f INCREMENT_SCALE=%.1f\n",
+             (double)VELOCITY_POSITION_KP,
+             (double)VELOCITY_TARGET_INCREMENT_SCALE);
 }
 
 // =============================================================================
@@ -308,17 +333,24 @@ void dumpConfig() {
 
 void setMotorCommandBoth(float left_command, float right_command) {
   // Clamp individually
-  if (left_command > 1.0f) left_command = 1.0f;
-  if (left_command < -1.0f) left_command = -1.0f;
-  if (right_command > 1.0f) right_command = 1.0f;
-  if (right_command < -1.0f) right_command = -1.0f;
+  if (left_command > 1.0f)
+    left_command = 1.0f;
+  if (left_command < -1.0f)
+    left_command = -1.0f;
+  if (right_command > 1.0f)
+    right_command = 1.0f;
+  if (right_command < -1.0f)
+    right_command = -1.0f;
 
   // Record last commands for telemetry (BEFORE inversion - logical commands)
   s_last_command_left = left_command;
   s_last_command_right = right_command;
 
   if (!s_motors_enabled) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: setMotorCommandBoth ignored (motors disabled) L=%.4f R=%.4f\n", left_command, right_command);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: setMotorCommandBoth ignored (motors disabled) "
+               "L=%.4f R=%.4f\n",
+               left_command, right_command);
     return;
   }
 
@@ -328,7 +360,9 @@ void setMotorCommandBoth(float left_command, float right_command) {
 
 #if MOTOR_DRIVER_REAL
   if (!s_servoInitialized) {
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: setMotorCommandBoth called but servo bus not initialized");
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                "motor_driver: setMotorCommandBoth called but servo bus not "
+                "initialized");
     return;
   }
 
@@ -361,27 +395,38 @@ void setMotorCommand(int id, float command) {
 
 void setMotorCommandRaw(int id, int16_t rawSpeed) {
   if (!s_motors_enabled) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: setMotorCommandRaw ignored (motors disabled) id=%d raw=%d\n", id, rawSpeed);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: setMotorCommandRaw ignored (motors disabled) "
+               "id=%d raw=%d\n",
+               id, rawSpeed);
     return;
   }
 #if MOTOR_DRIVER_REAL
   if (!s_servoInitialized) {
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: REAL raw set called but servo bus not initialized");
+    LOG_PRINTLN(
+        abbot::log::CHANNEL_MOTOR,
+        "motor_driver: REAL raw set called but servo bus not initialized");
     return;
   }
   // Send raw velocity command directly
   int rc = s_servoBus.WriteSpe((uint8_t)id, (s16)rawSpeed, 0);
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: REAL set (RAW) id=%d raw=%d rc=%d\n", id, rawSpeed, rc);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "motor_driver: REAL set (RAW) id=%d raw=%d rc=%d\n", id, rawSpeed,
+             rc);
 #else
   (void)rawSpeed;
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: STUB raw set id=%d raw=%d\n", id, rawSpeed);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "motor_driver: STUB raw set id=%d raw=%d\n", id, rawSpeed);
 #endif
 }
 
 int32_t readEncoder(int id) {
 #if MOTOR_DRIVER_REAL
   if (!s_servoInitialized) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: REAL readEncoder but servo bus not initialized id=%d\n", id);
+    LOG_PRINTF(
+        abbot::log::CHANNEL_MOTOR,
+        "motor_driver: REAL readEncoder but servo bus not initialized id=%d\n",
+        id);
     return 0;
   }
   // Return accumulated position (with unwrap)
@@ -423,7 +468,8 @@ void resetPositionTracking() {
   s_accumulated_pos_right = 0;
   s_target_pos_left = 0;
   s_target_pos_right = 0;
-  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: position tracking RESET to zero");
+  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+              "motor_driver: position tracking RESET to zero");
 }
 
 bool processSerialCommand(const String &line) {
@@ -466,9 +512,12 @@ bool processSerialCommand(const String &line) {
       return false;
     }
     int id = -1;
-    if (strcmp(arg, "LEFT") == 0) id = LEFT_MOTOR_ID;
-    else if (strcmp(arg, "RIGHT") == 0) id = RIGHT_MOTOR_ID;
-    else id = atoi(arg);
+    if (strcmp(arg, "LEFT") == 0)
+      id = LEFT_MOTOR_ID;
+    else if (strcmp(arg, "RIGHT") == 0)
+      id = RIGHT_MOTOR_ID;
+    else
+      id = atoi(arg);
     char *v = strtok(NULL, " \t\r\n");
     if (!v) {
       return false;
@@ -489,7 +538,10 @@ bool processSerialCommand(const String &line) {
     if (cmdv > 1.0f || cmdv < -1.0f) {
       float orig = cmdv;
       cmdv = cmdv / 100.0f;
-      LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: interpreted provided value %.3f as percent -> %.3f normalized\n", orig, cmdv);
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "motor_driver: interpreted provided value %.3f as percent -> "
+                 "%.3f normalized\n",
+                 orig, cmdv);
     }
     setMotorCommand(id, cmdv);
     return true;
@@ -500,11 +552,15 @@ bool processSerialCommand(const String &line) {
       return false;
     }
     int id = -1;
-    if (strcmp(arg, "LEFT") == 0) id = LEFT_MOTOR_ID;
-    else if (strcmp(arg, "RIGHT") == 0) id = RIGHT_MOTOR_ID;
-    else id = atoi(arg);
+    if (strcmp(arg, "LEFT") == 0)
+      id = LEFT_MOTOR_ID;
+    else if (strcmp(arg, "RIGHT") == 0)
+      id = RIGHT_MOTOR_ID;
+    else
+      id = atoi(arg);
     int32_t val = readEncoder(id);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: encoder id=%d val=%ld\n", id, val);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: encoder id=%d val=%ld\n", id, val);
     return true;
   }
   if (strcmp(cmd, "PARAMS") == 0) {
@@ -513,12 +569,17 @@ bool processSerialCommand(const String &line) {
       return false;
     }
     int id = -1;
-    if (strcmp(arg, "LEFT") == 0) id = LEFT_MOTOR_ID;
-    else if (strcmp(arg, "RIGHT") == 0) id = RIGHT_MOTOR_ID;
-    else id = atoi(arg);
+    if (strcmp(arg, "LEFT") == 0)
+      id = LEFT_MOTOR_ID;
+    else if (strcmp(arg, "RIGHT") == 0)
+      id = RIGHT_MOTOR_ID;
+    else
+      id = atoi(arg);
 #if MOTOR_DRIVER_REAL
     if (!s_servoInitialized) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: PARAMS requested but servo bus not initialized");
+      LOG_PRINTLN(
+          abbot::log::CHANNEL_MOTOR,
+          "motor_driver: PARAMS requested but servo bus not initialized");
       return true;
     }
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: params id=%d\n", id);
@@ -529,10 +590,12 @@ bool processSerialCommand(const String &line) {
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "  id=%d\n", vid);
     int min_angle = s_servoBus.readWord(id, SMS_STS_MIN_ANGLE_LIMIT_L);
     int max_angle = s_servoBus.readWord(id, SMS_STS_MAX_ANGLE_LIMIT_L);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "  min_angle=%d max_angle=%d\n", min_angle, max_angle);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "  min_angle=%d max_angle=%d\n",
+               min_angle, max_angle);
     int cw_dead = s_servoBus.readByte(id, SMS_STS_CW_DEAD);
     int ccw_dead = s_servoBus.readByte(id, SMS_STS_CCW_DEAD);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "  cw_dead=%d ccw_dead=%d\n", cw_dead, ccw_dead);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "  cw_dead=%d ccw_dead=%d\n", cw_dead,
+               ccw_dead);
     int ofs = s_servoBus.readWord(id, SMS_STS_OFS_L);
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "  offset=%d\n", ofs);
     int mode = s_servoBus.readByte(id, SMS_STS_MODE);
@@ -553,10 +616,14 @@ bool processSerialCommand(const String &line) {
     int temp = s_servoBus.readByte(id, SMS_STS_PRESENT_TEMPERATURE);
     int moving = s_servoBus.readByte(id, SMS_STS_MOVING);
     int current = s_servoBus.readWord(id, SMS_STS_PRESENT_CURRENT_L);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "  present_pos=%d speed=%d load=%d volt=%d temp=%d moving=%d current=%d\n", pos, speed, load, volt, temp, moving, current);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "  present_pos=%d speed=%d load=%d volt=%d temp=%d moving=%d "
+               "current=%d\n",
+               pos, speed, load, volt, temp, moving, current);
     return true;
 #else
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: PARAMS only supported in real mode");
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                "motor_driver: PARAMS only supported in real mode");
     return true;
 #endif
   }
@@ -570,47 +637,61 @@ bool processSerialCommand(const String &line) {
   }
   if (strcmp(cmd, "POS") == 0) {
     // Show current position tracking state
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: LEFT  target=%lld accumulated=%lld error=%lld\n",
-               s_target_pos_left, s_accumulated_pos_left, s_target_pos_left - s_accumulated_pos_left);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: RIGHT target=%lld accumulated=%lld error=%lld\n",
-               s_target_pos_right, s_accumulated_pos_right, s_target_pos_right - s_accumulated_pos_right);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: LEFT  target=%lld accumulated=%lld error=%lld\n",
+               s_target_pos_left, s_accumulated_pos_left,
+               s_target_pos_left - s_accumulated_pos_left);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: RIGHT target=%lld accumulated=%lld error=%lld\n",
+               s_target_pos_right, s_accumulated_pos_right,
+               s_target_pos_right - s_accumulated_pos_right);
     return true;
   }
   if (strcmp(cmd, "ACC") == 0) {
     // Runtime acceleration setter: MOTOR ACC <LEFT|RIGHT|id> <value>
     char *arg = strtok(NULL, " \t\r\n");
     if (!arg) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Usage: MOTOR ACC <LEFT|RIGHT|id> <value>");
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "Usage: MOTOR ACC <LEFT|RIGHT|id> <value>");
       return true;
     }
     int id = -1;
-    if (strcmp(arg, "LEFT") == 0) id = LEFT_MOTOR_ID;
-    else if (strcmp(arg, "RIGHT") == 0) id = RIGHT_MOTOR_ID;
-    else id = atoi(arg);
+    if (strcmp(arg, "LEFT") == 0)
+      id = LEFT_MOTOR_ID;
+    else if (strcmp(arg, "RIGHT") == 0)
+      id = RIGHT_MOTOR_ID;
+    else
+      id = atoi(arg);
     char *v = strtok(NULL, " \t\r\n");
     if (!v) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Usage: MOTOR ACC <LEFT|RIGHT|id> <value>");
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "Usage: MOTOR ACC <LEFT|RIGHT|id> <value>");
       return true;
     }
     int acc = atoi(v);
 #if MOTOR_DRIVER_REAL
     if (!s_servoInitialized) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: ACC requested but servo bus not initialized");
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "motor_driver: ACC requested but servo bus not initialized");
       return true;
     }
     int rc = s_servoBus.writeByte((uint8_t)id, SMS_STS_ACC, (uint8_t)acc);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: ACC id=%d acc=%d rc=%d\n", id, acc, rc);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: ACC id=%d acc=%d rc=%d\n", id, acc, rc);
 #else
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: STUB ACC id=%d acc=%d\n", id, acc);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: STUB ACC id=%d acc=%d\n", id, acc);
 #endif
     return true;
   }
   if (strcmp(cmd, "VEL") == 0) {
     // Direct velocity command: MOTOR VEL <LEFT|RIGHT> <speed>
-    // Sends velocity directly via WriteSpe (bypasses closed-loop but applies inversion)
+    // Sends velocity directly via WriteSpe (bypasses closed-loop but applies
+    // inversion)
     char *arg = strtok(NULL, " \t\r\n");
     if (!arg) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Usage: MOTOR VEL <LEFT|RIGHT> <speed>");
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "Usage: MOTOR VEL <LEFT|RIGHT> <speed>");
       return true;
     }
     int id = -1;
@@ -624,25 +705,31 @@ bool processSerialCommand(const String &line) {
     } else {
       id = atoi(arg);
     }
-    
+
     char *v = strtok(NULL, " \t\r\n");
     if (!v) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Usage: MOTOR VEL <LEFT|RIGHT> <speed>");
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "Usage: MOTOR VEL <LEFT|RIGHT> <speed>");
       return true;
     }
     int16_t speed = (int16_t)atoi(v);
-    if (invert) speed = -speed;
+    if (invert)
+      speed = -speed;
 #if MOTOR_DRIVER_REAL
     if (!s_motors_enabled) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: motors not enabled");
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "motor_driver: motors not enabled");
       return true;
     }
     if (!s_servoInitialized) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "motor_driver: servo bus not initialized");
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "motor_driver: servo bus not initialized");
       return true;
     }
     int rc = s_servoBus.WriteSpe((uint8_t)id, speed, 0);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: VEL id=%d speed=%d (invert=%d) rc=%d\n", id, speed, invert, rc);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: VEL id=%d speed=%d (invert=%d) rc=%d\n", id,
+               speed, invert, rc);
 
     // Immediately attempt to update the firmware-side accumulated encoder so
     // that subsequent "MOTOR READ" calls reflect recent motion even when the
@@ -651,7 +738,8 @@ bool processSerialCommand(const String &line) {
     delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
     (void)readAndUpdateEncoder(id);
 #else
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "motor_driver: STUB VEL id=%d speed=%d\n", id, speed);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "motor_driver: STUB VEL id=%d speed=%d\n", id, speed);
 #endif
     return true;
   }

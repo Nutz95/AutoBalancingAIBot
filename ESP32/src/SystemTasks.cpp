@@ -1,39 +1,40 @@
 #include "units.h"
 // SystemTasks.cpp
-#include "SystemTasks.h"
+#include "../config/balancer_config.h"
+#include "../config/board_config.h"
+#include "../config/imu_filter_config.h"
+#include "../config/motor_configs/servo_motor_config.h"
+#include "../include/balancer_controller.h"
+#include "../include/esp_wifi_console.h"
 #include "BMI088Driver.h"
+#include "SystemTasks.h"
+#include "filter_manager.h"
 #include "imu_calibration.h"
-#include "serial_commands.h"
-#include "imu_fusion.h"
-#include "imu_mapping.h"
 #include "imu_consumer_helpers.h"
 #include "imu_filter.h"
-#include "../config/imu_filter_config.h"
-#include "motor_drivers/driver_manager.h"
-#include "tuning_capture.h"
-#include "../include/balancer_controller.h"
-#include "../config/motor_configs/servo_motor_config.h"
-#include "../config/board_config.h"
-#include "status_led.h"
-#include "../config/balancer_config.h"
+#include "imu_fusion.h"
+#include "imu_mapping.h"
 #include "logging.h"
-#include "filter_manager.h"
-#include "../include/esp_wifi_console.h"
-#include <cmath>
+#include "motor_drivers/driver_manager.h"
+#include "serial_commands.h"
+#include "status_led.h"
+#include "tuning_capture.h"
+#include <Arduino.h>
 #include <Preferences.h>
+#include <cmath>
+#include <cstdio>
+#include <cstring>
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
-#include <Arduino.h>
-#include <cstring>
 
 namespace abbot {
 
 static QueueHandle_t imuQueue = nullptr;
 static BMI088Driver *g_driver = nullptr;
-// Optional calibration queue (single-slot). When non-null the producer will also
-// write each new sample into this queue (xQueueOverwrite) so a calibration routine
-// can block-read exact samples without talking to the driver directly.
+// Optional calibration queue (single-slot). When non-null the producer will
+// also write each new sample into this queue (xQueueOverwrite) so a calibration
+// routine can block-read exact samples without talking to the driver directly.
 static QueueHandle_t calibQueue = nullptr;
 
 // Filter instance (abstracted). Implementation chosen via compile-time config.
@@ -48,7 +49,8 @@ static float g_filter_sample_rate_hz = 200.0f;
 static float g_fused_pitch_rad = 0.0f;
 static float g_fused_pitch_rate_rads = 0.0f;
 static SemaphoreHandle_t g_fusion_mutex = nullptr;
-// Consumer mutable state (warmup, bias, persistence) moved into a dedicated struct
+// Consumer mutable state (warmup, bias, persistence) moved into a dedicated
+// struct
 static abbot::imu_consumer::ConsumerState g_consumer;
 // Persistence (Preferences/NVS)
 static Preferences g_prefs;
@@ -64,16 +66,19 @@ static void printWarmupProgressIfAny() {
     uint32_t now = millis();
     if ((uint32_t)(now - last_print) >= 500u) {
       last_print = now;
-      float secs = g_consumer.warmup_samples_remaining / g_filter_sample_rate_hz;
+      float secs =
+          g_consumer.warmup_samples_remaining / g_filter_sample_rate_hz;
       char bufw[128];
-      snprintf(bufw, sizeof(bufw), "FUSION: warmup remaining=%lu samples (~%.1f s)", (unsigned long)g_consumer.warmup_samples_remaining, (double)secs);
+      snprintf(
+          bufw, sizeof(bufw), "FUSION: warmup remaining=%lu samples (~%.1f s)",
+          (unsigned long)g_consumer.warmup_samples_remaining, (double)secs);
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, bufw);
     }
   }
 }
 
 static void imuProducerTask(void *pvParameters) {
-  BMI088Driver *driver = reinterpret_cast<BMI088Driver*>(pvParameters);
+  BMI088Driver *driver = reinterpret_cast<BMI088Driver *>(pvParameters);
   IMUSample sample;
   for (;;) {
     // Attempt to read; BMI088Driver::read will enforce sampling interval
@@ -82,7 +87,8 @@ static void imuProducerTask(void *pvParameters) {
       if (imuQueue) {
         xQueueOverwrite(imuQueue, &sample);
       }
-      // If a calibration queue is attached, push sample there as well (non-blocking)
+      // If a calibration queue is attached, push sample there as well
+      // (non-blocking)
       if (calibQueue) {
         xQueueOverwrite(calibQueue, &sample);
       }
@@ -108,7 +114,8 @@ static void imuConsumerTask(void *pvParameters) {
   for (;;) {
     if (imuQueue && xQueueReceive(imuQueue, &sample, portMAX_DELAY) == pdTRUE) {
       // Compute dt
-      float dt = abbot::imu_consumer::computeDt(g_consumer, sample, g_filter_sample_rate_hz);
+      float dt = abbot::imu_consumer::computeDt(g_consumer, sample,
+                                                g_filter_sample_rate_hz);
 
       // Extract raw gyro & accel
       float gx = sample.gx;
@@ -121,12 +128,15 @@ static void imuConsumerTask(void *pvParameters) {
       // Map sensor -> robot (bias-compensated)
       float gyro_robot[3];
       float accel_robot[3];
-      float raw_g[3] = { gx, gy, gz };
-      float raw_a[3] = { sample.ax, sample.ay, sample.az };
-      float gyro_bias[3] = { g_consumer.gyro_bias[0], g_consumer.gyro_bias[1], g_consumer.gyro_bias[2] };
-      abbot::imu_mapping::mapSensorToRobot(g_fusion_cfg, raw_g, raw_a, gyro_bias, gyro_robot, accel_robot);
+      float raw_g[3] = {gx, gy, gz};
+      float raw_a[3] = {sample.ax, sample.ay, sample.az};
+      float gyro_bias[3] = {g_consumer.gyro_bias[0], g_consumer.gyro_bias[1],
+                            g_consumer.gyro_bias[2]};
+      abbot::imu_mapping::mapSensorToRobot(g_fusion_cfg, raw_g, raw_a,
+                                           gyro_bias, gyro_robot, accel_robot);
 
-      // Update selected filter (always query active filter to avoid stale pointer)
+      // Update selected filter (always query active filter to avoid stale
+      // pointer)
       {
         auto active = abbot::filter::getActiveFilter();
         if (active) {
@@ -140,7 +150,9 @@ static void imuConsumerTask(void *pvParameters) {
         --g_consumer.warmup_samples_remaining;
         {
           auto active = abbot::filter::getActiveFilter();
-          if (active) abbot::imu_consumer::finalizeWarmupIfDone(g_consumer, *active, g_fusion_cfg);
+          if (active)
+            abbot::imu_consumer::finalizeWarmupIfDone(g_consumer, *active,
+                                                      g_fusion_cfg);
         }
       }
 
@@ -151,7 +163,8 @@ static void imuConsumerTask(void *pvParameters) {
       statusLedUpdateFromConsumer(g_consumer);
 
       // Update bias EMA & persist when appropriate
-      abbot::imu_consumer::updateBiasEmaAndPersistIfNeeded(g_consumer, sample, gyro_robot);
+      abbot::imu_consumer::updateBiasEmaAndPersistIfNeeded(g_consumer, sample,
+                                                           gyro_robot);
 
       // Publish fused outputs
       float fused_pitch_local = 0.0f;
@@ -163,26 +176,35 @@ static void imuConsumerTask(void *pvParameters) {
           fused_pitch_rate_local = active->getPitchRate();
         }
       }
-      abbot::imu_consumer::publishFusedOutputsUnderMutex(g_consumer, fused_pitch_local, fused_pitch_rate_local, g_fused_pitch_rad, g_fused_pitch_rate_rads, &g_fusion_mutex);
+      abbot::imu_consumer::publishFusedOutputsUnderMutex(
+          g_consumer, fused_pitch_local, fused_pitch_rate_local,
+          g_fused_pitch_rad, g_fused_pitch_rate_rads, &g_fusion_mutex);
 
       // Read last motor commands (normalized) via motor driver API
       float left_cmd = 0.0f;
       float right_cmd = 0.0f;
       if (auto drv = abbot::motor::getActiveMotorDriver()) {
-        left_cmd = drv->getLastMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT);
-        right_cmd = drv->getLastMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+        left_cmd = drv->getLastMotorCommand(
+            abbot::motor::IMotorDriver::MotorSide::LEFT);
+        right_cmd = drv->getLastMotorCommand(
+            abbot::motor::IMotorDriver::MotorSide::RIGHT);
       }
-      abbot::imu_consumer::runBalancerCycleIfActive(fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd);
+      abbot::imu_consumer::runBalancerCycleIfActive(
+          fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd);
 
       // Emit tuning stream or capture outputs
-      abbot::imu_consumer::emitTuningOrStream(g_consumer, sample, fused_pitch_local, fused_pitch_rate_local, accel_robot, gyro_robot, left_cmd, right_cmd);
-      
-      #if defined(ENABLE_IMU_DEBUG_LOGS)
+      abbot::imu_consumer::emitTuningOrStream(
+          g_consumer, sample, fused_pitch_local, fused_pitch_rate_local,
+          accel_robot, gyro_robot, left_cmd, right_cmd);
+
+#if defined(ENABLE_IMU_DEBUG_LOGS)
       // Emit diagnostics if BALANCER channel enabled
-      abbot::imu_consumer::emitDiagnosticsIfEnabled(sample.ts_ms, fused_pitch_local, fused_pitch_rate_local, left_cmd, right_cmd);
-      #endif
-      
-      #if defined(ENABLE_DEBUG_LOGS)
+      abbot::imu_consumer::emitDiagnosticsIfEnabled(
+          sample.ts_ms, fused_pitch_local, fused_pitch_rate_local, left_cmd,
+          right_cmd);
+#endif
+
+#if defined(ENABLE_DEBUG_LOGS)
       // Suppress debug logs while calibration runs
       if (abbot::imu_cal::isCalibrating()) {
         continue;
@@ -191,13 +213,13 @@ static void imuConsumerTask(void *pvParameters) {
       uint32_t now = millis();
       if ((uint32_t)(now - last_print_ms) >= 1000u) {
         last_print_ms = now;
-        LOG_PRINTF(abbot::log::CHANNEL_IMU,
-             "IMU ts_ms=%lu ax=%.6f ay=%.6f az=%.6f gx=%.6f gy=%.6f gz=%.6f\n",
-             sample.ts_ms,
-             sample.ax, sample.ay, sample.az,
-             sample.gx, sample.gy, sample.gz);
+        LOG_PRINTF(
+            abbot::log::CHANNEL_IMU,
+            "IMU ts_ms=%lu ax=%.6f ay=%.6f az=%.6f gx=%.6f gy=%.6f gz=%.6f\n",
+            sample.ts_ms, sample.ax, sample.ay, sample.az, sample.gx, sample.gy,
+            sample.gz);
       }
-      #endif
+#endif
     }
   }
 }
@@ -217,11 +239,11 @@ bool startIMUTasks(BMI088Driver *driver) {
   // Try to initialize BMI088 (gyro + accel)
   bool rc = driver->begin();
   if (!rc) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088 init failed, blinking LED red.");
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "BMI088 init failed, blinking LED red.");
     statusLedBlinkErrorLoop();
     return false;
   }
-
 
   // track whether we've requested a filter-specific warmup during init
   bool warmup_requested = false;
@@ -257,10 +279,12 @@ bool startIMUTasks(BMI088Driver *driver) {
   // Start optional Wi-Fi console module (no-op if disabled)
   abbot::wifi_console::begin();
 
-    // Initialize Preferences (NVS) and attempt to load persisted gyro bias via helper
+  // Initialize Preferences (NVS) and attempt to load persisted gyro bias via
+  // helper
   if (g_prefs.begin("abbot", false)) {
     g_prefs_started = true;
-    abbot::imu_consumer::initializeConsumerStateFromPreferences(g_consumer, g_prefs);
+    abbot::imu_consumer::initializeConsumerStateFromPreferences(g_consumer,
+                                                                g_prefs);
     // If a filter preference was stored, apply it now (overrides the default)
     if (g_prefs.isKey("filter")) {
       String fn = g_prefs.getString("filter", "MADGWICK");
@@ -274,7 +298,10 @@ bool startIMUTasks(BMI088Driver *driver) {
             float s = ((float)ms) / 1000.0f;
             requestTuningWarmupSeconds(s);
             warmup_requested = true;
-            char tbuf[128]; snprintf(tbuf, sizeof(tbuf), "FUSION: requested startup warmup %.3f s for %s", (double)s, fn.c_str());
+            char tbuf[128];
+            snprintf(tbuf, sizeof(tbuf),
+                     "FUSION: requested startup warmup %.3f s for %s",
+                     (double)s, fn.c_str());
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, tbuf);
           }
         }
@@ -284,24 +311,30 @@ bool startIMUTasks(BMI088Driver *driver) {
 
   // Log the active filter at startup so operator sees which fusion is running
   {
-    const char* fname = abbot::filter::getCurrentFilterName();
-    char buff[128]; snprintf(buff, sizeof(buff), "FUSION: active filter at boot=%s", fname);
+    const char *fname = abbot::filter::getCurrentFilterName();
+    char buff[128];
+    snprintf(buff, sizeof(buff), "FUSION: active filter at boot=%s", fname);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buff);
   }
-  // Also print the balancer PID gains that are active for this filter (kp/ki/kd)
+  // Also print the balancer PID gains that are active for this filter
+  // (kp/ki/kd)
   {
-    float kp=0.0f, ki=0.0f, kd=0.0f;
+    float kp = 0.0f, ki = 0.0f, kd = 0.0f;
     abbot::balancer::controller::getGains(kp, ki, kd);
     float db = abbot::balancer::controller::getDeadband();
-    const char* fname = abbot::filter::getCurrentFilterName();
+    const char *fname = abbot::filter::getCurrentFilterName();
     char bufg[192];
-    snprintf(bufg, sizeof(bufg), "FUSION: active filter=%s BALANCER gains Kp=%.4f Ki=%.4f Kd=%.4f deadband=%.4f", fname, (double)kp, (double)ki, (double)kd, (double)db);
+    snprintf(bufg, sizeof(bufg),
+             "FUSION: active filter=%s BALANCER gains Kp=%.4f Ki=%.4f Kd=%.4f "
+             "deadband=%.4f",
+             fname, (double)kp, (double)ki, (double)kd, (double)db);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, bufg);
   }
   // Attempt to initialize from IMU calibration if needed (helper decides)
   abbot::imu_cal::Calibration cal;
   if (abbot::imu_cal::loadCalibration(cal)) {
-    abbot::imu_consumer::initializeConsumerStateFromCalibrationIfNeeded(g_consumer, cal, g_prefs_started, &g_prefs);
+    abbot::imu_consumer::initializeConsumerStateFromCalibrationIfNeeded(
+        g_consumer, cal, g_prefs_started, &g_prefs);
   }
 
   // Request a short automatic warmup on power-up so filters are seeded and
@@ -313,30 +346,30 @@ bool startIMUTasks(BMI088Driver *driver) {
   }
 
   // Create producer task (higher priority)
-  BaseType_t r1 = xTaskCreate(imuProducerTask, "IMUProducer", 4096, driver, configMAX_PRIORITIES - 2, nullptr);
+  BaseType_t r1 = xTaskCreate(imuProducerTask, "IMUProducer", 4096, driver,
+                              configMAX_PRIORITIES - 2, nullptr);
   // Create consumer task (lower priority)
-  BaseType_t r2 = xTaskCreate(imuConsumerTask, "IMUConsumer", 4096, nullptr, configMAX_PRIORITIES - 3, nullptr);
+  BaseType_t r2 = xTaskCreate(imuConsumerTask, "IMUConsumer", 4096, nullptr,
+                              configMAX_PRIORITIES - 3, nullptr);
 
   // Create serial command task for calibration UI (low priority)
-  BaseType_t r3 = xTaskCreate(abbot::serialcmds::serialTaskEntry, "IMUSerial", 12288, driver, configMAX_PRIORITIES - 4, nullptr);
+  BaseType_t r3 = xTaskCreate(abbot::serialcmds::serialTaskEntry, "IMUSerial",
+                              12288, driver, configMAX_PRIORITIES - 4, nullptr);
 
   // Create a small background task to service the Wi‑Fi console (drain queue,
   // accept clients, handle incoming lines). Low priority so it won't interfere
   // with IMU timing.
   // Wi‑Fi console uses moderate stack (WiFi library + small buffers). Allocate
   // more stack to avoid watchpoint / canary failures on some chips.
-  BaseType_t r4 = xTaskCreate(wifiConsoleTask, "WiFiConsole", 8192, nullptr, configMAX_PRIORITIES - 5, nullptr);
+  BaseType_t r4 = xTaskCreate(wifiConsoleTask, "WiFiConsole", 8192, nullptr,
+                              configMAX_PRIORITIES - 5, nullptr);
 
   return (r1 == pdPASS) && (r2 == pdPASS) && (r3 == pdPASS) && (r4 == pdPASS);
 }
 
-void attachCalibrationQueue(QueueHandle_t q) {
-  calibQueue = q;
-}
+void attachCalibrationQueue(QueueHandle_t q) { calibQueue = q; }
 
-void detachCalibrationQueue() {
-  calibQueue = nullptr;
-}
+void detachCalibrationQueue() { calibQueue = nullptr; }
 
 float getFusedPitch() {
   float out = 0.0f;
@@ -363,15 +396,17 @@ float getFusedPitchRate() {
 }
 
 void requestTuningWarmupSeconds(float seconds) {
-  abbot::imu_consumer::requestWarmup(g_consumer, seconds, g_filter_sample_rate_hz);
+  abbot::imu_consumer::requestWarmup(g_consumer, seconds,
+                                     g_filter_sample_rate_hz);
 }
 
 void printMadgwickDiagnostics() {
   // Acquire fusion mutex to read fused values and madgwick state
   if (g_fusion_mutex) {
     if (xSemaphoreTake(g_fusion_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-      // Read quaternion and pitch/pitch rate from selected filter (if supported)
-      float w=0, x=0, y=0, z=0;
+      // Read quaternion and pitch/pitch rate from selected filter (if
+      // supported)
+      float w = 0, x = 0, y = 0, z = 0;
       float pitch_rad = 0.0f;
       float pitch_rate = 0.0f;
       {
@@ -385,31 +420,43 @@ void printMadgwickDiagnostics() {
       xSemaphoreGive(g_fusion_mutex);
 
       char buf[256];
-      snprintf(buf, sizeof(buf), "Fusion: q=[%.6f, %.6f, %.6f, %.6f] pitch_deg=%.3f pitch_rate_deg_s=%.3f", (double)w, (double)x, (double)y, (double)z, (double)(pitch_rad * 57.295779513f), (double)(pitch_rate * 57.295779513f));
+      snprintf(buf, sizeof(buf),
+               "Fusion: q=[%.6f, %.6f, %.6f, %.6f] pitch_deg=%.3f "
+               "pitch_rate_deg_s=%.3f",
+               (double)w, (double)x, (double)y, (double)z,
+               (double)(pitch_rad * 57.295779513f),
+               (double)(pitch_rate * 57.295779513f));
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
     } else {
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Fusion: unable to take fusion mutex");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "Fusion: unable to take fusion mutex");
     }
   } else {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Fusion: fusion mutex not initialized");
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "Fusion: fusion mutex not initialized");
   }
 
   // Print consumer warmup and gyro bias info
   // g_consumer is module-local; print key fields
   {
     char buf2[256];
-    snprintf(buf2, sizeof(buf2), "Consumer: warmup_remaining=%lu warmup_total=%lu gyro_bias=[%.6f, %.6f, %.6f] bias_initialized=%d",
+    snprintf(buf2, sizeof(buf2),
+             "Consumer: warmup_remaining=%lu warmup_total=%lu gyro_bias=[%.6f, "
+             "%.6f, %.6f] bias_initialized=%d",
              (unsigned long)g_consumer.warmup_samples_remaining,
              (unsigned long)g_consumer.warmup_samples_total,
-             (double)g_consumer.gyro_bias[0], (double)g_consumer.gyro_bias[1], (double)g_consumer.gyro_bias[2],
+             (double)g_consumer.gyro_bias[0], (double)g_consumer.gyro_bias[1],
+             (double)g_consumer.gyro_bias[2],
              g_consumer.gyro_bias_initialized ? 1 : 0);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf2);
   }
 }
 
 bool isFusionReady() {
-  // Fusion is considered ready when no warmup samples remain and gyro bias initialized
-  return (g_consumer.warmup_samples_remaining == 0) && g_consumer.gyro_bias_initialized;
+  // Fusion is considered ready when no warmup samples remain and gyro bias
+  // initialized
+  return (g_consumer.warmup_samples_remaining == 0) &&
+         g_consumer.gyro_bias_initialized;
 }
 
 unsigned long getFusionWarmupRemaining() {

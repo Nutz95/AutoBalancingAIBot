@@ -1,10 +1,10 @@
 // dc_mirror_driver.cpp
 #include "../include/motor_drivers/dc_mirror_driver.h"
-#include "../include/motor_drivers/driver_manager.h"
-#include "../config/motor_configs/motor_common_config.h"
 #include "../config/motor_configs/dc_motor_config.h"
-#include "logging.h"
+#include "../config/motor_configs/motor_common_config.h"
+#include "../include/motor_drivers/driver_manager.h"
 #include "driver/pcnt.h"
+#include "logging.h"
 #include <Arduino.h>
 
 // Encoder synchronization primitive (used by legacy ISR helpers)
@@ -15,16 +15,18 @@ static portMUX_TYPE s_encoder_mux = portMUX_INITIALIZER_UNLOCKED;
 static volatile uint8_t s_pcnt_event_flags[4] = {0};
 static bool s_pcnt_isr_installed = false;
 
-static void IRAM_ATTR pcnt_event_isr(void* arg) {
+static void IRAM_ATTR pcnt_event_isr(void *arg) {
   int unit = (int)(uintptr_t)arg;
-  if (unit >= 0 && unit < (int)(sizeof(s_pcnt_event_flags)/sizeof(s_pcnt_event_flags[0]))) {
+  if (unit >= 0 && unit < (int)(sizeof(s_pcnt_event_flags) /
+                                sizeof(s_pcnt_event_flags[0]))) {
     s_pcnt_event_flags[unit] = 1;
     // clear hardware counter to avoid stuck-at-limit; minimal work in ISR
     pcnt_counter_clear((pcnt_unit_t)unit);
   }
 }
 
-static void setup_pcnt_unit(int &out_unit, bool &out_configured, pcnt_unit_t unitId, int pulse_pin, int ctrl_pin) {
+static void setup_pcnt_unit(int &out_unit, bool &out_configured,
+                            pcnt_unit_t unitId, int pulse_pin, int ctrl_pin) {
   pcnt_config_t cfg;
   memset(&cfg, 0, sizeof(cfg));
   cfg.pulse_gpio_num = pulse_pin;
@@ -44,7 +46,9 @@ static void setup_pcnt_unit(int &out_unit, bool &out_configured, pcnt_unit_t uni
   pcnt_counter_resume(unitId);
   out_unit = (int)unitId;
   out_configured = true;
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: configured PCNT unit=%d pulse=%d ctrl=%d\n", (int)unitId, pulse_pin, ctrl_pin);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "DCMirrorDriver: configured PCNT unit=%d pulse=%d ctrl=%d\n",
+             (int)unitId, pulse_pin, ctrl_pin);
   // enable high/low limit events and register ISR handler once
   pcnt_event_enable(unitId, PCNT_EVT_H_LIM);
   pcnt_event_enable(unitId, PCNT_EVT_L_LIM);
@@ -52,21 +56,32 @@ static void setup_pcnt_unit(int &out_unit, bool &out_configured, pcnt_unit_t uni
     pcnt_isr_service_install(0);
     s_pcnt_isr_installed = true;
   }
-  pcnt_isr_handler_add(unitId, pcnt_event_isr, (void*)(uintptr_t)unitId);
+  pcnt_isr_handler_add(unitId, pcnt_event_isr, (void *)(uintptr_t)unitId);
 }
 
-static void readAndAccumulatePCNT(pcnt_unit_t unitId, int64_t &accum, int signalsPerPin) {
+static void readAndAccumulatePCNT(pcnt_unit_t unitId, int64_t &accum,
+                                  int signalsPerPin) {
   int16_t cnt = 0;
   pcnt_get_counter_value(unitId, &cnt);
   int u = (int)unitId;
   accum += (int64_t)cnt * (int64_t)signalsPerPin;
   // Debug log: show when hardware counter contributed
-  if (cnt != 0 || (u >= 0 && u < (int)(sizeof(s_pcnt_event_flags)/sizeof(s_pcnt_event_flags[0])) && s_pcnt_event_flags[u])) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: PCNT unit=%d cnt=%d accum=%lld event=%d\n", u, (int)cnt, (long long)accum,
-               (u >= 0 && u < (int)(sizeof(s_pcnt_event_flags)/sizeof(s_pcnt_event_flags[0]))) ? (int)s_pcnt_event_flags[u] : 0);
+  if (cnt != 0 ||
+      (u >= 0 &&
+       u < (int)(sizeof(s_pcnt_event_flags) / sizeof(s_pcnt_event_flags[0])) &&
+       s_pcnt_event_flags[u])) {
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "DCMirrorDriver: PCNT unit=%d cnt=%d accum=%lld event=%d\n", u,
+               (int)cnt, (long long)accum,
+               (u >= 0 && u < (int)(sizeof(s_pcnt_event_flags) /
+                                    sizeof(s_pcnt_event_flags[0])))
+                   ? (int)s_pcnt_event_flags[u]
+                   : 0);
   }
   // Clear event flag if set
-  if (u >= 0 && u < (int)(sizeof(s_pcnt_event_flags)/sizeof(s_pcnt_event_flags[0]))) s_pcnt_event_flags[u] = 0;
+  if (u >= 0 &&
+      u < (int)(sizeof(s_pcnt_event_flags) / sizeof(s_pcnt_event_flags[0])))
+    s_pcnt_event_flags[u] = 0;
   pcnt_counter_clear(unitId);
 }
 
@@ -76,8 +91,12 @@ namespace abbot {
 namespace motor {
 
 DCMirrorDriver::DCMirrorDriver()
-  : m_enabled(false), m_last_left_cmd(0.0f), m_last_right_cmd(0.0f), m_last_left_dir(0), m_last_right_dir(0), m_left_encoder(0), m_right_encoder(0),
-    m_left_invert_override_enabled(false), m_left_invert_override_value(false), m_right_invert_override_enabled(false), m_right_invert_override_value(false) {}
+    : m_enabled(false), m_last_left_cmd(0.0f), m_last_right_cmd(0.0f),
+      m_last_left_dir(0), m_last_right_dir(0), m_left_encoder(0),
+      m_right_encoder(0), m_left_invert_override_enabled(false),
+      m_left_invert_override_value(false),
+      m_right_invert_override_enabled(false),
+      m_right_invert_override_value(false) {}
 
 void DCMirrorDriver::initMotorDriver() {
   // Initialize state
@@ -110,42 +129,60 @@ void DCMirrorDriver::initMotorDriver() {
   m_right_pwm_l_chan = (m_right_pwm_l_pin >= 0) ? 3 : -1;
 
   // Configure PWM channels and pins using small helper functions
-  if (m_left_pwm_r_chan >= 0) configurePWMPin(m_left_pwm_r_pin, m_left_pwm_r_chan);
-  if (m_left_pwm_l_chan >= 0) configurePWMPin(m_left_pwm_l_pin, m_left_pwm_l_chan);
-  if (m_right_pwm_r_chan >= 0) configurePWMPin(m_right_pwm_r_pin, m_right_pwm_r_chan);
-  if (m_right_pwm_l_chan >= 0) configurePWMPin(m_right_pwm_l_pin, m_right_pwm_l_chan);
+  if (m_left_pwm_r_chan >= 0)
+    configurePWMPin(m_left_pwm_r_pin, m_left_pwm_r_chan);
+  if (m_left_pwm_l_chan >= 0)
+    configurePWMPin(m_left_pwm_l_pin, m_left_pwm_l_chan);
+  if (m_right_pwm_r_chan >= 0)
+    configurePWMPin(m_right_pwm_r_pin, m_right_pwm_r_chan);
+  if (m_right_pwm_l_chan >= 0)
+    configurePWMPin(m_right_pwm_l_pin, m_right_pwm_l_chan);
 
   // Configure enable pins as outputs and set low
-  if (m_left_en_r_pin >= 0) configureEnablePin(m_left_en_r_pin);
-  if (m_left_en_l_pin >= 0) configureEnablePin(m_left_en_l_pin);
-  if (m_right_en_r_pin >= 0) configureEnablePin(m_right_en_r_pin);
-  if (m_right_en_l_pin >= 0) configureEnablePin(m_right_en_l_pin);
+  if (m_left_en_r_pin >= 0)
+    configureEnablePin(m_left_en_r_pin);
+  if (m_left_en_l_pin >= 0)
+    configureEnablePin(m_left_en_l_pin);
+  if (m_right_en_r_pin >= 0)
+    configureEnablePin(m_right_en_r_pin);
+  if (m_right_en_l_pin >= 0)
+    configureEnablePin(m_right_en_l_pin);
 
   // Ensure all PWM channels are explicitly zeroed at init (defensive)
-  if (m_left_pwm_r_chan >= 0) setPWMduty(m_left_pwm_r_chan, 0);
-  if (m_left_pwm_l_chan >= 0) setPWMduty(m_left_pwm_l_chan, 0);
-  if (m_right_pwm_r_chan >= 0) setPWMduty(m_right_pwm_r_chan, 0);
-  if (m_right_pwm_l_chan >= 0) setPWMduty(m_right_pwm_l_chan, 0);
+  if (m_left_pwm_r_chan >= 0)
+    setPWMduty(m_left_pwm_r_chan, 0);
+  if (m_left_pwm_l_chan >= 0)
+    setPWMduty(m_left_pwm_l_chan, 0);
+  if (m_right_pwm_r_chan >= 0)
+    setPWMduty(m_right_pwm_r_chan, 0);
+  if (m_right_pwm_l_chan >= 0)
+    setPWMduty(m_right_pwm_l_chan, 0);
 
   // Configure encoders using PCNT hardware counters when available
 #if DC_ENCODER_PRESENT_LEFT
   if (DC_LEFT_ENCODER_A_PIN >= 0 && DC_LEFT_ENCODER_B_PIN >= 0) {
     pinMode(DC_LEFT_ENCODER_A_PIN, INPUT_PULLUP);
     pinMode(DC_LEFT_ENCODER_B_PIN, INPUT_PULLUP);
-    setup_pcnt_unit(m_left_pcnt_unit, m_left_pcnt_configured, PCNT_UNIT_0, DC_LEFT_ENCODER_A_PIN, DC_LEFT_ENCODER_B_PIN);
+    setup_pcnt_unit(m_left_pcnt_unit, m_left_pcnt_configured, PCNT_UNIT_0,
+                    DC_LEFT_ENCODER_A_PIN, DC_LEFT_ENCODER_B_PIN);
   }
 #endif
 #if DC_ENCODER_PRESENT_RIGHT
   if (DC_RIGHT_ENCODER_A_PIN >= 0 && DC_RIGHT_ENCODER_B_PIN >= 0) {
     pinMode(DC_RIGHT_ENCODER_A_PIN, INPUT_PULLUP);
     pinMode(DC_RIGHT_ENCODER_B_PIN, INPUT_PULLUP);
-    setup_pcnt_unit(m_right_pcnt_unit, m_right_pcnt_configured, PCNT_UNIT_1, DC_RIGHT_ENCODER_A_PIN, DC_RIGHT_ENCODER_B_PIN);
+    setup_pcnt_unit(m_right_pcnt_unit, m_right_pcnt_configured, PCNT_UNIT_1,
+                    DC_RIGHT_ENCODER_A_PIN, DC_RIGHT_ENCODER_B_PIN);
   }
 #endif
 
-  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: initMotorDriver() - hardware configured");
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: PCNT configured left=%d unit=%d right=%d unit=%d\n",
-             (int)m_left_pcnt_configured, m_left_pcnt_unit, (int)m_right_pcnt_configured, m_right_pcnt_unit);
+  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+              "DCMirrorDriver: initMotorDriver() - hardware configured");
+  LOG_PRINTF(
+      abbot::log::CHANNEL_MOTOR,
+      "DCMirrorDriver: PCNT configured left=%d unit=%d right=%d unit=%d\n",
+      (int)m_left_pcnt_configured, m_left_pcnt_unit,
+      (int)m_right_pcnt_configured, m_right_pcnt_unit);
 }
 
 void DCMirrorDriver::clearCommandState() {
@@ -156,82 +193,118 @@ void DCMirrorDriver::clearCommandState() {
 }
 
 float DCMirrorDriver::getLastMotorCommand(MotorSide side) {
-  if (side == MotorSide::LEFT) return m_last_left_cmd;
-  if (side == MotorSide::RIGHT) return m_last_right_cmd;
+  if (side == MotorSide::LEFT)
+    return m_last_left_cmd;
+  if (side == MotorSide::RIGHT)
+    return m_last_right_cmd;
   return 0.0f;
 }
 
 void DCMirrorDriver::enableMotors() {
   m_enabled = true;
   // Defensive: ensure PWM channels are at 0 before enabling EN pins
-  if (m_left_pwm_r_chan >= 0) setPWMduty(m_left_pwm_r_chan, 0);
-  if (m_left_pwm_l_chan >= 0) setPWMduty(m_left_pwm_l_chan, 0);
-  if (m_right_pwm_r_chan >= 0) setPWMduty(m_right_pwm_r_chan, 0);
-  if (m_right_pwm_l_chan >= 0) setPWMduty(m_right_pwm_l_chan, 0);
+  if (m_left_pwm_r_chan >= 0)
+    setPWMduty(m_left_pwm_r_chan, 0);
+  if (m_left_pwm_l_chan >= 0)
+    setPWMduty(m_left_pwm_l_chan, 0);
+  if (m_right_pwm_r_chan >= 0)
+    setPWMduty(m_right_pwm_r_chan, 0);
+  if (m_right_pwm_l_chan >= 0)
+    setPWMduty(m_right_pwm_l_chan, 0);
   // Set all EN pins high to enable H-bridges
-  if (m_left_en_r_pin >= 0) setEnablePinState(m_left_en_r_pin, true);
-  if (m_left_en_l_pin >= 0) setEnablePinState(m_left_en_l_pin, true);
-  if (m_right_en_r_pin >= 0) setEnablePinState(m_right_en_r_pin, true);
-  if (m_right_en_l_pin >= 0) setEnablePinState(m_right_en_l_pin, true);
+  if (m_left_en_r_pin >= 0)
+    setEnablePinState(m_left_en_r_pin, true);
+  if (m_left_en_l_pin >= 0)
+    setEnablePinState(m_left_en_l_pin, true);
+  if (m_right_en_r_pin >= 0)
+    setEnablePinState(m_right_en_r_pin, true);
+  if (m_right_en_l_pin >= 0)
+    setEnablePinState(m_right_en_l_pin, true);
   LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: motors enabled");
 }
 
 void DCMirrorDriver::disableMotors() {
   m_enabled = false;
   // Stop PWM channels and clear EN pins using helper functions
-  if (m_left_pwm_r_chan >= 0) setPWMduty(m_left_pwm_r_chan, 0);
-  if (m_left_pwm_l_chan >= 0) setPWMduty(m_left_pwm_l_chan, 0);
-  if (m_right_pwm_r_chan >= 0) setPWMduty(m_right_pwm_r_chan, 0);
-  if (m_right_pwm_l_chan >= 0) setPWMduty(m_right_pwm_l_chan, 0);
-  if (m_left_en_r_pin >= 0) setEnablePinState(m_left_en_r_pin, false);
-  if (m_left_en_l_pin >= 0) setEnablePinState(m_left_en_l_pin, false);
-  if (m_right_en_r_pin >= 0) setEnablePinState(m_right_en_r_pin, false);
-  if (m_right_en_l_pin >= 0) setEnablePinState(m_right_en_l_pin, false);
-  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: motors disabled (hardware)");
+  if (m_left_pwm_r_chan >= 0)
+    setPWMduty(m_left_pwm_r_chan, 0);
+  if (m_left_pwm_l_chan >= 0)
+    setPWMduty(m_left_pwm_l_chan, 0);
+  if (m_right_pwm_r_chan >= 0)
+    setPWMduty(m_right_pwm_r_chan, 0);
+  if (m_right_pwm_l_chan >= 0)
+    setPWMduty(m_right_pwm_l_chan, 0);
+  if (m_left_en_r_pin >= 0)
+    setEnablePinState(m_left_en_r_pin, false);
+  if (m_left_en_l_pin >= 0)
+    setEnablePinState(m_left_en_l_pin, false);
+  if (m_right_en_r_pin >= 0)
+    setEnablePinState(m_right_en_r_pin, false);
+  if (m_right_en_l_pin >= 0)
+    setEnablePinState(m_right_en_l_pin, false);
+  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+              "DCMirrorDriver: motors disabled (hardware)");
 }
 
-bool DCMirrorDriver::areMotorsEnabled() {
-  return m_enabled;
-}
+bool DCMirrorDriver::areMotorsEnabled() { return m_enabled; }
 
 void DCMirrorDriver::printStatus() {
   char buf[256];
-  snprintf(buf, sizeof(buf), "DCMirrorDriver: enabled=%d left_cmd=%.3f right_cmd=%.3f left_enc=%lld right_enc=%lld",
-           (int)m_enabled, (double)m_last_left_cmd, (double)m_last_right_cmd, (long long)m_left_encoder, (long long)m_right_encoder);
+  snprintf(buf, sizeof(buf),
+           "DCMirrorDriver: enabled=%d left_cmd=%.3f right_cmd=%.3f "
+           "left_enc=%lld right_enc=%lld",
+           (int)m_enabled, (double)m_last_left_cmd, (double)m_last_right_cmd,
+           (long long)m_left_encoder, (long long)m_right_encoder);
   LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, buf);
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: PCNT left_configured=%d left_unit=%d right_configured=%d right_unit=%d\n",
-             (int)m_left_pcnt_configured, m_left_pcnt_unit, (int)m_right_pcnt_configured, m_right_pcnt_unit);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "DCMirrorDriver: PCNT left_configured=%d left_unit=%d "
+             "right_configured=%d right_unit=%d\n",
+             (int)m_left_pcnt_configured, m_left_pcnt_unit,
+             (int)m_right_pcnt_configured, m_right_pcnt_unit);
 }
 
 void DCMirrorDriver::dumpConfig() {
-  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: dumpConfig (pins and mirror settings)");
+  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+              "DCMirrorDriver: dumpConfig (pins and mirror settings)");
   char buf[192];
-  snprintf(buf, sizeof(buf), "LEFT PWM R=%d L=%d EN_R=%d EN_L=%d RIGHT PWM R=%d L=%d EN_R=%d EN_L=%d",
-           DC_LEFT_PWM_R_PIN, DC_LEFT_PWM_L_PIN, DC_LEFT_EN_R_PIN, DC_LEFT_EN_L_PIN,
-           DC_RIGHT_PWM_R_PIN, DC_RIGHT_PWM_L_PIN, DC_RIGHT_EN_R_PIN, DC_RIGHT_EN_L_PIN);
+  snprintf(
+      buf, sizeof(buf),
+      "LEFT PWM R=%d L=%d EN_R=%d EN_L=%d RIGHT PWM R=%d L=%d EN_R=%d EN_L=%d",
+      DC_LEFT_PWM_R_PIN, DC_LEFT_PWM_L_PIN, DC_LEFT_EN_R_PIN, DC_LEFT_EN_L_PIN,
+      DC_RIGHT_PWM_R_PIN, DC_RIGHT_PWM_L_PIN, DC_RIGHT_EN_R_PIN,
+      DC_RIGHT_EN_L_PIN);
   LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, buf);
-  snprintf(buf, sizeof(buf), "DC_MIRROR_MODE_ENABLED=%d LEFT_ENCODER_PRESENT=%d RIGHT_ENCODER_PRESENT=%d AUTH_SIDE_RIGHT=%d",
-           DC_MIRROR_MODE_ENABLED, DC_ENCODER_PRESENT_LEFT, DC_ENCODER_PRESENT_RIGHT, DC_MIRROR_AUTH_SIDE_RIGHT);
+  snprintf(buf, sizeof(buf),
+           "DC_MIRROR_MODE_ENABLED=%d LEFT_ENCODER_PRESENT=%d "
+           "RIGHT_ENCODER_PRESENT=%d AUTH_SIDE_RIGHT=%d",
+           DC_MIRROR_MODE_ENABLED, DC_ENCODER_PRESENT_LEFT,
+           DC_ENCODER_PRESENT_RIGHT, DC_MIRROR_AUTH_SIDE_RIGHT);
   LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, buf);
 }
 
 static inline int motorIdToIndex(int id) {
-  if (id == DC_LEFT_MOTOR_ID) return 0;
-  if (id == DC_RIGHT_MOTOR_ID) return 1;
+  if (id == DC_LEFT_MOTOR_ID)
+    return 0;
+  if (id == DC_RIGHT_MOTOR_ID)
+    return 1;
   return -1;
 }
 
-void DCMirrorDriver::setMotorCommandBoth(float left_command, float right_command) {
+void DCMirrorDriver::setMotorCommandBoth(float left_command,
+                                         float right_command) {
   m_last_left_cmd = left_command;
   m_last_right_cmd = right_command;
   // Map normalized commands [-1.0..1.0] to raw speed and apply to hardware
-  int16_t rawLeft = (int16_t)roundf(left_command * (float)DC_VELOCITY_MAX_SPEED);
-  int16_t rawRight = (int16_t)roundf(right_command * (float)DC_VELOCITY_MAX_SPEED);
+  int16_t rawLeft =
+      (int16_t)roundf(left_command * (float)DC_VELOCITY_MAX_SPEED);
+  int16_t rawRight =
+      (int16_t)roundf(right_command * (float)DC_VELOCITY_MAX_SPEED);
   applyHardwareCommand(MotorSide::LEFT, rawLeft);
   applyHardwareCommand(MotorSide::RIGHT, rawRight);
 
   // Update simulated encoders for compatibility with existing logic/tests
-  const float scale = DC_VELOCITY_TARGET_INCREMENT_SCALE; // counts per cycle per unit command
+  const float scale =
+      DC_VELOCITY_TARGET_INCREMENT_SCALE; // counts per cycle per unit command
   int32_t left_inc = (int32_t)roundf(left_command * scale);
   int32_t right_inc = (int32_t)roundf(right_command * scale);
   // Only apply simulated increments when a hardware encoder is NOT present
@@ -246,8 +319,10 @@ void DCMirrorDriver::setMotorCommandBoth(float left_command, float right_command
 }
 
 void DCMirrorDriver::setMotorCommand(MotorSide side, float command) {
-  if (side == MotorSide::LEFT) setMotorCommandBoth(command, m_last_right_cmd);
-  else if (side == MotorSide::RIGHT) setMotorCommandBoth(m_last_left_cmd, command);
+  if (side == MotorSide::LEFT)
+    setMotorCommandBoth(command, m_last_right_cmd);
+  else if (side == MotorSide::RIGHT)
+    setMotorCommandBoth(m_last_left_cmd, command);
 }
 
 void DCMirrorDriver::setMotorCommandRaw(MotorSide side, int16_t rawSpeed) {
@@ -265,19 +340,24 @@ int32_t DCMirrorDriver::readEncoder(MotorSide side) {
   // mirror of the authoritative encoder if mirror mode enabled.
   if (side == MotorSide::LEFT) {
     if (DC_ENCODER_PRESENT_LEFT) {
-          if (m_left_pcnt_configured) {
-            readAndAccumulatePCNT((pcnt_unit_t)m_left_pcnt_unit, m_left_encoder, DC_ENCODER_SIGNALS_PER_PIN);
-            return (int32_t)m_left_encoder;
-          }
-          LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: readEncoder LEFT - PCNT not configured, returning simulated=%lld\n", (long long)m_left_encoder);
-          return (int32_t)m_left_encoder;
+      if (m_left_pcnt_configured) {
+        readAndAccumulatePCNT((pcnt_unit_t)m_left_pcnt_unit, m_left_encoder,
+                              DC_ENCODER_SIGNALS_PER_PIN);
+        return (int32_t)m_left_encoder;
+      }
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "DCMirrorDriver: readEncoder LEFT - PCNT not configured, "
+                 "returning simulated=%lld\n",
+                 (long long)m_left_encoder);
+      return (int32_t)m_left_encoder;
     }
     if (DC_MIRROR_MODE_ENABLED) {
       // mirror from auth side
       if (DC_MIRROR_AUTH_SIDE_RIGHT && DC_ENCODER_PRESENT_RIGHT) {
         int32_t val = (int32_t)m_right_encoder;
         // apply inversion if motor directions differ
-        if (DC_LEFT_MOTOR_INVERT != DC_RIGHT_MOTOR_INVERT) val = -val;
+        if (DC_LEFT_MOTOR_INVERT != DC_RIGHT_MOTOR_INVERT)
+          val = -val;
         return val;
       }
     }
@@ -285,16 +365,21 @@ int32_t DCMirrorDriver::readEncoder(MotorSide side) {
   } else if (side == MotorSide::RIGHT) {
     if (DC_ENCODER_PRESENT_RIGHT) {
       if (m_right_pcnt_configured) {
-        readAndAccumulatePCNT((pcnt_unit_t)m_right_pcnt_unit, m_right_encoder, DC_ENCODER_SIGNALS_PER_PIN);
+        readAndAccumulatePCNT((pcnt_unit_t)m_right_pcnt_unit, m_right_encoder,
+                              DC_ENCODER_SIGNALS_PER_PIN);
         return (int32_t)m_right_encoder;
       }
-      LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: readEncoder RIGHT - PCNT not configured, returning simulated=%lld\n", (long long)m_right_encoder);
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "DCMirrorDriver: readEncoder RIGHT - PCNT not configured, "
+                 "returning simulated=%lld\n",
+                 (long long)m_right_encoder);
       return (int32_t)m_right_encoder;
     }
     if (DC_MIRROR_MODE_ENABLED) {
       if (!DC_MIRROR_AUTH_SIDE_RIGHT && DC_ENCODER_PRESENT_LEFT) {
         int32_t val = (int32_t)m_left_encoder;
-        if (DC_LEFT_MOTOR_INVERT != DC_RIGHT_MOTOR_INVERT) val = -val;
+        if (DC_LEFT_MOTOR_INVERT != DC_RIGHT_MOTOR_INVERT)
+          val = -val;
         return val;
       }
       // If auth side is right but right encoder missing, we can't mirror
@@ -308,10 +393,12 @@ void DCMirrorDriver::resetPositionTracking() {
   m_left_encoder = 0;
   m_right_encoder = 0;
 #if DC_ENCODER_PRESENT_LEFT
-  if (m_left_pcnt_configured && m_left_pcnt_unit >= 0) pcnt_counter_clear((pcnt_unit_t)m_left_pcnt_unit);
+  if (m_left_pcnt_configured && m_left_pcnt_unit >= 0)
+    pcnt_counter_clear((pcnt_unit_t)m_left_pcnt_unit);
 #endif
 #if DC_ENCODER_PRESENT_RIGHT
-  if (m_right_pcnt_configured && m_right_pcnt_unit >= 0) pcnt_counter_clear((pcnt_unit_t)m_right_pcnt_unit);
+  if (m_right_pcnt_configured && m_right_pcnt_unit >= 0)
+    pcnt_counter_clear((pcnt_unit_t)m_right_pcnt_unit);
 #endif
 }
 
@@ -323,9 +410,20 @@ bool DCMirrorDriver::processSerialCommand(const String &line) {
   String u = line;
   u.trim();
   u.toUpperCase();
-  if (u == "DUMP") { dumpConfig(); return true; }
-  if (u == "POS") { printStatus(); return true; }
-  if (u == "RESETPOS" || u == "RESETPOS\r" ) { resetPositionTracking(); LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: resetPositionTracking"); return true; }
+  if (u == "DUMP") {
+    dumpConfig();
+    return true;
+  }
+  if (u == "POS") {
+    printStatus();
+    return true;
+  }
+  if (u == "RESETPOS" || u == "RESETPOS\r") {
+    resetPositionTracking();
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                "DCMirrorDriver: resetPositionTracking");
+    return true;
+  }
 
   // DC-specific: support runtime inversion toggle
   // Syntax: MOTOR INVERT <LEFT|RIGHT|ID> [0|1]
@@ -338,15 +436,21 @@ bool DCMirrorDriver::processSerialCommand(const String &line) {
       char *cmd = strtok(NULL, " \t\r\n");
       if (cmd && strcmp(cmd, "INVERT") == 0) {
         char *arg = strtok(NULL, " \t\r\n");
-        if (!arg) return false;
+        if (!arg)
+          return false;
         int sideIdx = -1;
-        if (strcmp(arg, "LEFT") == 0) sideIdx = 0;
-        else if (strcmp(arg, "RIGHT") == 0) sideIdx = 1;
+        if (strcmp(arg, "LEFT") == 0)
+          sideIdx = 0;
+        else if (strcmp(arg, "RIGHT") == 0)
+          sideIdx = 1;
         else {
           int id = atoi(arg);
-          sideIdx = (id == getMotorId(MotorSide::LEFT)) ? 0 : ((id == getMotorId(MotorSide::RIGHT)) ? 1 : -1);
+          sideIdx = (id == getMotorId(MotorSide::LEFT))
+                        ? 0
+                        : ((id == getMotorId(MotorSide::RIGHT)) ? 1 : -1);
         }
-        if (sideIdx == -1) return false;
+        if (sideIdx == -1)
+          return false;
         char *val = strtok(NULL, " \t\r\n");
         bool newval = true;
         bool hasVal = false;
@@ -358,11 +462,13 @@ bool DCMirrorDriver::processSerialCommand(const String &line) {
         if (sideIdx == 0) {
           m_left_invert_override_enabled = true;
           m_left_invert_override_value = newval;
-          LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: LEFT invert override=%d\n", (int)newval);
+          LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                     "DCMirrorDriver: LEFT invert override=%d\n", (int)newval);
         } else {
           m_right_invert_override_enabled = true;
           m_right_invert_override_value = newval;
-          LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: RIGHT invert override=%d\n", (int)newval);
+          LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                     "DCMirrorDriver: RIGHT invert override=%d\n", (int)newval);
         }
         return true;
       }
@@ -380,44 +486,56 @@ int DCMirrorDriver::getMotorId(MotorSide side) const {
 
 bool DCMirrorDriver::isMotorInverted(MotorSide side) const {
   if (side == MotorSide::LEFT) {
-    if (m_left_invert_override_enabled) return m_left_invert_override_value;
+    if (m_left_invert_override_enabled)
+      return m_left_invert_override_value;
     return (DC_LEFT_MOTOR_INVERT != 0);
   } else {
-    if (m_right_invert_override_enabled) return m_right_invert_override_value;
+    if (m_right_invert_override_enabled)
+      return m_right_invert_override_value;
     return (DC_RIGHT_MOTOR_INVERT != 0);
   }
 }
 
-float DCMirrorDriver::getVelocityMaxSpeed() const { return (float)DC_VELOCITY_MAX_SPEED; }
-float DCMirrorDriver::getVelocityTargetIncrementScale() const { return (float)DC_VELOCITY_TARGET_INCREMENT_SCALE; }
+float DCMirrorDriver::getVelocityMaxSpeed() const {
+  return (float)DC_VELOCITY_MAX_SPEED;
+}
+float DCMirrorDriver::getVelocityTargetIncrementScale() const {
+  return (float)DC_VELOCITY_TARGET_INCREMENT_SCALE;
+}
 float DCMirrorDriver::getVelocityPositionKp() const { return 0.0f; }
 
-const char* DCMirrorDriver::getDriverName() const { return "dc_mirror"; }
+const char *DCMirrorDriver::getDriverName() const { return "dc_mirror"; }
 
 void DCMirrorDriver::applyMirrorIfNeeded() {
-  if (!DC_MIRROR_MODE_ENABLED) return;
+  if (!DC_MIRROR_MODE_ENABLED)
+    return;
   // If left missing and right present, mirror right -> left
   if (!DC_ENCODER_PRESENT_LEFT && DC_ENCODER_PRESENT_RIGHT) {
     int32_t val = (int32_t)m_right_encoder;
-    if (DC_LEFT_MOTOR_INVERT != DC_RIGHT_MOTOR_INVERT) val = -val;
+    if (DC_LEFT_MOTOR_INVERT != DC_RIGHT_MOTOR_INVERT)
+      val = -val;
     m_left_encoder = val;
   }
   // If right missing and left present and auth side left, mirror left -> right
   if (!DC_ENCODER_PRESENT_RIGHT && DC_ENCODER_PRESENT_LEFT) {
     int32_t val = (int32_t)m_left_encoder;
-    if (DC_LEFT_MOTOR_INVERT != DC_RIGHT_MOTOR_INVERT) val = -val;
+    if (DC_LEFT_MOTOR_INVERT != DC_RIGHT_MOTOR_INVERT)
+      val = -val;
     m_right_encoder = val;
   }
 }
 
 void DCMirrorDriver::checkDivergenceAndSafety() {
-  if (!DC_MIRROR_MODE_ENABLED) return;
+  if (!DC_MIRROR_MODE_ENABLED)
+    return;
   // If both encoders present, check divergence; else skip
   if (DC_ENCODER_PRESENT_LEFT && DC_ENCODER_PRESENT_RIGHT) {
     int64_t diff = llabs(m_left_encoder - m_right_encoder);
     if (diff > DC_MIRROR_DIVERGENCE_THRESH) {
       char buf[128];
-      snprintf(buf, sizeof(buf), "DCMirrorDriver: encoder divergence detected=%lld > %d - disabling motors",
+      snprintf(buf, sizeof(buf),
+               "DCMirrorDriver: encoder divergence detected=%lld > %d - "
+               "disabling motors",
                (long long)diff, (int)DC_MIRROR_DIVERGENCE_THRESH);
       LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, buf);
       disableMotors();
@@ -427,20 +545,29 @@ void DCMirrorDriver::checkDivergenceAndSafety() {
 
 // Hardware helpers
 void DCMirrorDriver::stopMotorHardware(MotorSide side) {
-  #if DC_MIRROR_DRIVER_DEBUG
+#if DC_MIRROR_DRIVER_DEBUG
   const char *sname = (side == MotorSide::LEFT) ? "LEFT" : "RIGHT";
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: stopMotorHardware(%s)", sname);
-  #endif
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: stopMotorHardware(%s)",
+             sname);
+#endif
   if (side == MotorSide::LEFT) {
-    if (m_left_pwm_r_chan >= 0) setPWMduty(m_left_pwm_r_chan, 0);
-    if (m_left_pwm_l_chan >= 0) setPWMduty(m_left_pwm_l_chan, 0);
-    if (m_left_en_r_pin >= 0) setEnablePinState(m_left_en_r_pin, false);
-    if (m_left_en_l_pin >= 0) setEnablePinState(m_left_en_l_pin, false);
+    if (m_left_pwm_r_chan >= 0)
+      setPWMduty(m_left_pwm_r_chan, 0);
+    if (m_left_pwm_l_chan >= 0)
+      setPWMduty(m_left_pwm_l_chan, 0);
+    if (m_left_en_r_pin >= 0)
+      setEnablePinState(m_left_en_r_pin, false);
+    if (m_left_en_l_pin >= 0)
+      setEnablePinState(m_left_en_l_pin, false);
   } else {
-    if (m_right_pwm_r_chan >= 0) setPWMduty(m_right_pwm_r_chan, 0);
-    if (m_right_pwm_l_chan >= 0) setPWMduty(m_right_pwm_l_chan, 0);
-    if (m_right_en_r_pin >= 0) setEnablePinState(m_right_en_r_pin, false);
-    if (m_right_en_l_pin >= 0) setEnablePinState(m_right_en_l_pin, false);
+    if (m_right_pwm_r_chan >= 0)
+      setPWMduty(m_right_pwm_r_chan, 0);
+    if (m_right_pwm_l_chan >= 0)
+      setPWMduty(m_right_pwm_l_chan, 0);
+    if (m_right_en_r_pin >= 0)
+      setEnablePinState(m_right_en_r_pin, false);
+    if (m_right_en_l_pin >= 0)
+      setEnablePinState(m_right_en_l_pin, false);
   }
 }
 
@@ -448,22 +575,28 @@ void DCMirrorDriver::applyHardwareCommand(MotorSide side, int16_t rawSpeed) {
   // Normalize by inversion setting
   bool inverted = isMotorInverted(side);
   int32_t desired = rawSpeed;
-  if (inverted) desired = -desired;
+  if (inverted)
+    desired = -desired;
 
   // Determine direction and duty
   int32_t absv = (desired >= 0) ? desired : -desired;
-  if (absv > DC_VELOCITY_MAX_SPEED) absv = DC_VELOCITY_MAX_SPEED;
+  if (absv > DC_VELOCITY_MAX_SPEED)
+    absv = DC_VELOCITY_MAX_SPEED;
   uint32_t duty = 0;
   if (DC_VELOCITY_MAX_SPEED > 0)
-    duty = (uint32_t)(((uint64_t)absv * (uint64_t)m_pwm_max_duty) / (uint64_t)DC_VELOCITY_MAX_SPEED);
+    duty = (uint32_t)(((uint64_t)absv * (uint64_t)m_pwm_max_duty) /
+                      (uint64_t)DC_VELOCITY_MAX_SPEED);
 
   // Determine new direction: -1, 0, +1
   int newDir = (desired > 0) ? 1 : ((desired < 0) ? -1 : 0);
-  int *pLastDir = (side == MotorSide::LEFT) ? &m_last_left_dir : &m_last_right_dir;
+  int *pLastDir =
+      (side == MotorSide::LEFT) ? &m_last_left_dir : &m_last_right_dir;
 
 #if DC_MIRROR_DRIVER_DEBUG
   const char *sname = (side == MotorSide::LEFT) ? "LEFT" : "RIGHT";
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: applyHardwareCommand(%s) raw=%d desired=%d duty=%u lastDir=%d",
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "DCMirrorDriver: applyHardwareCommand(%s) raw=%d desired=%d "
+             "duty=%u lastDir=%d",
              sname, (int)rawSpeed, (int)desired, (unsigned)duty, *pLastDir);
 #endif
 
@@ -474,28 +607,36 @@ void DCMirrorDriver::applyHardwareCommand(MotorSide side, int16_t rawSpeed) {
     return;
   }
 
-  // If direction unchanged, just update duty on the active channel and ensure EN pins
+  // If direction unchanged, just update duty on the active channel and ensure
+  // EN pins
   if (*pLastDir == newDir) {
-    #if DC_MIRROR_DRIVER_DEBUG
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: direction unchanged for %s (dir=%d) - updating duty", sname, newDir);
-    #endif
+#if DC_MIRROR_DRIVER_DEBUG
+    LOG_PRINTF(
+        abbot::log::CHANNEL_MOTOR,
+        "DCMirrorDriver: direction unchanged for %s (dir=%d) - updating duty",
+        sname, newDir);
+#endif
     applyDutyForSide(side, desired, duty);
     *pLastDir = newDir;
     return;
   }
 
-  // Direction changed: perform safe stop, small deadtime, then apply new channel
-  #if DC_MIRROR_DRIVER_DEBUG
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: direction change for %s: %d -> %d - performing safe stop", sname, *pLastDir, newDir);
-  #endif
+// Direction changed: perform safe stop, small deadtime, then apply new channel
+#if DC_MIRROR_DRIVER_DEBUG
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "DCMirrorDriver: direction change for %s: %d -> %d - performing "
+             "safe stop",
+             sname, *pLastDir, newDir);
+#endif
   stopMotorHardware(side);
   safeDirectionChangeDelay();
 
   applyDutyForSide(side, desired, duty);
 
-  #if DC_MIRROR_DRIVER_DEBUG
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: applied new direction %d for %s", newDir, sname);
-  #endif
+#if DC_MIRROR_DRIVER_DEBUG
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "DCMirrorDriver: applied new direction %d for %s", newDir, sname);
+#endif
 
   *pLastDir = newDir;
 }
@@ -514,13 +655,16 @@ void DCMirrorDriver::configureEnablePin(int pin) {
 }
 
 void DCMirrorDriver::setPWMduty(int chan, uint32_t duty) {
-  if (chan < 0) return;
-  if (duty > (uint32_t)m_pwm_max_duty) duty = m_pwm_max_duty;
+  if (chan < 0)
+    return;
+  if (duty > (uint32_t)m_pwm_max_duty)
+    duty = m_pwm_max_duty;
   ledcWrite(chan, duty);
 }
 
 void DCMirrorDriver::setEnablePinState(int pin, bool high) {
-  if (pin < 0) return;
+  if (pin < 0)
+    return;
   digitalWrite(pin, high ? HIGH : LOW);
 }
 
@@ -530,49 +674,66 @@ void DCMirrorDriver::safeDirectionChangeDelay() {
 }
 
 // Apply PWM duty to the correct channel for the given side and ensure EN pins
-void DCMirrorDriver::applyDutyForSide(MotorSide side, int32_t desired, uint32_t duty) {
+void DCMirrorDriver::applyDutyForSide(MotorSide side, int32_t desired,
+                                      uint32_t duty) {
   if (side == MotorSide::LEFT) {
     if (desired > 0) {
       if (m_left_pwm_r_chan >= 0) {
         setPWMduty(m_left_pwm_r_chan, duty);
-        #if DC_MIRROR_DRIVER_DEBUG
-        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: LEFT -> using R channel chan=%d duty=%u", m_left_pwm_r_chan, duty);
-        #endif
+#if DC_MIRROR_DRIVER_DEBUG
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "DCMirrorDriver: LEFT -> using R channel chan=%d duty=%u",
+                   m_left_pwm_r_chan, duty);
+#endif
       }
     } else {
       if (m_left_pwm_l_chan >= 0) {
         setPWMduty(m_left_pwm_l_chan, duty);
-        #if DC_MIRROR_DRIVER_DEBUG
-        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: LEFT -> using L channel chan=%d duty=%u", m_left_pwm_l_chan, duty);
-        #endif
+#if DC_MIRROR_DRIVER_DEBUG
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "DCMirrorDriver: LEFT -> using L channel chan=%d duty=%u",
+                   m_left_pwm_l_chan, duty);
+#endif
       }
     }
-    if (m_left_en_r_pin >= 0) setEnablePinState(m_left_en_r_pin, true);
-    if (m_left_en_l_pin >= 0) setEnablePinState(m_left_en_l_pin, true);
-    #if DC_MIRROR_DRIVER_DEBUG
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: LEFT EN pins set R=%d L=%d", m_left_en_r_pin, m_left_en_l_pin);
-    #endif
+    if (m_left_en_r_pin >= 0)
+      setEnablePinState(m_left_en_r_pin, true);
+    if (m_left_en_l_pin >= 0)
+      setEnablePinState(m_left_en_l_pin, true);
+#if DC_MIRROR_DRIVER_DEBUG
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "DCMirrorDriver: LEFT EN pins set R=%d L=%d", m_left_en_r_pin,
+               m_left_en_l_pin);
+#endif
   } else {
     if (desired > 0) {
       if (m_right_pwm_r_chan >= 0) {
         setPWMduty(m_right_pwm_r_chan, duty);
-        #if DC_MIRROR_DRIVER_DEBUG
-        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: RIGHT -> using R channel chan=%d duty=%u", m_right_pwm_r_chan, duty);
-        #endif
+#if DC_MIRROR_DRIVER_DEBUG
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "DCMirrorDriver: RIGHT -> using R channel chan=%d duty=%u",
+                   m_right_pwm_r_chan, duty);
+#endif
       }
     } else {
       if (m_right_pwm_l_chan >= 0) {
         setPWMduty(m_right_pwm_l_chan, duty);
-        #if DC_MIRROR_DRIVER_DEBUG
-        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: RIGHT -> using L channel chan=%d duty=%u", m_right_pwm_l_chan, duty);
-        #endif
+#if DC_MIRROR_DRIVER_DEBUG
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "DCMirrorDriver: RIGHT -> using L channel chan=%d duty=%u",
+                   m_right_pwm_l_chan, duty);
+#endif
       }
     }
-    if (m_right_en_r_pin >= 0) setEnablePinState(m_right_en_r_pin, true);
-    if (m_right_en_l_pin >= 0) setEnablePinState(m_right_en_l_pin, true);
-    #if DC_MIRROR_DRIVER_DEBUG
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "DCMirrorDriver: RIGHT EN pins set R=%d L=%d", m_right_en_r_pin, m_right_en_l_pin);
-    #endif
+    if (m_right_en_r_pin >= 0)
+      setEnablePinState(m_right_en_r_pin, true);
+    if (m_right_en_l_pin >= 0)
+      setEnablePinState(m_right_en_l_pin, true);
+#if DC_MIRROR_DRIVER_DEBUG
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "DCMirrorDriver: RIGHT EN pins set R=%d L=%d", m_right_en_r_pin,
+               m_right_en_l_pin);
+#endif
   }
 }
 
@@ -595,9 +756,7 @@ static DCMirrorDriver g_dcMirrorDriver;
 
 // Using PCNT hardware counters; no software ISRs are used here.
 
-void installDefaultDCMirrorDriver() {
-  setActiveMotorDriver(&g_dcMirrorDriver);
-}
+void installDefaultDCMirrorDriver() { setActiveMotorDriver(&g_dcMirrorDriver); }
 
 } // namespace motor
 } // namespace abbot

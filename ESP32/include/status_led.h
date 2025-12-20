@@ -25,8 +25,13 @@ bool statusLedPresent();
 // Update the status LED based on the IMU consumer state. Implemented as a
 // convenience helper so callers (e.g. SystemTasks) can delegate LED logic to
 // the status LED module. No-op on boards without an LED.
-namespace abbot { namespace imu_consumer { struct ConsumerState; } }
-void statusLedUpdateFromConsumer(const abbot::imu_consumer::ConsumerState &state);
+namespace abbot {
+namespace imu_consumer {
+struct ConsumerState;
+}
+} // namespace abbot
+void statusLedUpdateFromConsumer(
+    const abbot::imu_consumer::ConsumerState &state);
 
 // Blink the LED red in a loop to indicate a fatal error. This function
 // does not return (intended to be used when startup must halt).

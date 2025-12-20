@@ -1,8 +1,8 @@
 // driver_manager.cpp
 #include "../include/motor_drivers/driver_manager.h"
+#include "../config/motor_configs/motor_common_config.h"
 #include "../include/motor_drivers/IMotorDriver.h"
 #include "logging.h"
-#include "../config/motor_configs/motor_common_config.h"
 #if MOTOR_USE_DC_DRIVER
 #include "../include/motor_drivers/dc_mirror_driver.h"
 #endif
@@ -14,12 +14,11 @@ static IMotorDriver *g_active = nullptr;
 
 void setActiveMotorDriver(IMotorDriver *drv) {
   g_active = drv;
-  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "driver_manager: active motor driver set");
+  LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+              "driver_manager: active motor driver set");
 }
 
-IMotorDriver *getActiveMotorDriver() {
-  return g_active;
-}
+IMotorDriver *getActiveMotorDriver() { return g_active; }
 
 // installDefaultServoAdapter is implemented in servo_adapter.cpp
 void installDefaultServoAdapter();
@@ -67,7 +66,7 @@ float getActiveVelocityPositionKp(float fallback) {
   return fallback;
 }
 
-const char* getActiveDriverName(const char* fallback) {
+const char *getActiveDriverName(const char *fallback) {
   if (g_active) {
     return g_active->getDriverName();
   }
@@ -85,8 +84,10 @@ void installDefaultMotorDriver() {
 
 // Helper: map numeric id -> MotorSide using active driver's getMotorId
 static bool idToSide(int id, IMotorDriver::MotorSide &out_side) {
-  if (!g_active) return false;
-  IMotorDriver::MotorSide sides[2] = { IMotorDriver::MotorSide::LEFT, IMotorDriver::MotorSide::RIGHT };
+  if (!g_active)
+    return false;
+  IMotorDriver::MotorSide sides[2] = {IMotorDriver::MotorSide::LEFT,
+                                      IMotorDriver::MotorSide::RIGHT};
   for (int i = 0; i < 2; ++i) {
     IMotorDriver::MotorSide s = sides[i];
     if (g_active->getMotorId(s) == id) {
@@ -98,32 +99,38 @@ static bool idToSide(int id, IMotorDriver::MotorSide &out_side) {
 }
 
 void setMotorCommandById(int id, float command) {
-  if (!g_active) return;
+  if (!g_active)
+    return;
   IMotorDriver::MotorSide side;
   if (idToSide(id, side)) {
     g_active->setMotorCommand(side, command);
   } else {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "driver_manager: setMotorCommandById unknown id=%d", id);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "driver_manager: setMotorCommandById unknown id=%d", id);
   }
 }
 
 void setMotorCommandRawById(int id, int16_t rawSpeed) {
-  if (!g_active) return;
+  if (!g_active)
+    return;
   IMotorDriver::MotorSide side;
   if (idToSide(id, side)) {
     g_active->setMotorCommandRaw(side, rawSpeed);
   } else {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "driver_manager: setMotorCommandRawById unknown id=%d", id);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "driver_manager: setMotorCommandRawById unknown id=%d", id);
   }
 }
 
 int32_t readEncoderById(int id) {
-  if (!g_active) return 0;
+  if (!g_active)
+    return 0;
   IMotorDriver::MotorSide side;
   if (idToSide(id, side)) {
     return g_active->readEncoder(side);
   }
-  LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "driver_manager: readEncoderById unknown id=%d", id);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "driver_manager: readEncoderById unknown id=%d", id);
   return 0;
 }
 

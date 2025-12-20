@@ -1,7 +1,7 @@
 // logging.h - simple log channel manager
 #pragma once
-#include <cstdint>
 #include <cstddef>
+#include <cstdint>
 #if defined(UNIT_TEST_HOST)
 #include <string>
 using String = std::string;
@@ -26,12 +26,12 @@ namespace abbot {
 namespace log {
 
 enum Channel : uint32_t {
-    CHANNEL_TUNING = 1u << 0,
-    CHANNEL_BLE     = 1u << 1,
-    CHANNEL_IMU     = 1u << 2,
-    CHANNEL_MOTOR   = 1u << 3,
-    CHANNEL_DEFAULT = 1u << 4,
-    CHANNEL_BALANCER = 1u << 5,
+  CHANNEL_TUNING = 1u << 0,
+  CHANNEL_BLE = 1u << 1,
+  CHANNEL_IMU = 1u << 2,
+  CHANNEL_MOTOR = 1u << 3,
+  CHANNEL_DEFAULT = 1u << 4,
+  CHANNEL_BALANCER = 1u << 5,
 };
 
 // Initialize logging manager (no-op, safe to call multiple times)
@@ -66,19 +66,31 @@ Channel channelFromString(const char *name);
 size_t listEnabledChannels(char *buf, size_t bufLen);
 
 // Return the canonical name for a channel (literal string, do not free)
-const char* channelName(Channel c);
+const char *channelName(Channel c);
 
 // Print helpers (macros): avoid evaluating arguments when channel disabled.
 // These macros call the locked helpers in `abbot::log` so prints are
 // serialized with a mutex and routed centrally.
-#define LOG_PRINT(ch, ...) \
-    do { if (abbot::log::isChannelEnabled(ch)) { abbot::log::lockedPrint(__VA_ARGS__); } } while (0)
+#define LOG_PRINT(ch, ...)                                                     \
+  do {                                                                         \
+    if (abbot::log::isChannelEnabled(ch)) {                                    \
+      abbot::log::lockedPrint(__VA_ARGS__);                                    \
+    }                                                                          \
+  } while (0)
 
-#define LOG_PRINTLN(ch, ...) \
-    do { if (abbot::log::isChannelEnabled(ch)) { abbot::log::lockedPrintln(__VA_ARGS__); } } while (0)
+#define LOG_PRINTLN(ch, ...)                                                   \
+  do {                                                                         \
+    if (abbot::log::isChannelEnabled(ch)) {                                    \
+      abbot::log::lockedPrintln(__VA_ARGS__);                                  \
+    }                                                                          \
+  } while (0)
 
-#define LOG_PRINTF(ch, fmt, ...) \
-    do { if (abbot::log::isChannelEnabled(ch)) { abbot::log::lockedPrintf((fmt), ##__VA_ARGS__); } } while (0)
+#define LOG_PRINTF(ch, fmt, ...)                                               \
+  do {                                                                         \
+    if (abbot::log::isChannelEnabled(ch)) {                                    \
+      abbot::log::lockedPrintf((fmt), ##__VA_ARGS__);                          \
+    }                                                                          \
+  } while (0)
 
 // Locked/serialized print helpers implemented in logging.cpp
 void lockedPrint(const char *s);

@@ -6,20 +6,20 @@
 
 class SerialMenu {
 public:
-  using Handler = std::function<void(const String& param)>;
+  using Handler = std::function<void(const String &param)>;
 
   struct Entry {
     int id;
     String label;
     Handler action; // if null and submenu != nullptr, this entry opens submenu
-    SerialMenu* submenu;
+    SerialMenu *submenu;
   };
 
-  SerialMenu(const char* title = "Menu");
+  SerialMenu(const char *title = "Menu");
   ~SerialMenu();
 
-  void addEntry(int id, const char* label, Handler h);
-  void addSubmenu(int id, const char* label, SerialMenu* submenu);
+  void addEntry(int id, const char *label, Handler h);
+  void addSubmenu(int id, const char *label, SerialMenu *submenu);
 
   // Remove all entries (useful for rebuilding dynamic menus)
   void clearEntries();
@@ -37,7 +37,7 @@ public:
   //  - returns a submenu pointer to descend
   //  - returns parent pointer to go up
   //  - returns nullptr to exit interactive menu entirely
-  SerialMenu* handleInput(const String& line);
+  SerialMenu *handleInput(const String &line);
 
   // Print the entries (used when entering or after invalid input)
   void printEntries();
@@ -46,12 +46,12 @@ public:
   size_t getEntryCount() const { return entries.size(); }
 
   // Parent menu (nullptr for root)
-  void setParent(SerialMenu* p) { parent = p; }
-  SerialMenu* getParent() const { return parent; }
+  void setParent(SerialMenu *p) { parent = p; }
+  SerialMenu *getParent() const { return parent; }
 
 private:
-  const char* title;
+  const char *title;
   std::vector<Entry> entries;
-  SerialMenu* parent = nullptr;
+  SerialMenu *parent = nullptr;
   std::function<void()> onEnter = nullptr;
 };

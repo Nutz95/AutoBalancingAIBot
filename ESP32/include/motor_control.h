@@ -4,7 +4,8 @@
 namespace abbot {
 namespace motor_control {
 
-// Stub motor control API. Replace implementation to control real motors (SCServo).
+// Stub motor control API. Replace implementation to control real motors
+// (SCServo).
 void disableMotors();
 void enableMotors();
 bool areMotorsEnabled();

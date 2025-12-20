@@ -5,24 +5,30 @@
 
 namespace abbot {
 
-BMI088Driver::BMI088Driver(const BMI088Config &cfg) : cfg_(cfg), imu_(SPI, cfg.accel_cs_pin, cfg.gyro_cs_pin) {
-}
+BMI088Driver::BMI088Driver(const BMI088Config &cfg)
+    : cfg_(cfg), imu_(SPI, cfg.accel_cs_pin, cfg.gyro_cs_pin) {}
 
 bool BMI088Driver::begin() {
   // Initialize SPI and sensor
   SPI.begin();
-  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI088: accel_cs=%d gyro_cs=%d\n", cfg_.accel_cs_pin, cfg_.gyro_cs_pin);
+  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI088: accel_cs=%d gyro_cs=%d\n",
+             cfg_.accel_cs_pin, cfg_.gyro_cs_pin);
   int rc = imu_.begin();
-  // The underlying library returns >0 on success (1), and negative codes on failures.
+  // The underlying library returns >0 on success (1), and negative codes on
+  // failures.
   if (rc <= 0) {
-    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI088: imu_.begin() returned rc=%d\n", rc);
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "BMI088: imu_.begin() returned rc=%d\n", rc);
     // Provide a hint about common failure ranges from the underlying library
     if (rc < 0 && rc > -1000) {
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088: accel init failed (check accel CS pin/wiring)");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "BMI088: accel init failed (check accel CS pin/wiring)");
     } else if (rc <= -1000 && rc > -2000) {
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088: gyro init failed (check gyro CS pin/wiring)");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "BMI088: gyro init failed (check gyro CS pin/wiring)");
     } else {
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI088: feature/config upload or post-init failed");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "BMI088: feature/config upload or post-init failed");
     }
     return false;
   }

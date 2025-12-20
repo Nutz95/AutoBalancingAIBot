@@ -1,9 +1,9 @@
 #include "tuning_capture.h"
+#include "SystemTasks.h"
 #include "logging.h"
+#include <Arduino.h>
 #include <cmath>
 #include <cstdio>
-#include <Arduino.h>
-#include "SystemTasks.h"
 
 namespace abbot {
 namespace tuning {
@@ -38,29 +38,36 @@ void startCapture(uint32_t nSamples, bool streamCsv, bool statsOnly) {
   if (g_stream) {
     // Print CSV header for consumers (should be gated by current mask)
     // New columns: ax,ay,az (m/s^2), gx,gy,gz (rad/s), temp_C
-    LOG_PRINTLN(abbot::log::CHANNEL_TUNING, "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd");
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: capture started (stream)");
+    LOG_PRINTLN(abbot::log::CHANNEL_TUNING,
+                "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_"
+                "rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd");
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "TUNING: capture started (stream)");
   } else if (g_stats_only) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: capture started (stats-only)");
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "TUNING: capture started (stats-only)");
   } else {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: capture started (no-stream)");
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "TUNING: capture started (no-stream)");
   }
-  // Request a Madgwick warm-up period to reduce initial transient prior to emitting CSV
-  // Default warm-up: ~12 seconds worth of samples (based on fusion sample rate)
+  // Request a Madgwick warm-up period to reduce initial transient prior to
+  // emitting CSV Default warm-up: ~12 seconds worth of samples (based on fusion
+  // sample rate)
   const float DEFAULT_WARMUP_SECONDS = 1.0f;
   // Default warmup reduced to 1s for faster capture start; callers may override
   requestTuningWarmupSeconds(DEFAULT_WARMUP_SECONDS);
 }
 
-void setOnCaptureComplete(void (*cb)()) {
-  g_on_complete = cb;
-}
+void setOnCaptureComplete(void (*cb)()) { g_on_complete = cb; }
 
 static void printSummary() {
   char buf[256];
   float pitch_std = (g_count > 1) ? sqrtf(pitch_M2 / (g_count - 1)) : 0.0f;
   float pr_std = (g_count > 1) ? sqrtf(pr_M2 / (g_count - 1)) : 0.0f;
-  snprintf(buf, sizeof(buf), "TUNING SUMMARY: samples=%u, pitch_mean=%.6f, pitch_std=%.6f, pr_mean=%.6f, pr_std=%.6f", (unsigned)g_count, pitch_mean, pitch_std, pr_mean, pr_std);
+  snprintf(buf, sizeof(buf),
+           "TUNING SUMMARY: samples=%u, pitch_mean=%.6f, pitch_std=%.6f, "
+           "pr_mean=%.6f, pr_std=%.6f",
+           (unsigned)g_count, pitch_mean, pitch_std, pr_mean, pr_std);
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
   // Simple suggested beta heuristic (very conservative)
   float suggested = 0.08f;
@@ -79,8 +86,10 @@ void stopCapture() {
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: capture stopped (auto)");
   // Try to restore previous logging mask if the caller pushed one.
   if (!abbot::log::popChannelMask()) {
-    // Do not crash; just log an error so the operator can notice mismatched push/pop
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: warning - popChannelMask() failed (no matching push)");
+    // Do not crash; just log an error so the operator can notice mismatched
+    // push/pop
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "TUNING: warning - popChannelMask() failed (no matching push)");
   }
   g_stats_only = false;
   // Invoke completion callback if registered
@@ -89,32 +98,23 @@ void stopCapture() {
   }
 }
 
-void submitSample(uint32_t ts_ms,
-                  float pitch_deg,
-                  float /*pitch_rad*/,
-                  float pitch_rate_deg,
-                  float /*pitch_rate_rad*/,
-                  float ax, float ay, float az,
-                  float gx, float gy, float gz,
-                  float temp_C,
-                  float left_cmd, float right_cmd) {
+void submitSample(uint32_t ts_ms, float pitch_deg, float /*pitch_rad*/,
+                  float pitch_rate_deg, float /*pitch_rate_rad*/, float ax,
+                  float ay, float az, float gx, float gy, float gz,
+                  float temp_C, float left_cmd, float right_cmd) {
   if (!g_active) {
     return;
   }
 
-  // Emit CSV if requested (we emit on CHANNEL_TUNING; caller should have enabled mask)
+  // Emit CSV if requested (we emit on CHANNEL_TUNING; caller should have
+  // enabled mask)
   if (g_stream && abbot::log::isChannelEnabled(abbot::log::CHANNEL_TUNING)) {
-    LOG_PRINTF(abbot::log::CHANNEL_TUNING, "%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.3f,%.6f,%.6f\n",
-               ts_ms,
-               pitch_deg,
-               pitch_deg * 3.14159265f / 180.0f,
-               pitch_rate_deg,
-               pitch_rate_deg * 3.14159265f / 180.0f,
-               ax, ay, az,
-               gx, gy, gz,
-               temp_C,
-               left_cmd,
-               right_cmd);
+    LOG_PRINTF(
+        abbot::log::CHANNEL_TUNING,
+        "%u,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.6f,%.3f,%.6f,%.6f\n",
+        ts_ms, pitch_deg, pitch_deg * 3.14159265f / 180.0f, pitch_rate_deg,
+        pitch_rate_deg * 3.14159265f / 180.0f, ax, ay, az, gx, gy, gz, temp_C,
+        left_cmd, right_cmd);
   }
 
   // Welford update for pitch
@@ -156,8 +156,11 @@ void submitSample(uint32_t ts_ms,
       }
       bar[barWidth] = '\0';
       char msg[256];
-      snprintf(msg, sizeof(msg), "TUNING PROGRESS: [%s] %d%% (%u/%u) pitch_mean=%.6f pitch_std=%.6f pr_mean=%.6f pr_std=%.6f",
-               bar, pct, (unsigned)g_count, (unsigned)g_target, pitch_mean, pitch_std, pr_mean, pr_std);
+      snprintf(msg, sizeof(msg),
+               "TUNING PROGRESS: [%s] %d%% (%u/%u) pitch_mean=%.6f "
+               "pitch_std=%.6f pr_mean=%.6f pr_std=%.6f",
+               bar, pct, (unsigned)g_count, (unsigned)g_target, pitch_mean,
+               pitch_std, pr_mean, pr_std);
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
     }
   }
@@ -168,10 +171,7 @@ void submitSample(uint32_t ts_ms,
   }
 }
 
-bool isCapturing()
-{
-  return g_active;
-}
+bool isCapturing() { return g_active; }
 
 } // namespace tuning
 } // namespace abbot

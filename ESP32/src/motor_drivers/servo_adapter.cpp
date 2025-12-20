@@ -2,10 +2,10 @@
 // Adapter implementing IMotorDriver by delegating to the existing
 // servo-based functions in `abbot::motor::*`.
 
+#include "../../config/motor_configs/servo_motor_config.h"
 #include "../include/motor_drivers/AbstractMotorDriver.h"
 #include "../include/motor_drivers/driver_manager.h"
 #include "motor_drivers/servo_motor_driver.h"
-#include "../../config/motor_configs/servo_motor_config.h"
 
 namespace abbot {
 namespace motor {
@@ -20,10 +20,14 @@ public:
   }
   void enableMotors() override { ::abbot::motor::enableMotors(); }
   void disableMotors() override { ::abbot::motor::disableMotors(); }
-  bool areMotorsEnabled() override { return ::abbot::motor::areMotorsEnabled(); }
+  bool areMotorsEnabled() override {
+    return ::abbot::motor::areMotorsEnabled();
+  }
   void printStatus() override { ::abbot::motor::printStatus(); }
   void dumpConfig() override { ::abbot::motor::dumpConfig(); }
-  void setMotorCommandBoth(float l, float r) override { ::abbot::motor::setMotorCommandBoth(l, r); }
+  void setMotorCommandBoth(float l, float r) override {
+    ::abbot::motor::setMotorCommandBoth(l, r);
+  }
   void setMotorCommand(MotorSide side, float cmd) override {
     int id = (side == MotorSide::LEFT) ? LEFT_MOTOR_ID : RIGHT_MOTOR_ID;
     ::abbot::motor::setMotorCommand(id, cmd);
@@ -38,7 +42,9 @@ public:
   }
   // 64-bit position helpers are optional; use readEncoder/resetPositionTracking
   // (no-op) 64-bit helpers are not part of the common interface
-  void resetPositionTracking() override { ::abbot::motor::resetPositionTracking(); }
+  void resetPositionTracking() override {
+    ::abbot::motor::resetPositionTracking();
+  }
 
   // Configuration/query implementations mapped from servo compile-time macros
   int getMotorId(MotorSide side) const override {
@@ -46,21 +52,26 @@ public:
   }
 
   bool isMotorInverted(MotorSide side) const override {
-    return (side == MotorSide::LEFT) ? (LEFT_MOTOR_INVERT != 0) : (RIGHT_MOTOR_INVERT != 0);
+    return (side == MotorSide::LEFT) ? (LEFT_MOTOR_INVERT != 0)
+                                     : (RIGHT_MOTOR_INVERT != 0);
   }
 
-  float getVelocityMaxSpeed() const override { return (float)VELOCITY_MAX_SPEED; }
-  float getVelocityTargetIncrementScale() const override { return (float)VELOCITY_TARGET_INCREMENT_SCALE; }
-  float getVelocityPositionKp() const override { return (float)VELOCITY_POSITION_KP; }
+  float getVelocityMaxSpeed() const override {
+    return (float)VELOCITY_MAX_SPEED;
+  }
+  float getVelocityTargetIncrementScale() const override {
+    return (float)VELOCITY_TARGET_INCREMENT_SCALE;
+  }
+  float getVelocityPositionKp() const override {
+    return (float)VELOCITY_POSITION_KP;
+  }
 
-  const char* getDriverName() const override { return "servo"; }
+  const char *getDriverName() const override { return "servo"; }
 };
 
 static ServoAdapter g_servoAdapter;
 
-void installDefaultServoAdapter() {
-  setActiveMotorDriver(&g_servoAdapter);
-}
+void installDefaultServoAdapter() { setActiveMotorDriver(&g_servoAdapter); }
 
 } // namespace motor
 } // namespace abbot

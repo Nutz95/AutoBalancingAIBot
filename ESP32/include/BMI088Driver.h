@@ -2,18 +2,18 @@
 #pragma once
 
 #include "../config/BMI088Config.h"
-#include <stdint.h>
 #include <Arduino.h>
-#include <SPI.h>
 #include <BMI088.h>
+#include <SPI.h>
+#include <stdint.h>
 
 namespace abbot {
 
 struct IMUSample {
-  float ax, ay, az; // m/s^2
-  float gx, gy, gz; // rad/s
-  float temp_C; // sensor temperature Celsius (from accel temp register)
-  uint64_t time_ps; // sensor timestamp in picoseconds (if available)
+  float ax, ay, az;    // m/s^2
+  float gx, gy, gz;    // rad/s
+  float temp_C;        // sensor temperature Celsius (from accel temp register)
+  uint64_t time_ps;    // sensor timestamp in picoseconds (if available)
   unsigned long ts_ms; // host timestamp (millis)
 };
 
@@ -31,7 +31,8 @@ public:
 
 private:
   BMI088Config cfg_;
-  Bmi088 imu_ = Bmi088(SPI, 0, 0); // placeholder will be reinitialized in begin()
+  Bmi088 imu_ =
+      Bmi088(SPI, 0, 0); // placeholder will be reinitialized in begin()
   unsigned long last_read_ms_ = 0;
 };
 

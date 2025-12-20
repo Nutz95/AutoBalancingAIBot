@@ -31,7 +31,7 @@ public:
   float getVelocityMaxSpeed() const override;
   float getVelocityTargetIncrementScale() const override;
   float getVelocityPositionKp() const override;
-  const char* getDriverName() const override;
+  const char *getDriverName() const override;
 
 private:
   void applyMirrorIfNeeded();

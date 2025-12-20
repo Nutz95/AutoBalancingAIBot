@@ -2,7 +2,7 @@
 name: Coder
 description: Generates C++ code for the ESP32 following SOLID and project coding rules.
 argument-hint: Provide the plan JSON or a short task description.
-tools: ['agent','edit','execute','read','search','todo','web','vscode/extensions','vscode/getProjectSetupInfo','vscode/installExtension','vscode/runCommand','vscode/openSimpleBrowser','vscode/vscodeAPI']
+tools: ['vscode/getProjectSetupInfo', 'vscode/installExtension', 'vscode/openSimpleBrowser', 'vscode/runCommand', 'vscode/vscodeAPI', 'vscode/extensions', 'execute', 'read', 'edit', 'search', 'web', 'search/changes', 'agent', 'todo']
 handoffs:
   - label: Ready for Verification
     agent: Verifier
