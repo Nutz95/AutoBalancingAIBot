@@ -10,12 +10,12 @@
 // to mirror the other motor's encoder when one encoder is broken). Set to 0
 // to disable and require both encoders or another driver.
 #ifndef DC_MIRROR_MODE_ENABLED
-#define DC_MIRROR_MODE_ENABLED 1
+#define DC_MIRROR_MODE_ENABLED 0
 #endif
 
 // Specify which encoder(s) are present on the platform. Set 1 if present.
 #ifndef DC_ENCODER_PRESENT_LEFT
-#define DC_ENCODER_PRESENT_LEFT 0
+#define DC_ENCODER_PRESENT_LEFT 1
 #endif
 #ifndef DC_ENCODER_PRESENT_RIGHT
 #define DC_ENCODER_PRESENT_RIGHT 1

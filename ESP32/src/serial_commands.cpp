@@ -154,6 +154,35 @@ static SerialMenu *buildMotorMenu() {
     else
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
   });
+  m->addEntry(12, "MOTOR GET ENCODER <LEFT|RIGHT|ID>", [](const String &p) {
+    abbot::motor::EncoderReport rep;
+    bool ok = abbot::motor::getEncoderReportFromArg(p.c_str(), rep);
+    if (!ok) {
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "Usage: MOTOR GET ENCODER <LEFT|RIGHT|ID>");
+      return;
+    }
+    if (rep.both) {
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "MOTOR: encoder L(id=%d)=%ld R(id=%d)=%ld\n", rep.leftId,
+                 (long)rep.leftVal, rep.rightId, (long)rep.rightVal);
+    } else {
+      if (rep.requestedId == rep.leftId) {
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "MOTOR: encoder id=%d value=%ld\n", rep.requestedId,
+                   (long)rep.leftVal);
+      } else if (rep.requestedId == rep.rightId) {
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "MOTOR: encoder id=%d value=%ld\n", rep.requestedId,
+                   (long)rep.rightVal);
+      } else {
+        // Numeric id case: values are returned in leftVal/rightVal (same)
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "MOTOR: encoder id=%d value=%ld\n", rep.requestedId,
+                   (long)rep.leftVal);
+      }
+    }
+  });
   return m;
 }
 
@@ -1368,6 +1397,75 @@ static bool handleWifi(const String &line, const String &up) {
   return true;
 }
 
+// Handle textual form: "MOTOR GET ENCODER <LEFT|RIGHT|ID>" (used by remote
+// clients). The interactive menu already supports this, but textual remote
+// commands went unhandled; add a small parser here so WiFi clients see the
+// same output as the menu.
+/**
+ * Helper: print encoder(s) for a textual argument.
+ *
+ * Accepts the same argument forms as the interactive menu: empty -> print
+ * both encoders, "LEFT"/"RIGHT" -> print the selected side, or a numeric
+ * motor id. Numeric tokens are validated to avoid accidental interpretation
+ * of non-numeric strings as id 0.
+ *
+ * Returns true if a response was emitted (including usage message), false
+ * if the argument didn't match the expected syntax.
+ */
+// Encoder printing handled by `abbot::motor::printEncoderForArg` in
+// `driver_manager.cpp` to keep motor-related logic inside the motor module.
+
+// Thin wrapper used by the main parser: detect the textual form
+// "MOTOR GET ENCODER [arg]" and delegate to printEncoderForArg.
+static bool handleMotorGetEncoder(const String &line, const String &up) {
+  if (!up.startsWith("MOTOR"))
+    return false;
+  int p1 = up.indexOf(' ');
+  if (p1 == -1)
+    return false;
+  int p2 = up.indexOf(' ', p1 + 1);
+  if (p2 == -1)
+    return false;
+  String cmd2 = (p2 == -1) ? up.substring(p1 + 1) : up.substring(p1 + 1, p2);
+  cmd2.trim();
+  if (cmd2 != "GET")
+    return false;
+  int p3 = up.indexOf(' ', p2 + 1);
+  String cmd3 = (p3 == -1) ? up.substring(p2 + 1) : up.substring(p2 + 1, p3);
+  cmd3.trim();
+  if (cmd3 != "ENCODER")
+    return false;
+  String arg = (p3 == -1) ? String("") : line.substring(p3 + 1);
+  arg.trim();
+  abbot::motor::EncoderReport rep;
+  bool ok = abbot::motor::getEncoderReportFromArg(arg.c_str(), rep);
+  if (!ok) {
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                "Usage: MOTOR GET ENCODER <LEFT|RIGHT|ID>");
+    return false;
+  }
+  if (rep.both) {
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "MOTOR: encoder L(id=%d)=%ld R(id=%d)=%ld\n", rep.leftId,
+               (long)rep.leftVal, rep.rightId, (long)rep.rightVal);
+  } else {
+    if (rep.requestedId == rep.leftId) {
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "MOTOR: encoder id=%d value=%ld\n", rep.requestedId,
+                 (long)rep.leftVal);
+    } else if (rep.requestedId == rep.rightId) {
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "MOTOR: encoder id=%d value=%ld\n", rep.requestedId,
+                 (long)rep.rightVal);
+    } else {
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "MOTOR: encoder id=%d value=%ld\n", rep.requestedId,
+                 (long)rep.leftVal);
+    }
+  }
+  return true;
+}
+
 // Start the interactive menu programmatically (prints the menu and makes it
 // active)
 void startInteractiveMenu(abbot::BMI088Driver *driver) {
@@ -1473,6 +1571,14 @@ void processSerialLine(abbot::BMI088Driver *driver, const String &line) {
     return;
   if (handleWifi(sline, up))
     return;
+  // Support textual "MOTOR GET ENCODER ..." from remote clients
+  // Parse minimal form here and delegate to the shared helper. This keeps
+  // behaviour identical between interactive menu and remote textual input.
+  if (handleMotorGetEncoder(sline, up)) {
+    // handleMotorGetEncoder will call printEncoderForArg; it returns true on
+    // handled input (including usage), so we simply return.
+    return;
+  }
   if (handleFusion(sline, up))
     return;
   if (handleFilter(sline, up))
