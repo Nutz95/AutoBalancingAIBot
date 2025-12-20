@@ -2,6 +2,41 @@
 
 This folder contains a minimal PlatformIO starter project for the ESP32-S3 used by the AutoBalancingAIBot project.
 
+## PlatformIO Installation & Setup
+
+### Option 1: VS Code Extension (GUI only)
+Install the PlatformIO IDE extension from the VS Code marketplace. This provides a graphical interface and integrated build commands but does not add the `pio` CLI to your system PATH.
+
+### Option 2: CLI Installation (Recommended for terminal usage)
+To use `pio` commands in PowerShell, MSYS2, or other terminals, install PlatformIO CLI via `pipx`:
+
+```powershell
+python -m pip install --user pipx
+python -m pipx ensurepath
+```
+
+Close and reopen your terminal, then install PlatformIO:
+
+```powershell
+pipx install platformio
+```
+
+**PATH Configuration (if needed):**
+If `pio --version` fails after installation, you may need to manually add the pipx Scripts directory to your system PATH:
+- Typical path: `C:\Users\<YourUsername>\pipx\venvs\platformio\Scripts`
+- Add this to your user PATH environment variable in Windows Settings → System → Advanced system settings → Environment Variables
+- Restart VS Code and terminals for the PATH change to take effect
+
+Verify installation:
+```powershell
+pio --version
+```
+
+Alternative: Use Python module invocation without PATH modification:
+```powershell
+python -m platformio run
+```
+
 Build
 
 Open a terminal in this folder and run:
@@ -24,27 +59,35 @@ pio device monitor --baud 115200
 
 This project prints a heartbeat on serial every second.
 
-PowerShell helper scripts
--------------------------
+Build / Helper scripts
+----------------------
 
-For convenience this project includes small PowerShell helpers at the project root to run PlatformIO commands with consistent messaging:
+This project provides small helper scripts (PowerShell and MSYS2 bash) in the project root to run PlatformIO commands with consistent messaging.
+
+PowerShell helpers (Windows):
 
 - `build_firmware.ps1` — runs `pio run` in the `ESP32` folder to build the firmware.
 - `build_and_upload.ps1` — runs `pio run` then `pio run --target upload` to build and upload in one step.
 - `upload_firmware.ps1` — runs `pio run --target upload` to upload a previously built firmware.
 
-Usage (PowerShell):
+Bash helpers (MSYS2 / MinGW64 / WSL):
 
-```powershell
+- `build_firmware.sh` — runs `pio run` in the `ESP32` folder to build the firmware.
+- `build_and_upload.sh` — runs `pio run` then `pio run --target upload` to build and upload in one step.
+- `upload_firmware.sh` — runs `pio run --target upload` (for upload-only flows).
+
+Usage (bash / MSYS2):
+
+```bash
 # From the ESP32 project folder
-.\build_firmware.ps1            # build only
-.\build_and_upload.ps1         # build then upload
-.\upload_firmware.ps1          # upload only (assumes build already done)
+./build_firmware.sh            # build only
+./build_and_upload.sh          # build then upload
+./upload_firmware.sh           # upload only (assumes build already done)
 ```
 
 Notes:
-- The scripts detect whether `pio` (PlatformIO CLI) is available and print helpful errors if not.
-- You can pass additional PlatformIO arguments to the scripts, they will be forwarded to `pio` (for example `-e <env>`).
+- The scripts detect whether `pio` (PlatformIO CLI) is available and will attempt `platformio` or `python -m platformio` if needed.
+- You can pass additional PlatformIO arguments to the scripts; they will be forwarded to `pio` (for example `-e <env>`).
 - Configure `upload_port` in `platformio.ini` or pass upload options to the upload script if your board is on a non-standard port.
 
 
@@ -210,6 +253,19 @@ The board exposes a single RGB status LED (NeoPixel/WS2812) when configured in
 
 If the LED is not present on your board the functions are no-ops and the
 firmware falls back to serial logging for all messages.
+
+Agents workflow (repository)
+--------------------------------
+This repository includes optional VS Code Custom Agents to help plan, generate and verify
+code changes for the ESP32 firmware. Agent configs are in `.github/agents/`.
+
+- `Plan` (existing): produces a structured plan for requested changes.
+- `Coder`: generates C++ code following `CODING_RULES.md` and SOLID principles.
+- `Verifier`: checks SOLID, coding rules and documentation updates.
+
+If you use the VS Code Copilot/Custom Agents feature, place agent configs in `.github/agents/`
+or configure them via the extension UI. For automated builds/tests use the MSYS2 MinGW64 shell
+or PlatformIO as described above.
 
 Wi‑Fi console (TCP)
 -------------------

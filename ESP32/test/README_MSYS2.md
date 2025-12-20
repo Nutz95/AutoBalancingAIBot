@@ -41,8 +41,8 @@ g++ -std=c++17 -O2 -I include test/pid_controller_tests.cpp src/pid_controller.c
 build/pid_controller_tests.exe
 ```
 
-Driver manager test
--------------------
+## Driver manager test
+
 We added a small host-native test that verifies `driver_manager` set/get behavior. It is built and run by the `build_test.sh` script automatically. To compile and run it manually in the MSYS2 MinGW64 shell:
 
 ```bash
@@ -51,6 +51,7 @@ g++ -std=c++17 -O2 -I include test/driver_manager_tests.cpp src/motor_drivers/dr
 ```
 
 Notes:
+
 - The test compiles with `-DUNIT_TEST_HOST` so headers that normally include `Arduino.h` are adapted for host builds.
 - If you run into missing-symbol or include errors, ensure you're using the `MSYS2 MinGW 64-bit` shell and that `build/` exists.
 
@@ -61,26 +62,105 @@ Notes:
 ---
 
 Prerequisites
-- 64-bit Windows
-- Administrator access to install MSYS2 (recommended)
-- Internet access to download MSYS2 and packages
 
-Install MSYS2 (recommended)
-1. Download the installer from https://www.msys2.org
-2. Install MSYS2 following the official instructions.
-3. Start the `MSYS2 MinGW 64-bit` shell (important: use the MinGW64 session to get the x86_64 toolchain).
+- 64-bit Windows (for MSYS2 instructions) or a Linux distribution (for native toolchain instructions)
+- Administrator (Windows) / sudo (Linux) access to install packages
+- Internet access to download packages
 
-Update MSYS2 and install the toolchain
-In the `MSYS2 MinGW 64-bit` shell run:
+Installation
+
+Windows — MSYS2 (recommended)
+
+1. Download the installer from <https://www.msys2.org> and follow the official installation instructions.
+2. Open the "MSYS2 MinGW 64-bit" shell (important: use the MinGW64 session to get the x86_64 toolchain).
+3. Update MSYS2 and install the toolchain from the MinGW64 session:
 
 ```bash
 pacman -Syu
-# close and re-open the shell if pacman requests it
+# if pacman asks you to restart the shell, close and re-open the window
 pacman -Su
 pacman -S --needed base-devel mingw-w64-x86_64-toolchain
 ```
 
-This installs `g++` and the MinGW-w64 toolchain (x86_64).
+This installs `g++` and the MinGW-w64 (x86_64) toolchain required to build the host tests.
+
+PowerShell tip: if you prefer to compile from PowerShell, temporarily add `mingw64/bin` to the session `PATH` so the compiler and runtime DLLs are found:
+
+```powershell
+$mingw = 'E:\msys64\mingw64\bin'
+$env:Path = "$mingw;$env:Path"
+g++ -std=c++17 -O2 -I include test/pid_controller_tests.cpp src/pid_controller.cpp -o build/pid_controller_tests.exe
+
+MSYS vs MinGW64 (important)
+--------------------------------
+If you open a plain MSYS2 shell (the one named "MSYS2"), `g++` from the MinGW toolchain may not be on the shell `PATH` and `g++` can be reported as "not found". Use one of these options:
+
+- Recommended: open the **MSYS2 MinGW 64-bit** shell from the Start Menu (or run `/e/msys64/mingw64.exe`) so the MinGW64 toolchain is active, then run the compile commands shown above.
+- Quick workaround in your current shell: prepend the MinGW64 bin to `PATH` for this session:
+
+```bash
+export PATH=/e/msys64/mingw64/bin:$PATH
+which g++
+g++ --version
+```
+
+If that shows a MinGW `g++`, you can then run the `g++` compile commands. To make the change persistent for your MSYS MINGW64 sessions, add the `export` line to your `~/.bashrc`.
+
+If `g++` is still missing, install the toolchain in the MinGW64 session:
+
+```bash
+pacman -Syu
+pacman -S --needed mingw-w64-x86_64-toolchain
+
+Agents and code workflow
+--------------------------
+This project supports a small agent-based workflow (VS Code Custom Agents) to help plan,
+generate and verify changes. Agent configs live in `.github/agents/` and follow this chain:
+`Plan` -> `Coder` -> `Verifier` -> `Tester` (optional).
+
+Notes:
+- The `Coder` agent is configured to produce code that follows `CODING_RULES.md` (see project root).
+- Use the MSYS2 MinGW64 shell for builds and the `pio run` command when the `Tester` agent runs compilation.
+- You can run agents from the VS Code Copilot Agents UI or store `.agent` files in `.github/agents/`.
+```
+
+Linux — native toolchain (alternative)
+
+MSYS2 is a Windows solution; on Linux use the native toolchain (g++/gcc) provided by your distribution. Examples:
+
+Debian / Ubuntu:
+
+```bash
+sudo apt update
+sudo apt install build-essential g++
+```
+
+Fedora:
+
+```bash
+sudo dnf install @development-tools gcc-c++
+```
+
+Arch Linux:
+
+```bash
+sudo pacman -Syu base-devel gcc
+```
+
+Build (Linux or MSYS2)
+
+From the project root:
+
+```bash
+mkdir -p build
+g++ -std=c++17 -O2 -I include test/imu_fusion_tests.cpp src/imu_fusion.cpp -o build/imu_fusion_tests -DM_PI=3.14159265358979323846
+./build/imu_fusion_tests
+```
+
+Notes:
+
+- On Linux the produced binary is native and does not require MSYS2.
+- If you use MSVC (`cl`) or `clang`, adapt the compiler flags accordingly.
 
 Compile the test (example)
 From the `MSYS2 MinGW 64-bit` shell, change to the project folder and compile the comprehensive suite:
@@ -92,12 +172,13 @@ g++ -std=c++17 -O2 -I include test/imu_fusion_tests.cpp src/imu_fusion.cpp -o bu
 ```
 
 Notes:
+
 - `-I include` uses the local headers in `ESP32/include`.
 - We compile both the test and the implementation (`src/imu_fusion.cpp`) together.
 - `-DM_PI=...` defines `M_PI` to avoid editing sources.
 
-Compiling the PID unit test (example)
------------------------------------
+### Compiling the PID unit test (example)
+
 To compile the host PID unit test that lives in `test/pid_controller_tests.cpp`, compile both the test and the implementation together:
 
 ```bash
@@ -106,8 +187,8 @@ mkdir -p build
 g++ -std=c++17 -O2 -I include test/pid_controller_tests.cpp src/pid_controller.cpp -o build/pid_controller_tests.exe
 ```
 
-Notes and troubleshooting for silent failures
--------------------------------------------
+### Notes and troubleshooting for silent failures
+
 - **Known Issue (PowerShell Direct g++ Invocation)**: When running `D:\msys64\mingw64\bin\g++.exe` directly from PowerShell (outside MSYS), compilation may fail with exit code 1 and zero error output. This is a system/environment issue (DLL or path mapping incompatibility). **Workaround**: Compile from within an MSYS2 MinGW64 shell or run `powershell.exe -File build_test.ps1` from inside MSYS.
 - If your PowerShell run of the script returns "Compilation failed (exit code 1, no executable created)" with no other compiler output, try running the compile command directly in the **MSYS2 MinGW 64-bit** shell — MSYS2's g++ prints native diagnostics there which can be easier to capture.
 - Ensure the `mingw-w64-x86_64-toolchain` is installed and you are using the *MinGW64* session (or have `mingw64\bin` on your PATH when running from PowerShell).
@@ -142,12 +223,14 @@ cd 'I:\GIT\AutoBalancingAIBot\ESP32'
 ```
 
 Troubleshooting
+
 - `g++: command not found` → ensure the `mingw-w64-x86_64-toolchain` package is installed and use the `MSYS2 MinGW 64-bit` shell.
 - `M_PI` undefined → the example command passes `-DM_PI=...` to define it.
 - Missing symbols → add the additional source files that define them to the compile command.
 - Windows path mapping: `I:\...` is available in MSYS2 as `/i/...`.
 
 Integration with PlatformIO
+
 - To build firmware for the ESP32, continue using PlatformIO (`pio run`) from the `ESP32` folder.
 - The host-native tests shown here are for algorithm verification on the PC; they do not exercise the flashed ESP32 firmware.
 
@@ -161,7 +244,7 @@ The comprehensive test prints a sequence of PASSES and FAIL / EXPECTED FAIL mark
 
 Example (partial) output:
 
-```
+```text
 PASS: Quaternion normalization
 PASS: Stationary Z-up
 ... (other passes)
@@ -188,25 +271,31 @@ cl /EHsc /std:c++17 /I include test\imu_fusion_tests.cpp src\imu_fusion.cpp /Fe:
 ```
 
 FAQ
+
 - Q: Can I run the binary from PowerShell without MSYS2?
   A: Yes, as long as the binary is a native Windows executable and any required runtime components are available.
 - Q: Why MSYS2 instead of Cygwin?
   A: MSYS2/MinGW-w64 produces native Windows binaries without a heavy POSIX compatibility DLL, which is preferable for distributing and running tests locally.
 
 If you'd like, I can also:
+
 - add a short section to `ESP32/README.md` linking to this test README, or
 - create a small script to compile the test automatically.
 
 File created by the assistant.
 
 ---
-**Quick: compile & run from PowerShell**
+
+### Quick: compile & run from PowerShell
+
 - Prerequisite: `D:\msys64\mingw64\bin` (or equivalent) should be reachable from PowerShell. The included script will add it to `PATH` temporarily if needed.
 - To compile and run automatically from PowerShell:
+
 ```powershell
 cd 'I:\GIT\AutoBalancingAIBot\ESP32\test'
 .\build_test.ps1
 ```
+
 - What the script does:
   - detects `g++` (MinGW-w64);
   - compiles `test/imu_fusion_unit.cpp` + `src/imu_fusion.cpp` to `build\imu_fusion_unit.exe`;
@@ -214,4 +303,5 @@ cd 'I:\GIT\AutoBalancingAIBot\ESP32\test'
   - runs the test and prints output.
 
 Troubleshooting note:
+
 - If the executable is created but exits with an error like `0xC0000139`, ensure `mingw64\bin` is on the PATH of the session that runs the executable or run the binary from the MSYS2 MinGW64 shell.

@@ -2,6 +2,54 @@
   "version": "2.0.0",
   "tasks": [
     {
+      "label": "Agent: Planner (dry-run)",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "tools/agents/run_agent.py",
+        "--config",
+        ".github/agents/Plan.agent.md",
+        "--out",
+        "artifacts/plan_out.json"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Agent: Coder (dry-run)",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "tools/agents/run_agent.py",
+        "--config",
+        ".github/agents/Coder.agent.md",
+        "--in",
+        "artifacts/plan_out.json",
+        "--out",
+        "artifacts/coder_out.json"
+      ],
+      "problemMatcher": []
+    },
+    {
+      "label": "Agent: Verifier (dry-run)",
+      "type": "shell",
+      "command": "python",
+      "args": [
+        "tools/agents/run_agent.py",
+        "--config",
+        ".github/agents/Verifier.agent.md",
+        "--in",
+        "artifacts/coder_out.json",
+        "--out",
+        "artifacts/verifier_report.json"
+      ],
+      "problemMatcher": []
+    }
+  ]
+}
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
       "label": "ESP32: Build",
       "type": "shell",
       "command": "pio",

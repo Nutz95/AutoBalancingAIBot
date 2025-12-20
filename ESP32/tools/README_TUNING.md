@@ -88,6 +88,11 @@ Kd = 5.0
    - `ESP32/tools/capture_tuning.ps1` — PowerShell wrapper around the Python helper for Windows users.
    - `ESP32/tools/analyze_tuning_capture.py` — offline analyzer that produces PNGs and `summary.txt`.
 
+   Agents note
+   -----------
+   For development workflows, agent configs (Planner/Coder/Verifier) are provided in `.github/agents/`.
+   The `Coder` agent will respect the repository `CODING_RULES.md` when generating or updating firmware code.
+
 - After a capture and analysis, archive the raw CSV and generated PNGs under the openspec change for the IMU fusion work, for example:
    - `openspec/changes/add-imufusion-madgwick/artifacts/plots/`
    - `openspec/changes/add-imufusion-madgwick/artifacts/manifest.txt`
