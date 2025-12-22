@@ -42,6 +42,29 @@ Practical guidance:
 - Use descriptive names; avoid one-letter variable names (except common loop indices like `i`, `j` when local and trivial).
 - Wrap file paths, filenames, and code identifiers in backticks in documentation.
 
+Clarifications — naming and guard braces
+- Prefer long, descriptive names that communicate the entity and role. Examples: `telemetryManager`, `leftMotorDriver`, `motorTelemetryTask`.
+- Avoid unclear abbreviations such as `mgr`, `impl`, `i`, `tmp`, except for trivial local loop indices (`i`, `j`).
+- When interacting with FreeRTOS tasks or passing `void *pv` pointers, cast into a clearly-named pointer variable. For example:
+
+  // Good
+  MotorTelemetryManager::Impl *impl_ptr = static_cast<MotorTelemetryManager::Impl *>(pv);
+
+  // Bad
+  Impl *i = static_cast<Impl *>(pv);
+
+- Always use braces for conditional guards and early returns to make intent explicit and avoid accidental dangling statements. For example:
+
+  // Good: explicit guard with braces
+  if (!telemetryImpl) {
+    return;
+  }
+
+  // Bad: single-line guard without braces (forbidden)
+  if (!telemetryImpl) return;
+
+These clarifications aim to improve readability during reviews and reduce bugs caused by ambiguous identifiers or missing braces.
+
 **6. Comments and commit messages**
 - Write comments in clear English. Use comments to explain "why" not "what" where the code is self-explanatory.
 - Keep commit messages short and descriptive; follow the repositorys existing conventions.

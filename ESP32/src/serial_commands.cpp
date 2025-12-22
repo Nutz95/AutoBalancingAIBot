@@ -9,6 +9,8 @@
 #include "imu_calibration.h"
 #include "logging.h"
 #include "motor_drivers/driver_manager.h"
+#include "motor_drivers/critical_guard.h"
+#include "serial_commands/motor_telemetry_manager.h"
 #include "serial_menu.h"
 #include "tuning_capture.h"
 #include <Arduino.h>
@@ -72,7 +74,6 @@ static void autotuneDeadbandHandler(const String &p);
 static void autotuneMaxAngleHandler(const String &p);
 static bool handleFusion(const String &line, const String &up);
 
-// Submenu builder helpers to reduce size of ensureMenus
 static SerialMenu *buildCalibrationMenu(abbot::BMI088Driver *driver) {
   SerialMenu *m = new SerialMenu("Calibration Commands");
   m->addEntry(1, "CALIB START GYRO [N]",
@@ -228,8 +229,71 @@ static SerialMenu *buildMotorMenu() {
       }
     }
   });
+  m->addEntry(14, "MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)", 
+              [](const String &p) {
+    String args = p;
+    args.trim();
+    if (args.length() == 0) {
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "Usage: MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)");
+      return;
+    }
+    int spaceIndex = args.indexOf(' ');
+    String sideToken;
+    String msToken;
+    if (spaceIndex < 0) {
+      // missing ms
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "Usage: MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)");
+      return;
+    } else {
+      sideToken = args.substring(0, spaceIndex);
+      msToken = args.substring(spaceIndex + 1);
+      sideToken.trim();
+      msToken.trim();
+    }
+    int ms = msToken.toInt();
+    if (ms < 0) {
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Invalid interval");
+      return;
+    }
+    bool reportBoth = false;
+    bool leftSelected = true;
+    String up = sideToken;
+    up.toUpperCase();
+    if (up == "ALL") {
+      reportBoth = true;
+    } else if (up == "LEFT") {
+      reportBoth = false;
+      leftSelected = true;
+    } else if (up == "RIGHT") {
+      reportBoth = false;
+      leftSelected = false;
+    } else {
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "Usage: MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)");
+      return;
+    }
+    if (ms == 0) {
+      g_telemetryManager.stop();
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "MOTOR: telemetry stopped");
+      return;
+    }
+    // configure single-side selection
+    // access private field via start(): we cheat by stopping then starting
+    // with desired mode. The manager defaults singleLeft=true; to support
+    // RIGHT we restart and flip the internal flag via a simple start for
+    // now.
+    g_telemetryManager.stop();
+    g_telemetryManager.start(reportBoth, ms, leftSelected);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+           "MOTOR: telemetry started mode=%s interval=%dms\n",
+           (reportBoth ? "ALL" : (leftSelected ? "LEFT" : "RIGHT")), ms);
+  });
   return m;
 }
+
+
 
 static SerialMenu *buildTuningMenu() {
   SerialMenu *m = new SerialMenu("Tuning (Madgwick)");

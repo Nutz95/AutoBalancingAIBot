@@ -2,12 +2,30 @@
 """
 motor_characterize.py
 - Connects to the ESP32 Wi‑Fi console and performs open-loop step tests
-  to characterize motor response (time-to-rise, steady speed, latency).
+    to characterize motor response (time-to-rise, steady speed, latency).
 
 Usage: python motor_characterize.py <host> [port] [--motor LEFT|RIGHT] [--outdir DIR]
 
 Safety: Wheels MUST be off the ground or robot firmly lifted. The script
 will enable motors and command raw velocity values. Use at your own risk.
+
+Notes on sampling and estimator alpha:
+ - The sampling interval (`--sample_dt`) controls how frequently the
+     script reads encoder values during a step. For motor characterization
+     a default of 50 ms (0.05 s) is a good trade-off between temporal
+     resolution and console/firmware load.
+ - The `SpeedEstimator` smoothing factor `alpha` should be chosen with
+     the sampling interval in mind. A practical relation is:
+
+             alpha = dt / (tau + dt)
+
+     where `tau` is the desired estimator time-constant (seconds) and `dt`
+     is the sampling interval in seconds. Example: for `tau = 0.2 s` and
+     `dt = 0.05 s`, alpha ≈ 0.05 / (0.2 + 0.05) ≈ 0.20.
+ - If you reduce `dt`, reduce `alpha` accordingly to preserve similar
+     effective smoothing. Typical alpha values for characterization runs
+     with `dt = 0.05` are in the 0.1–0.3 range depending on desired
+     smoothing.
 """
 import socket
 import sys
@@ -333,14 +351,28 @@ def analyze_and_save(outdir, motor_token, results):
         if not samples:
             continue
         fname = os.path.join(outdir, f"motor_{motor_token}_step_{sp}.csv")
+        # find baseline: first non-None encoder sample for this step
+        base = None
+        for (_t, _v) in samples:
+            if _v is not None:
+                base = _v
+                break
+        if base is None:
+            base = 0
+        # write CSV with time offset and encoder values adjusted so first
+        # observed sample becomes zero (baseline subtracted)
         with open(fname, 'w', encoding='utf-8') as f:
             f.write('t,enc\n')
-            t0 = samples[0][0]
+            t0 = samples[0][0] if len(samples) > 0 else 0.0
             for (t, enc) in samples:
-                f.write(f"{t - t0:.6f},{'' if enc is None else enc}\n")
+                if enc is None:
+                    enc_out = ''
+                else:
+                    enc_out = int(enc - base)
+                f.write(f"{t - t0:.6f},{enc_out}\n")
         print(f'Saved {fname} ({len(samples)} samples)')
-        # crude metrics: first non-none, last non-none
-        vals = [(t, v) for (t, v) in samples if v is not None]
+        # crude metrics: first non-none, last non-none (adjusted by baseline)
+        vals = [(t, v - base) for (t, v) in samples if v is not None]
         if len(vals) >= 2:
             t_start, v_start = vals[0]
             t_end, v_end = vals[-1]
@@ -401,7 +433,15 @@ def analyze_and_save(outdir, motor_token, results):
     with open(summary_path, 'w', encoding='utf-8') as f:
         f.write('raw_speed,delta,latency_s,tau_s,steady_counts_per_sec\n')
         for sp, samples in results:
-            vals = [(t, v) for (t, v) in samples if v is not None]
+            # use same baseline-subtracted convention for summary
+            base = None
+            for (_t, _v) in samples:
+                if _v is not None:
+                    base = _v
+                    break
+            if base is None:
+                base = 0
+            vals = [(t, v - base) for (t, v) in samples if v is not None]
             if len(vals) < 2:
                 f.write(f"{sp},,,\n")
                 continue
@@ -437,6 +477,24 @@ def analyze_and_save(outdir, motor_token, results):
                     slope = f"{(num/den):.3f}"
             f.write(f"{sp},{delta},{latency},{tau_time},{slope}\n")
     print(f'Saved summary: {summary_path}')
+    # Collect commanded vs measured steady speeds for plotting
+    cmd_vals = []
+    meas_vals = []
+    with open(summary_path, 'r', encoding='utf-8') as f:
+        next(f)
+        for line in f:
+            parts = line.strip().split(',')
+            if len(parts) < 5:
+                continue
+            try:
+                cmd = float(parts[0])
+                slope_s = parts[4]
+                if slope_s != '':
+                    meas = float(slope_s)
+                    cmd_vals.append(cmd)
+                    meas_vals.append(meas)
+            except Exception:
+                continue
     # Generate a plot of encoder vs time for each step and save to outdir
     try:
         import matplotlib
@@ -450,12 +508,20 @@ def analyze_and_save(outdir, motor_token, results):
             if not samples:
                 continue
             t0 = samples[0][0]
+            # compute baseline (first non-None) and subtract so plots start at 0
+            base = None
+            for (_t, _v) in samples:
+                if _v is not None:
+                    base = _v
+                    break
+            if base is None:
+                base = 0
             xs = [s[0] - t0 for s in samples]
-            ys = [float(s[1]) if s[1] is not None else float('nan') for s in samples]
+            ys = [(float(s[1]) - base) if s[1] is not None else float('nan') for s in samples]
             ax.plot(xs, ys, marker='o', label=f'{sp} raw')
 
         ax.set_xlabel('Time (s)')
-        ax.set_ylabel('Encoder (counts)')
+        ax.set_ylabel('Encoder (counts, baseline-subtracted)')
         ax.set_title('Motor step responses (encoder vs time)')
         ax.grid(True)
         ax.legend()
@@ -463,6 +529,32 @@ def analyze_and_save(outdir, motor_token, results):
         plt.tight_layout()
         plt.savefig(out_png, dpi=200)
         print(f'Saved plot: {out_png}')
+        # plot commanded vs measured steady speeds
+        try:
+            if len(cmd_vals) > 0:
+                plt.figure(figsize=(6, 6))
+                ax2 = plt.gca()
+                ax2.scatter(cmd_vals, meas_vals, marker='o')
+                ax2.set_xlabel('Commanded speed (raw or normalized)')
+                ax2.set_ylabel('Measured steady speed (counts/sec)')
+                ax2.set_title('Commanded vs Measured Steady Speed')
+                ax2.grid(True)
+                # optional linear fit
+                try:
+                    import numpy as _np
+                    a, b = _np.polyfit(cmd_vals, meas_vals, 1)
+                    xs = _np.array([min(cmd_vals), max(cmd_vals)])
+                    ys = a * xs + b
+                    ax2.plot(xs, ys, linestyle='--', color='orange', label=f'fit: y={a:.3f}x+{b:.3f}')
+                    ax2.legend()
+                except Exception:
+                    pass
+                out2 = os.path.join(outdir, 'cmd_vs_meas.png')
+                plt.tight_layout()
+                plt.savefig(out2, dpi=200)
+                print(f'Saved plot: {out2}')
+        except Exception as e:
+            print('Command vs measured plotting failed:', e)
     except Exception as e:
         print('Plotting failed:', e)
 
@@ -512,12 +604,14 @@ def main():
     parser.add_argument('host')
     parser.add_argument('port', nargs='?', type=int, default=2333)
     parser.add_argument('--motor', choices=['LEFT', 'RIGHT'], default='LEFT')
-    parser.add_argument('--outdir', default='motor_tests')
+    parser.add_argument('--outdir', default='artifacts/motor_tests')
     parser.add_argument('--speeds', default='2000,4000,6000,7000', help='comma list of speeds; raw ints or normalized floats depending on --normalized')
-    parser.add_argument('--steps', help='generate speeds using start:end:step (e.g. -1:1:0.1)')
+    parser.add_argument('--steps', help='generate speeds using start:end:step (e.g. -1:1:0.1). Example: --steps "-0.3:0.3:0.05"')
+    parser.add_argument('--range', nargs=3, type=float, metavar=('START','END','STEP'),
+                        help='alternate: provide start end step as three floats (avoids shell quoting for negative start). Example: --range -0.3 0.3 0.05')
     parser.add_argument('--normalized', action='store_true', help='treat speeds as normalized values in [-1,1] (for DC motors)')
     parser.add_argument('--dur', type=float, default=10.0, help='duration (s) for each step')
-    parser.add_argument('--sample_dt', type=float, default=0.02, help='sampling interval (s)')
+    parser.add_argument('--sample_dt', type=float, default=0.05, help='sampling interval (s). Note: choose estimator alpha using alpha = dt/(tau+dt); for dt=0.05 and tau=0.2 use alpha≈0.2')
     parser.add_argument('--show-mapping', action='store_true', help='print normalized->raw->PWM mapping for the generated speeds and exit')
     parser.add_argument('--precision', type=float, default=0.01, help='round normalized speeds to this precision (e.g. 0.01)')
     parser.add_argument('--two-phase', action='store_true', help='run two sweeps: 0->-X then 0->+X (useful to avoid momentum bias when crossing deadzone)')
@@ -536,7 +630,31 @@ def main():
     try:
         mc.connect()
         # Allow generating speeds from --steps or parse explicit --speeds
-        if args.steps:
+        if args.range:
+            try:
+                start = float(args.range[0])
+                end = float(args.range[1])
+                step = float(args.range[2])
+                if step == 0:
+                    raise ValueError('step cannot be zero')
+                vals = []
+                v = start
+                if step > 0:
+                    while v <= end + 1e-9:
+                        vals.append(v)
+                        v += step
+                else:
+                    while v >= end - 1e-9:
+                        vals.append(v)
+                        v += step
+                if args.normalized:
+                    speeds = [float(f) for f in vals]
+                else:
+                    speeds = [int(f) for f in vals]
+            except Exception as e:
+                print('Invalid --range value:', e)
+                return
+        elif args.steps:
             try:
                 parts = args.steps.split(':')
                 if len(parts) != 3:
