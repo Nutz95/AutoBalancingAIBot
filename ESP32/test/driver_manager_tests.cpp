@@ -36,6 +36,16 @@ public:
   int32_t readEncoder(IMotorDriver::MotorSide side) override { (void)side; return 0; }
   void resetPositionTracking() override {}
   bool processSerialCommand(const String &line) override { (void)line; return false; }
+  // New virtuals required by IMotorDriver
+  float readSpeed(IMotorDriver::MotorSide /*side*/) override { return 0.0f; }
+  int getMotorId(IMotorDriver::MotorSide side) const override {
+    return (side == IMotorDriver::MotorSide::LEFT) ? 1 : 2;
+  }
+  bool isMotorInverted(IMotorDriver::MotorSide /*side*/) const override { return false; }
+  float getVelocityMaxSpeed() const override { return 1.0f; }
+  float getVelocityTargetIncrementScale() const override { return 1.0f; }
+  float getVelocityPositionKp() const override { return 0.0f; }
+  const char *getDriverName() const override { return "fake"; }
 
   float last_left, last_right;
   bool enabled;

@@ -73,22 +73,22 @@ const char *channelName(Channel c);
 // serialized with a mutex and routed centrally.
 #define LOG_PRINT(ch, ...)                                                     \
   do {                                                                         \
-    if (abbot::log::isChannelEnabled(ch)) {                                    \
-      abbot::log::lockedPrint(__VA_ARGS__);                                    \
+    if (::abbot::log::isChannelEnabled(ch)) {                                   \
+      ::abbot::log::lockedPrint(__VA_ARGS__);                                   \
     }                                                                          \
   } while (0)
 
 #define LOG_PRINTLN(ch, ...)                                                   \
   do {                                                                         \
-    if (abbot::log::isChannelEnabled(ch)) {                                    \
-      abbot::log::lockedPrintln(__VA_ARGS__);                                  \
+    if (::abbot::log::isChannelEnabled(ch)) {                                   \
+      ::abbot::log::lockedPrintln(__VA_ARGS__);                                 \
     }                                                                          \
   } while (0)
 
 #define LOG_PRINTF(ch, fmt, ...)                                               \
   do {                                                                         \
-    if (abbot::log::isChannelEnabled(ch)) {                                    \
-      abbot::log::lockedPrintf((fmt), ##__VA_ARGS__);                          \
+    if (::abbot::log::isChannelEnabled(ch)) {                                   \
+      ::abbot::log::lockedPrintf((fmt), ##__VA_ARGS__);                         \
     }                                                                          \
   } while (0)
 

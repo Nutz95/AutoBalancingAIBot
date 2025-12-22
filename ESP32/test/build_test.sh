@@ -63,6 +63,20 @@ echo "Running Driver Manager Test..."
 build/driver_manager_tests.exe
 echo ""
 
+# 4. ReadSpeed Estimator Test
+echo "----------------------------------------------------------------------"
+echo "4. ReadSpeed Estimator Test"
+echo "----------------------------------------------------------------------"
+g++ -std=c++17 -O2 -I include \
+    test/readspeed_tests.cpp \
+    -o build/readspeed_tests.exe
+
+echo "✅ Compilation succeeded"
+echo ""
+echo "Running ReadSpeed Estimator Test..."
+build/readspeed_tests.exe
+echo ""
+
 echo "======================================================================"
 echo "✅ All tests completed successfully!"
 echo "======================================================================"

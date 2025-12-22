@@ -15,6 +15,7 @@ import time
 import re
 import argparse
 import os
+import math
 
 def make_socket():
     s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -34,12 +35,23 @@ class MotorChar:
         os.makedirs(outdir, exist_ok=True)
         self.sock = None
         # regex to capture encoder read output and present_pos from MOTOR PARAMS
+        # old servo-style log: "motor_driver: encoder id=<id> val=<val>"
         self.re_enc = re.compile(r"motor_driver: encoder id=(\d+) val=(-?\d+)")
+        # firmware prints: "motor_driver: encoder side=<n> val=<v>" (side: 0=LEFT,1=RIGHT)
+        self.re_enc_side = re.compile(r"motor_driver: encoder side=(\d+) val=(-?\d+)")
+        # serial_commands presentation: "MOTOR: encoder id=<id> value=<val>"
+        self.re_enc_motor = re.compile(r"MOTOR: encoder id=(\d+) value=(-?\d+)")
+        # combined MOTOR both-side format: "MOTOR: encoder L(id=X)=V R(id=Y)=W"
+        self.re_enc_motor_both = re.compile(r"MOTOR: encoder L\(id=(\d+)\)=(-?\d+)\s+R\(id=(\d+)\)=(-?\d+)")
+        # DCMirrorDriver status line that prints left_enc/right_enc
+        self.re_dc_both = re.compile(r"DCMirrorDriver:.*left_enc=(-?\d+).*right_enc=(-?\d+)")
         self.re_present = re.compile(r"present_pos=(-?\d+)")
         self.buffer = b''
         # track last raw position for unwrapping and accumulated position
         self._last_raw_pos = None
         self._accumulated_pos = 0
+        # whether to send normalized speeds (-1..1) instead of raw ints
+        self.use_normalized = False
 
     def connect(self, timeout=5):
         s = make_socket()
@@ -100,6 +112,7 @@ class MotorChar:
                 f.write(line + '\n')
         except Exception:
             pass
+
     def wait_for_any(self, substrings, timeout=2.0):
         """Read console lines until any substring in `substrings` appears or timeout.
         Returns the matched line or None on timeout."""
@@ -110,6 +123,12 @@ class MotorChar:
                     if s in l:
                         return l
         return None
+
+    
+
+    
+
+    
 
     def read_encoder(self, id_token):
         # Prefer MOTOR PARAMS (present_pos single-turn) and perform unwrap locally
@@ -146,29 +165,60 @@ class MotorChar:
         while time.time() < deadline:
             for l in self._recv_lines(0.15):
                 self._log_console_line(l)
+                # try multiple encoder line formats (servo, MOTOR:, DC driver)
                 m = self.re_enc.search(l)
                 if m:
                     try:
                         return int(m.group(2))
                     except Exception:
                         continue
-
-        # 3) MOTOR POS (printed accumulated)
-        self.send('MOTOR POS')
-        re_acc = re.compile(r"accumulated=(-?\d+)")
-        deadline = time.time() + 0.6
-        while time.time() < deadline:
-            for l in self._recv_lines(0.15):
-                self._log_console_line(l)
-                m = re_acc.search(l)
-                if m:
+                m_side = self.re_enc_side.search(l)
+                if m_side:
                     try:
-                        return int(m.group(1))
+                        side_idx = int(m_side.group(1))
+                        val = int(m_side.group(2))
+                        tok = id_token.upper() if id_token is not None else ''
+                        if tok.startswith('L') or tok == 'LEFT':
+                            if side_idx == 0:
+                                return val
+                        if tok.startswith('R') or tok == 'RIGHT':
+                            if side_idx == 1:
+                                return val
+                        # if numeric id or unspecified, prefer side_idx==0 (LEFT)
+                        return val
                     except Exception:
                         continue
-
-        # nothing found
-        return None
+                m2 = self.re_enc_motor.search(l)
+                if m2:
+                    try:
+                        return int(m2.group(2))
+                    except Exception:
+                        continue
+                m3 = self.re_enc_motor_both.search(l)
+                if m3:
+                    try:
+                        tok = id_token.upper() if id_token is not None else ''
+                        if tok.startswith('L'):
+                            return int(m3.group(2))
+                        elif tok.startswith('R'):
+                            return int(m3.group(4))
+                        else:
+                            # default to left value
+                            return int(m3.group(2))
+                    except Exception:
+                        continue
+                m4 = self.re_dc_both.search(l)
+                if m4:
+                    try:
+                        tok = id_token.upper() if id_token is not None else ''
+                        if tok.startswith('L'):
+                            return int(m4.group(1))
+                        elif tok.startswith('R'):
+                            return int(m4.group(2))
+                        else:
+                            return int(m4.group(1))
+                    except Exception:
+                        continue
 
     def run_step_test(self, motor_token, step_speeds, step_duration=1.0, sample_dt=0.02):
         results = []
@@ -193,25 +243,84 @@ class MotorChar:
             print('Warning: did not observe servo initialization messages; telemetry may be unavailable.')
         # for each step
         for sp in step_speeds:
-            print(f'Commanding {motor_token} speed {sp} (raw) for {step_duration}s')
+            label = 'normalized' if self.use_normalized else 'raw'
+            # format display to 2 decimal places for readability and to avoid float artifacts
+            try:
+                display_sp = f"{float(sp):.2f}" if self.use_normalized else str(int(sp))
+            except Exception:
+                display_sp = str(sp)
+            print(f'Commanding {motor_token} speed {display_sp} ({label}) for {step_duration}s')
             # clear any pending input
             time.sleep(0.05)
-            # send VEL (raw) direct
-            self.send(f'MOTOR VEL {motor_token} {int(sp)}')
+            # send VEL direct; integer raw for servos, float normalized for DC
+            if self.use_normalized:
+                # For normalized commands prefer MOTOR SET (handled by AbstractMotorDriver)
+                # which maps to setMotorCommand(side, -1..1). Send rounded value with 2 decimals.
+                try:
+                    send_val = f"{float(sp):.2f}"
+                except Exception:
+                    send_val = str(sp)
+                self.send(f"MOTOR SET {motor_token} {send_val}")
+            else:
+                self.send(f"MOTOR VEL {motor_token} {int(sp)}")
             t0 = time.time()
             samples = []
             while (time.time() - t0) < step_duration:
                 enc = self.read_encoder(motor_token)
                 samples.append((time.time(), enc))
                 time.sleep(sample_dt)
-            # stop motor (0)
-            self.send(f'MOTOR VEL {motor_token} 0')
+            # stop motor (0) - use same command family as used for step (SET vs VEL)
+            if self.use_normalized:
+                self.send(f'MOTOR SET {motor_token} 0')
+            else:
+                self.send(f'MOTOR VEL {motor_token} 0')
             time.sleep(0.05)
             results.append((sp, samples))
         # disable motors at end
         print('Disabling motors...')
         self.send('MOTOR DISABLE')
         return results
+
+
+def _parse_dc_config(path='config/motor_configs/dc_motor_config.h'):
+    """Parse DC PWM config values from firmware header. Returns (max_speed, pwm_bits).
+    Falls back to defaults if file or defines are not present.
+    """
+    max_speed = 7000
+    pwm_bits = 8
+    try:
+        with open(path, 'r', encoding='utf-8') as f:
+            data = f.read()
+        m = re.search(r"#define\s+DC_VELOCITY_MAX_SPEED\s+(\d+)", data)
+        if m:
+            max_speed = int(m.group(1))
+        m2 = re.search(r"#define\s+DC_PWM_RESOLUTION_BITS\s+(\d+)", data)
+        if m2:
+            pwm_bits = int(m2.group(1))
+    except Exception:
+        pass
+    return max_speed, pwm_bits
+
+
+def _print_mapping_for_speeds(speeds, normalized=True):
+    max_speed, pwm_bits = _parse_dc_config()
+    pwm_max = (1 << pwm_bits) - 1
+    print(f"DC mapping: DC_VELOCITY_MAX_SPEED={max_speed}, PWM_BITS={pwm_bits}, PWM_MAX={pwm_max}")
+    print("norm/raw/duty/duty%")
+    for s in speeds:
+        if normalized:
+            cmd = float(s)
+            raw = int(round(cmd * float(max_speed)))
+        else:
+            raw = int(s)
+            cmd = float(raw) / float(max_speed) if max_speed != 0 else 0.0
+        absv = abs(raw)
+        duty = 0
+        if max_speed != 0:
+            duty = int((absv * pwm_max) // max_speed)
+        duty_pct = (duty / pwm_max * 100.0) if pwm_max > 0 else 0.0
+        print(f"{cmd:+.4f} / {raw:6d} / {duty:3d} / {duty_pct:6.2f}%")
+    
 
 
 def analyze_and_save(outdir, motor_token, results):
@@ -404,9 +513,15 @@ def main():
     parser.add_argument('port', nargs='?', type=int, default=2333)
     parser.add_argument('--motor', choices=['LEFT', 'RIGHT'], default='LEFT')
     parser.add_argument('--outdir', default='motor_tests')
-    parser.add_argument('--speeds', default='2000,4000,6000,7000', help='comma list of raw speeds (positive int)')
+    parser.add_argument('--speeds', default='2000,4000,6000,7000', help='comma list of speeds; raw ints or normalized floats depending on --normalized')
+    parser.add_argument('--steps', help='generate speeds using start:end:step (e.g. -1:1:0.1)')
+    parser.add_argument('--normalized', action='store_true', help='treat speeds as normalized values in [-1,1] (for DC motors)')
     parser.add_argument('--dur', type=float, default=10.0, help='duration (s) for each step')
     parser.add_argument('--sample_dt', type=float, default=0.02, help='sampling interval (s)')
+    parser.add_argument('--show-mapping', action='store_true', help='print normalized->raw->PWM mapping for the generated speeds and exit')
+    parser.add_argument('--precision', type=float, default=0.01, help='round normalized speeds to this precision (e.g. 0.01)')
+    parser.add_argument('--two-phase', action='store_true', help='run two sweeps: 0->-X then 0->+X (useful to avoid momentum bias when crossing deadzone)')
+    parser.add_argument('--discard-seconds', type=float, default=0.0, help='seconds to discard at start of each step when analyzing (not yet applied to CSV)')
     args = parser.parse_args()
 
     print('*** MOTOR CHARACTERIZATION TEST ***')
@@ -417,11 +532,128 @@ def main():
         return
 
     mc = MotorChar(args.host, args.port, args.motor, args.outdir)
+    mc.use_normalized = args.normalized
     try:
         mc.connect()
-        speeds = [int(s.strip()) for s in args.speeds.split(',') if s.strip()]
-        res = mc.run_step_test(args.motor, speeds, step_duration=args.dur, sample_dt=args.sample_dt)
-        analyze_and_save(args.outdir, args.motor, res)
+        # Allow generating speeds from --steps or parse explicit --speeds
+        if args.steps:
+            try:
+                parts = args.steps.split(':')
+                if len(parts) != 3:
+                    raise ValueError('steps must be start:end:step')
+                start = float(parts[0])
+                end = float(parts[1])
+                step = float(parts[2])
+                # build inclusive sequence respecting floating step sign
+                vals = []
+                v = start
+                if step == 0:
+                    raise ValueError('step cannot be zero')
+                if step > 0:
+                    while v <= end + 1e-9:
+                        vals.append(v)
+                        v += step
+                else:
+                    while v >= end - 1e-9:
+                        vals.append(v)
+                        v += step
+                if args.normalized:
+                    speeds = [float(f) for f in vals]
+                else:
+                    speeds = [int(f) for f in vals]
+            except Exception as e:
+                print('Invalid --steps value:', e)
+                return
+        else:
+            if args.normalized:
+                speeds = [float(s.strip()) for s in args.speeds.split(',') if s.strip()]
+            else:
+                speeds = [int(s.strip()) for s in args.speeds.split(',') if s.strip()]
+
+        # Quantize normalized speeds to requested precision to avoid floating artifacts
+        if args.normalized and args.precision and args.precision > 0:
+            prec = float(args.precision)
+            # number of decimal places for formatting
+            try:
+                nd = max(0, int(round(-math.log10(prec))))
+            except Exception:
+                nd = 2
+            def quant(v):
+                q = round(round(v / prec) * prec, nd)
+                # treat very small values as zero to avoid tiny floats like 1e-16
+                if abs(q) < (prec / 2.0):
+                    q = 0.0
+                return q
+            speeds = [quant(s) for s in speeds]
+        # If requested, print mapping and exit (useful to inspect quantization)
+        if args.show_mapping:
+            _print_mapping_for_speeds(speeds, normalized=args.normalized)
+        else:
+            # support two-phase sweep: 0->-X then 0->+X to avoid momentum carryover
+            if args.two_phase and len(speeds) > 0:
+                # determine max magnitude from provided speeds
+                max_neg = abs(min(0.0, min(speeds)))
+                max_pos = abs(max(0.0, max(speeds)))
+                max_range = max(max_neg, max_pos)
+                if max_range == 0:
+                    print('Two-phase requested but max range is 0; aborting two-phase.')
+                    res = mc.run_step_test(args.motor, speeds, step_duration=args.dur, sample_dt=args.sample_dt)
+                    analyze_and_save(args.outdir, args.motor, res)
+                else:
+                    # determine step increment (take difference of first two if possible)
+                    step_inc = args.precision if args.precision and args.precision > 0 else 0.01
+                    if len(speeds) >= 2:
+                        step_inc = abs(speeds[1] - speeds[0])
+                        if step_inc == 0:
+                            step_inc = args.precision
+                    # build negative sweep 0 -> -max_range
+                    neg_vals = []
+                    v = 0.0
+                    while v >= -max_range - 1e-9:
+                        neg_vals.append(round(v, 6))
+                        v -= step_inc
+                    # ensure last point is exactly -max_range
+                    if abs(neg_vals[-1] + max_range) > 1e-9:
+                        neg_vals.append(-max_range)
+                    # build positive sweep 0 -> +max_range
+                    pos_vals = []
+                    v = 0.0
+                    while v <= max_range + 1e-9:
+                        pos_vals.append(round(v, 6))
+                        v += step_inc
+                    if abs(pos_vals[-1] - max_range) > 1e-9:
+                        pos_vals.append(max_range)
+
+                    # quantize sequences using same precision logic as above
+                    def _quant_list(lst):
+                        if args.normalized and args.precision and args.precision > 0:
+                            prec = float(args.precision)
+                            try:
+                                nd = max(0, int(round(-math.log10(prec))))
+                            except Exception:
+                                nd = 2
+                            def q(v):
+                                qq = round(round(v / prec) * prec, nd)
+                                if abs(qq) < (prec / 2.0):
+                                    qq = 0.0
+                                return qq
+                            return [q(x) for x in lst]
+                        else:
+                            return lst
+
+                    neg_q = _quant_list(neg_vals)
+                    pos_q = _quant_list(pos_vals)
+
+                    print(f'Running two-phase: 0 -> {-max_range} ({len(neg_q)} steps), then 0 -> {max_range} ({len(pos_q)} steps)')
+                    res1 = mc.run_step_test(args.motor, neg_q, step_duration=args.dur, sample_dt=args.sample_dt)
+                    res2 = mc.run_step_test(args.motor, pos_q, step_duration=args.dur, sample_dt=args.sample_dt)
+                    combined = []
+                    combined.extend(res1)
+                    combined.extend(res2)
+                    analyze_and_save(args.outdir, args.motor, combined)
+            else:
+                res = mc.run_step_test(args.motor, speeds, step_duration=args.dur, sample_dt=args.sample_dt)
+                analyze_and_save(args.outdir, args.motor, res)
     finally:
         mc.close()
 

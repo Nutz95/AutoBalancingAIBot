@@ -2,6 +2,7 @@
 #pragma once
 
 #include "AbstractMotorDriver.h"
+#include "motor_drivers/speed_estimator.h"
 
 namespace abbot {
 namespace motor {
@@ -32,6 +33,8 @@ public:
   float getVelocityTargetIncrementScale() const override;
   float getVelocityPositionKp() const override;
   const char *getDriverName() const override;
+  // Provide a filtered speed estimate in counts/sec for the requested side
+  float readSpeed(MotorSide side) override;
 
 private:
   void applyMirrorIfNeeded();
@@ -75,10 +78,16 @@ private:
   int m_last_right_dir;
   int64_t m_left_encoder;
   int64_t m_right_encoder;
-  // Increment helpers used by ISR integration
+  // Use SpeedEstimator for filtered speed estimates (single-responsibility)
+  abbot::motor::SpeedEstimator m_left_estimator{0.25f};
+  abbot::motor::SpeedEstimator m_right_estimator{0.25f};
+
 public:
+  // Increment helpers used by ISR integration
   void incrementLeftEncoder(int delta);
   void incrementRightEncoder(int delta);
+
+private:
   // PCNT units and configuration flags (set when PCNT is initialized)
   int m_left_pcnt_unit = -1;
   int m_right_pcnt_unit = -1;
@@ -93,6 +102,13 @@ public:
 
 // Factory helper: create and install DC mirror driver as active driver
 void installDefaultDCMirrorDriver();
+
+#if defined(UNIT_TEST_HOST)
+// Host-side no-op: when running unit tests we may not link the full
+// DC driver implementation. Provide a lightweight inline stub so test
+// binaries don't require the firmware-only implementation.
+inline void installDefaultDCMirrorDriver() {}
+#endif
 
 } // namespace motor
 } // namespace abbot

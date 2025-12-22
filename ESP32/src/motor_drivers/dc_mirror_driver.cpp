@@ -98,6 +98,9 @@ DCMirrorDriver::DCMirrorDriver()
       m_right_invert_override_enabled(false),
       m_right_invert_override_value(false) {}
 
+// IIR alpha used for speed filtering; named constant for clarity and tuning.
+static constexpr float SPEED_IIR_ALPHA = 0.25f;
+
 void DCMirrorDriver::initMotorDriver() {
   // Initialize state
   m_enabled = false;
@@ -749,6 +752,21 @@ void DCMirrorDriver::incrementRightEncoder(int delta) {
   portENTER_CRITICAL_ISR(&s_encoder_mux);
   m_right_encoder += delta;
   portEXIT_CRITICAL_ISR(&s_encoder_mux);
+}
+
+// Read a filtered speed estimate (counts/sec) for the requested side.
+// Delegates filtering to the SpeedEstimator helper (single responsibility).
+float DCMirrorDriver::readSpeed(MotorSide side) {
+  uint32_t now = micros();
+  if (side == MotorSide::LEFT) {
+    int32_t enc = readEncoder(MotorSide::LEFT);
+    int64_t curCount = (int64_t)enc;
+    return m_left_estimator.update(curCount, now);
+  } else {
+    int32_t enc = readEncoder(MotorSide::RIGHT);
+    int64_t curCount = (int64_t)enc;
+    return m_right_estimator.update(curCount, now);
+  }
 }
 
 // Global instance used by ISRs

@@ -33,6 +33,27 @@ public:
   virtual void setMotorCommand(MotorSide side, float command) = 0;
   virtual void setMotorCommandRaw(MotorSide side, int16_t rawSpeed) = 0;
   virtual int32_t readEncoder(MotorSide side) = 0;
+  /**
+   * @brief Read estimated velocity for the given motor side.
+   *
+   * The value is expressed in encoder counts per second (counts/s).
+   * Implementations should return a filtered/averaged estimate where
+   * practical to reduce jitter from raw counts. A return value of
+   * 0.0f indicates either no movement or that the driver cannot provide
+   * an estimate.
+   *
+   * @param side Which motor side to query (`MotorSide::LEFT` or `RIGHT`).
+   * @return float Estimated speed in counts per second (counts/s).
+   *
+   * @note Callers that rely on the estimate should consider small values
+   * near 0 as potentially uninitialized and apply validation or deadband.
+   *
+   * @threadsafe The thread-safety of this method depends on the driver
+   * implementation. Driver implementations must document their
+   * concurrency guarantees. `driver_manager` wrappers may call this from
+   * console tasks or RTOS threads; the caller should not assume ISR safety.
+   */
+  virtual float readSpeed(MotorSide side) = 0;
   // Note: if an implementation exposes 64-bit position APIs these may be
   // accessed via driver-specific headers; the common interface exposes
   // `readEncoder` and `resetPositionTracking` for portability.

@@ -36,9 +36,23 @@ void installDefaultMotorDriver();
 // These helpers ease migration for code that still references numeric motor
 // IDs. They map numeric IDs to the configured `MotorSide` via the active
 // driver's `getMotorId()` and forward to the `IMotorDriver` methods.
-void setMotorCommandById(int id, float command);
-void setMotorCommandRawById(int id, int16_t rawSpeed);
-int32_t readEncoderById(int id);
+// Side-based compatibility wrappers. Prefer enum `MotorSide` over numeric ids.
+void setMotorCommandBySide(IMotorDriver::MotorSide side, float command);
+void setMotorCommandRawBySide(IMotorDriver::MotorSide side, int16_t rawSpeed);
+int32_t readEncoderBySide(IMotorDriver::MotorSide side);
+// Read estimated velocity (counts/sec) for the specified side.
+float readSpeedBySide(IMotorDriver::MotorSide side);
+
+// Helper: map numeric driver id to `MotorSide`. Returns true and sets
+// `out` when mapping succeeds, false otherwise.
+/**
+ * Map numeric motor id to `MotorSide`.
+ *
+ * Returns `true` and sets `out` when the active driver recognizes `id` and
+ * maps it to a side (LEFT or RIGHT). Returns `false` when no active driver
+ * is present or the id is unknown.
+ */
+bool getSideForId(int id, IMotorDriver::MotorSide &out);
 
 /**
  * Encoder report returned by `getEncoderReportFromArg`.

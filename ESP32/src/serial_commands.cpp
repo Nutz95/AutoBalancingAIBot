@@ -183,6 +183,51 @@ static SerialMenu *buildMotorMenu() {
       }
     }
   });
+  m->addEntry(13, "MOTOR SPEED <LEFT|RIGHT|ID>", [](const String &p) {
+    abbot::motor::EncoderReport rep;
+    bool ok = abbot::motor::getEncoderReportFromArg(p.c_str(), rep);
+    if (!ok) {
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                  "Usage: MOTOR SPEED <LEFT|RIGHT|ID>");
+      return;
+    }
+    auto drv = abbot::motor::getActiveMotorDriver();
+    if (!drv) {
+      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "No active motor driver");
+      return;
+    }
+    if (rep.both) {
+      float lsp = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::LEFT);
+      float rsp = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+      LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                 "MOTOR: speed L(id=%d)=%.2f R(id=%d)=%.2f\n", rep.leftId,
+                 (double)lsp, rep.rightId, (double)rsp);
+    } else {
+      if (rep.requestedId == rep.leftId) {
+        float lsp = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::LEFT);
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "MOTOR: speed id=%d value=%.2f\n", rep.requestedId,
+                   (double)lsp);
+      } else if (rep.requestedId == rep.rightId) {
+        float rsp = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "MOTOR: speed id=%d value=%.2f\n", rep.requestedId,
+                   (double)rsp);
+      } else {
+        // numeric id case: map numeric id -> MotorSide and query by side
+        abbot::motor::IMotorDriver::MotorSide side;
+        if (abbot::motor::getSideForId(rep.requestedId, side)) {
+          float s = abbot::motor::readSpeedBySide(side);
+          LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                     "MOTOR: speed id=%d value=%.2f\n", rep.requestedId,
+                     (double)s);
+        } else {
+          LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                     "MOTOR: speed id=%d unknown\n", rep.requestedId);
+        }
+      }
+    }
+  });
   return m;
 }
 
