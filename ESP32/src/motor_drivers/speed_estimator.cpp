@@ -13,7 +13,7 @@ void SpeedEstimator::reset() {
   m_speed = 0.0f;
 }
 
-float SpeedEstimator::update(int64_t curCount, uint32_t now_us) {
+float SpeedEstimator::update(int64_t curCount, uint64_t now_us) {
   if (m_last_ts_us == 0) {
     m_last_ts_us = now_us;
     m_last_count = curCount;

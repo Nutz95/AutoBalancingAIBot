@@ -46,6 +46,9 @@ public:
   float getVelocityTargetIncrementScale() const override { return 1.0f; }
   float getVelocityPositionKp() const override { return 0.0f; }
   const char *getDriverName() const override { return "fake"; }
+  // New methods added to IMotorDriver API
+  void resetSpeedEstimator() override { /* no-op for fake */ }
+  uint64_t getLastCommandTimeUs(IMotorDriver::MotorSide /*side*/) const override { return 0ULL; }
 
   float last_left, last_right;
   bool enabled;

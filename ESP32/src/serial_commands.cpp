@@ -90,70 +90,90 @@ static SerialMenu *buildCalibrationMenu(abbot::BMI088Driver *driver) {
 static SerialMenu *buildMotorMenu() {
   SerialMenu *m = new SerialMenu("Motor Commands");
   m->addEntry(1, "MOTOR ENABLE", [](const String &) {
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->enableMotors();
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(2, "MOTOR DISABLE", [](const String &) {
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->disableMotors();
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(3, "MOTOR STATUS", [](const String &) {
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->printStatus();
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(4, "MOTOR DUMP", [](const String &) {
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->dumpConfig();
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(5, "MOTOR RESETPOS", [](const String &) {
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->resetPositionTracking();
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(6, "MOTOR POS", [](const String &) {
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->processSerialCommand("POS");
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(7, "MOTOR VEL <LEFT|RIGHT> <speed>", [](const String &p) {
     String cmd = "VEL " + p;
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->processSerialCommand(cmd);
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(8, "MOTOR SET <LEFT|RIGHT|ID> <v>",
               [](const String &p) { motorSetHandler(p); });
   m->addEntry(9, "MOTOR PARAMS <LEFT|RIGHT>", [](const String &p) {
     String cmd = "PARAMS " + p;
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->processSerialCommand(cmd);
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(10, "MOTOR ACC <LEFT|RIGHT> <value>", [](const String &p) {
     String cmd = "ACC " + p;
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->processSerialCommand(cmd);
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(11, "MOTOR INVERT <LEFT|RIGHT|ID> [0|1]", [](const String &p) {
     String cmd = "INVERT " + p;
-    if (auto d = abbot::motor::getActiveMotorDriver())
+    auto d = abbot::motor::getActiveMotorDriver();
+    if (d) {
       d->processSerialCommand(cmd);
-    else
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+    }
   });
   m->addEntry(12, "MOTOR GET ENCODER <LEFT|RIGHT|ID>", [](const String &p) {
     abbot::motor::EncoderReport rep;
@@ -1575,6 +1595,77 @@ static bool handleMotorGetEncoder(const String &line, const String &up) {
   return true;
 }
 
+// Handle textual form: "MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms>"
+// Returns true if handled (including printing usage or start/stop messages).
+static bool handleMotorTelemetry(const String &line, const String &up) {
+  if (!up.startsWith("MOTOR")) {
+    return false;
+  }
+  int p1 = up.indexOf(' ');
+  if (p1 == -1) {
+    return false;
+  }
+  int p2 = up.indexOf(' ', p1 + 1);
+  if (p2 == -1) {
+    return false;
+  }
+  String cmd2 = (p2 == -1) ? up.substring(p1 + 1) : up.substring(p1 + 1, p2);
+  cmd2.trim();
+  if (cmd2 != "TELEMETRY") {
+    return false;
+  }
+  String arg = (p2 == -1) ? String("") : line.substring(p2 + 1);
+  arg.trim();
+  if (arg.length() == 0) {
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                "Usage: MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)");
+    return true;
+  }
+  int sp = arg.indexOf(' ');
+  if (sp < 0) {
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                "Usage: MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)");
+    return true;
+  }
+  String sideTok = arg.substring(0, sp);
+  String msTok = arg.substring(sp + 1);
+  sideTok.trim();
+  msTok.trim();
+  int ms = msTok.toInt();
+  if (ms < 0) {
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Invalid interval");
+    return true;
+  }
+  bool reportBoth = false;
+  bool leftSelected = true;
+  String upside = sideTok;
+  upside.toUpperCase();
+  if (upside == "ALL") {
+    reportBoth = true;
+  } else if (upside == "LEFT") {
+    reportBoth = false;
+    leftSelected = true;
+  } else if (upside == "RIGHT") {
+    reportBoth = false;
+    leftSelected = false;
+  } else {
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
+                "Usage: MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)");
+    return true;
+  }
+  if (ms == 0) {
+    g_telemetryManager.stop();
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "MOTOR: telemetry stopped");
+    return true;
+  }
+  g_telemetryManager.stop();
+  g_telemetryManager.start(reportBoth, ms, leftSelected);
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "MOTOR: telemetry started mode=%s interval=%dms\n",
+             (reportBoth ? "ALL" : (leftSelected ? "LEFT" : "RIGHT")), ms);
+  return true;
+}
+
 // Start the interactive menu programmatically (prints the menu and makes it
 // active)
 void startInteractiveMenu(abbot::BMI088Driver *driver) {
@@ -1688,6 +1779,8 @@ void processSerialLine(abbot::BMI088Driver *driver, const String &line) {
     // handled input (including usage), so we simply return.
     return;
   }
+  if (handleMotorTelemetry(sline, up))
+    return;
   if (handleFusion(sline, up))
     return;
   if (handleFilter(sline, up))

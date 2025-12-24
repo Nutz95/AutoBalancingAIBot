@@ -6,6 +6,7 @@
 #include "driver/pcnt.h"
 #include "logging.h"
 #include <Arduino.h>
+#include <esp_timer.h>
 
 // Encoder synchronization primitive (used by legacy ISR helpers)
 static portMUX_TYPE s_encoder_mux = portMUX_INITIALIZER_UNLOCKED;
@@ -66,18 +67,7 @@ static void readAndAccumulatePCNT(pcnt_unit_t unitId, int64_t &accum,
   int u = (int)unitId;
   accum += (int64_t)cnt * (int64_t)signalsPerPin;
   // Debug log: show when hardware counter contributed
-  if (cnt != 0 ||
-      (u >= 0 &&
-       u < (int)(sizeof(s_pcnt_event_flags) / sizeof(s_pcnt_event_flags[0])) &&
-       s_pcnt_event_flags[u])) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-               "DCMirrorDriver: PCNT unit=%d cnt=%d accum=%lld event=%d\n", u,
-               (int)cnt, (long long)accum,
-               (u >= 0 && u < (int)(sizeof(s_pcnt_event_flags) /
-                                    sizeof(s_pcnt_event_flags[0])))
-                   ? (int)s_pcnt_event_flags[u]
-                   : 0);
-  }
+  // PCNT logging disabled to avoid console pollution during latency measurements
   // Clear event flag if set
   if (u >= 0 &&
       u < (int)(sizeof(s_pcnt_event_flags) / sizeof(s_pcnt_event_flags[0])))
@@ -297,6 +287,14 @@ void DCMirrorDriver::setMotorCommandBoth(float left_command,
                                          float right_command) {
   m_last_left_cmd = left_command;
   m_last_right_cmd = right_command;
+  // record timestamp when the command was set (in microseconds)
+  // Protect 64-bit writes with a critical section to avoid torn reads on
+  // 32-bit architectures (ESP32). Use the per-instance mutex to keep
+  // synchronization responsibility inside the driver object.
+  portENTER_CRITICAL(&m_command_time_mux);
+  m_last_left_command_time_us = (uint64_t)esp_timer_get_time();
+  m_last_right_command_time_us = (uint64_t)esp_timer_get_time();
+  portEXIT_CRITICAL(&m_command_time_mux);
   // Map normalized commands [-1.0..1.0] to raw speed and apply to hardware
   int16_t rawLeft =
       (int16_t)roundf(left_command * (float)DC_VELOCITY_MAX_SPEED);
@@ -332,8 +330,14 @@ void DCMirrorDriver::setMotorCommandRaw(MotorSide side, int16_t rawSpeed) {
   // Apply raw speed directly to hardware and update last command
   if (side == MotorSide::LEFT) {
     m_last_left_cmd = (float)rawSpeed / (float)DC_VELOCITY_MAX_SPEED;
+    portENTER_CRITICAL(&m_command_time_mux);
+    m_last_left_command_time_us = (uint64_t)esp_timer_get_time();
+    portEXIT_CRITICAL(&m_command_time_mux);
   } else {
     m_last_right_cmd = (float)rawSpeed / (float)DC_VELOCITY_MAX_SPEED;
+    portENTER_CRITICAL(&m_command_time_mux);
+    m_last_right_command_time_us = (uint64_t)esp_timer_get_time();
+    portEXIT_CRITICAL(&m_command_time_mux);
   }
   applyHardwareCommand(side, rawSpeed);
 }
@@ -403,6 +407,26 @@ void DCMirrorDriver::resetPositionTracking() {
   if (m_right_pcnt_configured && m_right_pcnt_unit >= 0)
     pcnt_counter_clear((pcnt_unit_t)m_right_pcnt_unit);
 #endif
+}
+
+// Expose last command time for telemetry/diagnostics
+uint64_t DCMirrorDriver::getLastCommandTimeUs(MotorSide side) const {
+  uint64_t rv = 0;
+  // Protect 64-bit reads with the same critical section used for writes.
+  portENTER_CRITICAL(&m_command_time_mux);
+  if (side == MotorSide::LEFT) {
+    rv = m_last_left_command_time_us;
+  } else {
+    rv = m_last_right_command_time_us;
+  }
+  portEXIT_CRITICAL(&m_command_time_mux);
+  return rv;
+}
+
+// Reset internal speed estimator state for both sides
+void DCMirrorDriver::resetSpeedEstimator() {
+  m_left_estimator.reset();
+  m_right_estimator.reset();
 }
 
 bool DCMirrorDriver::processSerialCommand(const String &line) {
@@ -575,6 +599,13 @@ void DCMirrorDriver::stopMotorHardware(MotorSide side) {
 }
 
 void DCMirrorDriver::applyHardwareCommand(MotorSide side, int16_t rawSpeed) {
+  // Log command entry timestamp for latency measurement
+  uint64_t cmd_entry_time = (uint64_t)esp_timer_get_time();
+  const char *sname = (side == MotorSide::LEFT) ? "LEFT" : "RIGHT";
+  LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+             "DCMirrorDriver: command entry %s at %llu us (raw=%d)",
+             sname, (unsigned long long)cmd_entry_time, (int)rawSpeed);
+
   // Normalize by inversion setting
   bool inverted = isMotorInverted(side);
   int32_t desired = rawSpeed;
@@ -596,7 +627,6 @@ void DCMirrorDriver::applyHardwareCommand(MotorSide side, int16_t rawSpeed) {
       (side == MotorSide::LEFT) ? &m_last_left_dir : &m_last_right_dir;
 
 #if DC_MIRROR_DRIVER_DEBUG
-  const char *sname = (side == MotorSide::LEFT) ? "LEFT" : "RIGHT";
   LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
              "DCMirrorDriver: applyHardwareCommand(%s) raw=%d desired=%d "
              "duty=%u lastDir=%d",
@@ -703,6 +733,8 @@ void DCMirrorDriver::applyDutyForSide(MotorSide side, int32_t desired,
       setEnablePinState(m_left_en_r_pin, true);
     if (m_left_en_l_pin >= 0)
       setEnablePinState(m_left_en_l_pin, true);
+    // record precise timestamp when hardware command became active
+    m_last_left_command_time_us = (uint64_t)esp_timer_get_time();
 #if DC_MIRROR_DRIVER_DEBUG
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
                "DCMirrorDriver: LEFT EN pins set R=%d L=%d", m_left_en_r_pin,
@@ -732,6 +764,8 @@ void DCMirrorDriver::applyDutyForSide(MotorSide side, int32_t desired,
       setEnablePinState(m_right_en_r_pin, true);
     if (m_right_en_l_pin >= 0)
       setEnablePinState(m_right_en_l_pin, true);
+    // record precise timestamp when hardware command became active
+    m_last_right_command_time_us = (uint64_t)esp_timer_get_time();
 #if DC_MIRROR_DRIVER_DEBUG
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
                "DCMirrorDriver: RIGHT EN pins set R=%d L=%d", m_right_en_r_pin,
@@ -757,7 +791,7 @@ void DCMirrorDriver::incrementRightEncoder(int delta) {
 // Read a filtered speed estimate (counts/sec) for the requested side.
 // Delegates filtering to the SpeedEstimator helper (single responsibility).
 float DCMirrorDriver::readSpeed(MotorSide side) {
-  uint32_t now = micros();
+  uint64_t now = (uint64_t)esp_timer_get_time();
   if (side == MotorSide::LEFT) {
     int32_t enc = readEncoder(MotorSide::LEFT);
     int64_t curCount = (int64_t)enc;

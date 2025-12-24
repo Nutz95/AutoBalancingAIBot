@@ -130,5 +130,16 @@ bool AbstractMotorDriver::processSerialCommand(const String &line) {
   return false;
 }
 
+
+// --- Non-inline defaults moved from header to this translation unit ---
+
+float AbstractMotorDriver::readSpeed(MotorSide /*side*/) {
+  return 0.0f;
+}
+
+uint64_t AbstractMotorDriver::getLastCommandTimeUs(MotorSide /*side*/) const {
+  return 0;
+}
+
 } // namespace motor
 } // namespace abbot

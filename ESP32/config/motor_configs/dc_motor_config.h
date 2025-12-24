@@ -151,3 +151,83 @@
 #ifndef DC_RIGHT_MOTOR_INVERT
 #define DC_RIGHT_MOTOR_INVERT 1
 #endif
+
+// If a motor characterization header exists, import per-side measured values
+#if __has_include("motor_characterization.h")
+#include "motor_characterization.h"
+#endif
+
+// Prefer per-side characterization macros when available (falls back to global)
+#ifdef MOTOR_CHAR_LEFT_INVERT
+#undef DC_LEFT_MOTOR_INVERT
+#define DC_LEFT_MOTOR_INVERT MOTOR_CHAR_LEFT_INVERT
+#endif
+#ifdef MOTOR_CHAR_RIGHT_INVERT
+#undef DC_RIGHT_MOTOR_INVERT
+#define DC_RIGHT_MOTOR_INVERT MOTOR_CHAR_RIGHT_INVERT
+#endif
+
+// Expose per-side gain/tau/latency under DC-prefixed macros for firmware use
+#ifndef DC_LEFT_GAIN_COUNTS_PER_CMD
+#ifdef MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD
+#define DC_LEFT_GAIN_COUNTS_PER_CMD MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD
+#else
+#define DC_LEFT_GAIN_COUNTS_PER_CMD MOTOR_CHAR_GAIN_COUNTS_PER_CMD
+#endif
+#endif
+
+#ifndef DC_RIGHT_GAIN_COUNTS_PER_CMD
+#ifdef MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD
+#define DC_RIGHT_GAIN_COUNTS_PER_CMD MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD
+#else
+#define DC_RIGHT_GAIN_COUNTS_PER_CMD MOTOR_CHAR_GAIN_COUNTS_PER_CMD
+#endif
+#endif
+
+#ifndef DC_LEFT_GAIN_RPM_PER_CMD
+#ifdef MOTOR_CHAR_LEFT_GAIN_RPM_PER_CMD
+#define DC_LEFT_GAIN_RPM_PER_CMD MOTOR_CHAR_LEFT_GAIN_RPM_PER_CMD
+#else
+#define DC_LEFT_GAIN_RPM_PER_CMD MOTOR_CHAR_GAIN_RPM_PER_CMD
+#endif
+#endif
+
+#ifndef DC_RIGHT_GAIN_RPM_PER_CMD
+#ifdef MOTOR_CHAR_RIGHT_GAIN_RPM_PER_CMD
+#define DC_RIGHT_GAIN_RPM_PER_CMD MOTOR_CHAR_RIGHT_GAIN_RPM_PER_CMD
+#else
+#define DC_RIGHT_GAIN_RPM_PER_CMD MOTOR_CHAR_GAIN_RPM_PER_CMD
+#endif
+#endif
+
+#ifndef DC_LEFT_TAU_S
+#ifdef MOTOR_CHAR_LEFT_TAU_S
+#define DC_LEFT_TAU_S MOTOR_CHAR_LEFT_TAU_S
+#else
+#define DC_LEFT_TAU_S MOTOR_CHAR_TAU_S
+#endif
+#endif
+
+#ifndef DC_RIGHT_TAU_S
+#ifdef MOTOR_CHAR_RIGHT_TAU_S
+#define DC_RIGHT_TAU_S MOTOR_CHAR_RIGHT_TAU_S
+#else
+#define DC_RIGHT_TAU_S MOTOR_CHAR_TAU_S
+#endif
+#endif
+
+#ifndef DC_LEFT_LATENCY_S
+#ifdef MOTOR_CHAR_LEFT_LATENCY_S
+#define DC_LEFT_LATENCY_S MOTOR_CHAR_LEFT_LATENCY_S
+#else
+#define DC_LEFT_LATENCY_S MOTOR_CHAR_LATENCY_S
+#endif
+#endif
+
+#ifndef DC_RIGHT_LATENCY_S
+#ifdef MOTOR_CHAR_RIGHT_LATENCY_S
+#define DC_RIGHT_LATENCY_S MOTOR_CHAR_RIGHT_LATENCY_S
+#else
+#define DC_RIGHT_LATENCY_S MOTOR_CHAR_LATENCY_S
+#endif
+#endif

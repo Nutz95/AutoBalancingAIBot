@@ -39,11 +39,11 @@ public:
   void reset();
   // Update estimator with current cumulative encoder count and timestamp
   // `now_us` in microseconds. Returns the new speed estimate (counts/sec).
-  float update(int64_t curCount, uint32_t now_us);
+  float update(int64_t curCount, uint64_t now_us);
   float get() const { return m_speed; }
 
 private:
-  uint32_t m_last_ts_us;
+  uint64_t m_last_ts_us;
   int64_t m_last_count;
   float m_speed;
   float m_alpha;

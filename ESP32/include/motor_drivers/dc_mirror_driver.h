@@ -35,6 +35,22 @@ public:
   const char *getDriverName() const override;
   // Provide a filtered speed estimate in counts/sec for the requested side
   float readSpeed(MotorSide side) override;
+  // Reset internal speed estimator state
+  void resetSpeedEstimator() override;
+  // Return timestamp (microseconds) when last command was applied for the side
+  /**
+   * @brief Return timestamp (microseconds) when the last command was applied.
+   *
+   * Drivers store the last command application time in microseconds. Reads and
+   * writes of the underlying 64-bit timestamp are protected internally to
+   * avoid torn accesses on 32-bit architectures. Callers may compare the
+   * returned value to telemetry timestamps to estimate latency; a return value
+   * of 0 indicates the driver has not recorded a timestamp.
+   *
+   * @param side Motor side to query (LEFT or RIGHT).
+   * @return uint64_t Timestamp in microseconds, or 0 if unavailable.
+   */
+  uint64_t getLastCommandTimeUs(MotorSide side) const override;
 
 private:
   void applyMirrorIfNeeded();
@@ -81,6 +97,18 @@ private:
   // Use SpeedEstimator for filtered speed estimates (single-responsibility)
   abbot::motor::SpeedEstimator m_left_estimator{0.25f};
   abbot::motor::SpeedEstimator m_right_estimator{0.25f};
+  // Timestamp (microseconds) when the last hardware command was applied
+  uint64_t m_last_left_command_time_us = 0;
+  uint64_t m_last_right_command_time_us = 0;
+  // Protect the 64-bit command timestamps on 32-bit MCUs. Mutable so const
+  // getters can safely enter the critical section. For host-side unit tests
+  // `portMUX_TYPE` may be unavailable, so use a dummy member under
+  // `UNIT_TEST_HOST` to keep headers test-friendly.
+#if defined(UNIT_TEST_HOST)
+  mutable int m_command_time_mux_dummy = 0;
+#else
+  mutable portMUX_TYPE m_command_time_mux = portMUX_INITIALIZER_UNLOCKED;
+#endif
 
 public:
   // Increment helpers used by ISR integration

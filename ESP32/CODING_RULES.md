@@ -15,6 +15,10 @@ This document contains the coding rules for the `ESP32/` firmware subtree. All r
 - Opening and closing braces should be on their own lines or follow the projects existing brace style consistently.
 - Prefer explicit blocks for control statements (if/for/while/switch) — always use braces even for single statements.
 
+**Namespace usage guidance**
+- Prefer grouping related definitions inside a single `namespace` block per translation unit (source file). While C++ allows reopening the same namespace multiple times, grouping improves readability and reduces surprising initialization/order issues.
+- If reopening a namespace within the same file is required (for example to separate tests or clearly distinct logical sections), include a brief comment explaining the reason.
+
 **3. Statement layout and blocks**
 - Keep functions concise and single-purpose. If a function grows beyond a few dozen lines, consider extracting responsibilities into helper functions or separate modules.
 - Avoid writing return or other logic as a single-line expression across the project. Example to avoid:

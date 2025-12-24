@@ -20,9 +20,12 @@ public:
 
   /**
    * Default `readSpeed` implementation for drivers that don't provide
-   * a hardware speed estimate. Returns `0.0f`.
+   * a hardware speed estimate. Implemented in the corresponding .cpp to
+   * avoid single-line inline bodies in headers.
    */
-  virtual float readSpeed(MotorSide /*side*/) override { return 0.0f; }
+  virtual float readSpeed(MotorSide /*side*/) override;
+  // Default implementation for drivers that don't track command timestamps.
+  virtual uint64_t getLastCommandTimeUs(MotorSide /*side*/) const override;
 };
 
 } // namespace motor

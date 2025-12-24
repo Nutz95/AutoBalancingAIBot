@@ -9,6 +9,7 @@
 #include <freertos/portmacro.h>
 
 #include <Arduino.h>
+#include <esp_timer.h>
 
 // Protect access to the adapter's speed estimator state when called from
 // multiple RTOS tasks. Use a module-local portMUX for minimal overhead.
@@ -75,6 +76,12 @@ public:
     ::abbot::motor::resetPositionTracking();
   }
 
+  // Reset internal speed estimator state
+  void resetSpeedEstimator() override {
+    m_est[0].reset();
+    m_est[1].reset();
+  }
+
   // Configuration/query implementations mapped from servo compile-time macros
   int getMotorId(MotorSide side) const override {
     return (side == MotorSide::LEFT) ? LEFT_MOTOR_ID : RIGHT_MOTOR_ID;
@@ -99,7 +106,7 @@ public:
   // Estimate speed based on accumulated encoder position deltas.
   float readSpeed(MotorSide side) override {
     int id = (side == MotorSide::LEFT) ? LEFT_MOTOR_ID : RIGHT_MOTOR_ID;
-    uint32_t now = micros();
+    uint64_t now = (uint64_t)esp_timer_get_time();
     int idx = (side == MotorSide::LEFT) ? 0 : 1;
     int32_t cur = ::abbot::motor::readEncoder(id);
     int64_t curCount = (int64_t)cur;

@@ -1,5 +1,4 @@
 #include "serial_commands/motor_telemetry_manager.h"
-#include "motor_drivers/critical_guard.h"
 #include <Arduino.h>
 
 namespace abbot {
@@ -8,10 +7,10 @@ namespace serialcmds {
 void MotorTelemetryManager::taskEntry(void *pv) {
   MotorTelemetryManager *telemetryManager = static_cast<MotorTelemetryManager *>(pv);
   while (telemetryManager->running) {
-    unsigned long timestamp = millis();
+    uint64_t timestamp_us = (uint64_t)esp_timer_get_time();  // Use microseconds for consistency
     auto activeDriver = abbot::motor::getActiveMotorDriver();
     if (activeDriver) {
-      if (telemetryManager->both) {
+        if (telemetryManager->both) {
         int leftId = abbot::motor::getActiveMotorId(abbot::motor::IMotorDriver::MotorSide::LEFT, -1);
         int rightId = abbot::motor::getActiveMotorId(abbot::motor::IMotorDriver::MotorSide::RIGHT, -1);
         // Read values using driver-manager helpers (they internally protect access).
@@ -19,10 +18,19 @@ void MotorTelemetryManager::taskEntry(void *pv) {
         int32_t rightEncoder = abbot::motor::readEncoderBySide(abbot::motor::IMotorDriver::MotorSide::RIGHT);
         float leftSpeed = abbot::motor::readSpeedBySide(abbot::motor::IMotorDriver::MotorSide::LEFT);
         float rightSpeed = abbot::motor::readSpeedBySide(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+        uint64_t leftCmdTs = 0;
+        uint64_t rightCmdTs = 0;
+        // Safely read last command timestamps using the previously obtained
+        // `activeDriver` pointer. Avoid exceptions in MCU build; drivers may
+        // return 0 when timestamping is not supported.
+        if (activeDriver) {
+          leftCmdTs = activeDriver->getLastCommandTimeUs(abbot::motor::IMotorDriver::MotorSide::LEFT);
+          rightCmdTs = activeDriver->getLastCommandTimeUs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+        }
         LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-                   "MOTOR: telemetry ts=%lu interval=%dms L(id=%d) enc=%ld sp=%.2f R(id=%d) enc=%ld sp=%.2f\n",
-                   (unsigned long)timestamp, telemetryManager->intervalMs, leftId, (long)leftEncoder,
-                   (double)leftSpeed, rightId, (long)rightEncoder, (double)rightSpeed);
+                   "MOTOR: telemetry ts_us=%llu interval=%dms L(id=%d) enc=%ld sp=%.2f cmd_ts_us=%llu R(id=%d) enc=%ld sp=%.2f cmd_ts_us=%llu\n",
+                   (unsigned long long)timestamp_us, telemetryManager->intervalMs, leftId, (long)leftEncoder,
+                   (double)leftSpeed, (unsigned long long)leftCmdTs, rightId, (long)rightEncoder, (double)rightSpeed, (unsigned long long)rightCmdTs);
       } else {
         int selectedSideId = telemetryManager->singleLeft ?
             abbot::motor::getActiveMotorId(abbot::motor::IMotorDriver::MotorSide::LEFT, -1) :
@@ -32,10 +40,14 @@ void MotorTelemetryManager::taskEntry(void *pv) {
         // Read encoder and speed for the selected side
         int32_t encoderValue = abbot::motor::readEncoderBySide(side);
         float speedValue = abbot::motor::readSpeedBySide(side);
+        uint64_t cmdTs = 0;
+        if (activeDriver) {
+          cmdTs = activeDriver->getLastCommandTimeUs(side);
+        }
         LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-                   "MOTOR: telemetry ts=%lu interval=%dms id=%d enc=%ld sp=%.2f\n",
-                   (unsigned long)timestamp, telemetryManager->intervalMs, selectedSideId,
-                   (long)encoderValue, (double)speedValue);
+                   "MOTOR: telemetry ts_us=%llu interval=%dms id=%d enc=%ld sp=%.2f cmd_ts_us=%llu\n",
+                   (unsigned long long)timestamp_us, telemetryManager->intervalMs, selectedSideId,
+                   (long)encoderValue, (double)speedValue, (unsigned long long)cmdTs);
       }
     } else {
       LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "MOTOR: telemetry (no driver)");
@@ -47,9 +59,12 @@ void MotorTelemetryManager::taskEntry(void *pv) {
   vTaskDelete(nullptr);
 }
 
-MotorTelemetryManager::MotorTelemetryManager() {}
+MotorTelemetryManager::MotorTelemetryManager() {
+  // Constructor: no runtime work required — members use in-class initializers.
+}
 
 MotorTelemetryManager::~MotorTelemetryManager() {
+  // Ensure the telemetry task is stopped before destruction.
   stop();
 }
 
@@ -67,6 +82,11 @@ void MotorTelemetryManager::start(bool bothSides, int ms, bool leftSide) {
     LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Failed to start telemetry task");
     running = false;
     taskHandle = nullptr;
+  }
+  // Reset driver speed estimators so telemetry starts from a fresh state.
+  auto activeDrv = abbot::motor::getActiveMotorDriver();
+  if (activeDrv) {
+    activeDrv->resetSpeedEstimator();
   }
 }
 

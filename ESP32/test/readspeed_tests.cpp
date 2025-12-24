@@ -7,7 +7,7 @@
 class SpeedEstimator {
 public:
   SpeedEstimator() : m_last_ts(0), m_last_count(0), m_speed(0.0f) {}
-  float update(int64_t curCount, uint32_t now_us) {
+  float update(int64_t curCount, uint64_t now_us) {
     if (m_last_ts == 0) {
       m_last_ts = now_us;
       m_last_count = curCount;
@@ -24,7 +24,7 @@ public:
   }
 
 private:
-  uint32_t m_last_ts;
+  uint64_t m_last_ts;
   int64_t m_last_count;
   float m_speed;
   static constexpr float ALPHA = 0.25f;
@@ -43,7 +43,7 @@ int main() {
   int64_t count = 0;
   // Start time non-zero to avoid double-initialization when the first
   // sample has timestamp 0 (host test harness). Use 100ms as t0.
-  uint32_t t = 100000; // microseconds
+  uint64_t t = 100000; // microseconds
 
   // Initial call should return zero
   failures += assert_approx(est.update(count, t), 0.0);

@@ -54,6 +54,33 @@ public:
    * console tasks or RTOS threads; the caller should not assume ISR safety.
    */
   virtual float readSpeed(MotorSide side) = 0;
+  // Reset any internal speed estimator state so subsequent readSpeed() calls
+  // return a fresh estimate (useful after a prolonged idle or when enabling
+  // telemetry). Implementations should reset both side estimators.
+  virtual void resetSpeedEstimator() = 0;
+  // Return the timestamp (microseconds) when the last command was applied
+  // to the given side. Implementations should update this when a command
+  // is actually written to hardware so telemetry can correlate latency.
+  /**
+   * @brief Return the timestamp (microseconds) when the last command was
+   * applied to the given side.
+   *
+   * Implementations should update this value at the point the command is
+   * actually written to hardware (e.g. right before toggling an enable pin
+   * or applying PWM duty) so host-side telemetry can correlate command-to-
+   * measurement latency. Drivers that do not support timestamping should
+   * return 0.
+   *
+   * Thread-safety: on 32-bit MCUs a 64-bit timestamp may require protection
+   * to avoid torn reads/writes. Drivers MUST document their concurrency
+   * guarantees and protect 64-bit accesses (for example using a mutex or
+   * critical section). Callers should NOT assume ISR-safety unless the
+   * driver explicitly documents it.
+   *
+   * @param side Motor side to query (`MotorSide::LEFT` or `RIGHT`).
+   * @return uint64_t Timestamp in microseconds, or 0 if unavailable.
+   */
+  virtual uint64_t getLastCommandTimeUs(MotorSide side) const = 0;
   // Note: if an implementation exposes 64-bit position APIs these may be
   // accessed via driver-specific headers; the common interface exposes
   // `readEncoder` and `resetPositionTracking` for portability.
