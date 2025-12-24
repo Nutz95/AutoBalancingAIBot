@@ -40,7 +40,7 @@ static String s_pass;
 static bool s_started = false;
 // async queue state and rate-limiter
 static uint32_t s_lastSendMs = 0;
-static const int kQueueSize = 32;
+static const int kQueueSize = 256; // Increased for high-frequency telemetry (1ms)
 static const int kLineMax = 256;
 static char s_queue[kQueueSize][kLineMax];
 static int s_q_head = 0;
@@ -48,9 +48,8 @@ static int s_q_tail = 0;
 static int s_q_count = 0;
 static int s_drops = 0; // number of dropped lines when queue is full
 static portMUX_TYPE s_queue_mux = portMUX_INITIALIZER_UNLOCKED;
-static const uint32_t kMinMsBetweenSends =
-    10; // min spacing between sends (reduced to avoid dropping IMU CSV frames)
-static const int kMaxPerDrain = 4; // max lines to send per loop
+static const uint32_t kMinMsBetweenSends = 1; // Reduced for high-frequency telemetry drain (was 10ms)
+static const int kMaxPerDrain = 16; // Increased to drain faster (was 4)
 // Reconnect behaviour
 static uint32_t s_lastConnectAttemptMs = 0;
 static const uint32_t kReconnectIntervalMs =

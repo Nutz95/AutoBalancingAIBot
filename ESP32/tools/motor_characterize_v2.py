@@ -54,10 +54,12 @@ class SweepTestResult:
 class MotorCharacterizer:
     """Motor characterization using telemetry stream"""
     
-    def __init__(self, host: str, port: int = 2333, output_dir: str = "artifacts/motor_tests"):
+    def __init__(self, host: str, port: int = 2333, output_dir: str = "artifacts/motor_tests", 
+                 telemetry_interval_ms: int = 20):
         self.host = host
         self.port = port
         self.output_dir = output_dir
+        self.telemetry_interval_ms = telemetry_interval_ms
         self.sock = None
         self.console_log = []
         
@@ -131,7 +133,7 @@ class MotorCharacterizer:
         If `motor` is provided ('LEFT' or 'RIGHT') start telemetry only for that motor,
         otherwise start for both sides.
         """
-        print("Enabling telemetry stream (20ms interval)...")
+        print(f"Enabling telemetry stream ({self.telemetry_interval_ms}ms interval)...")
         # Request WiFi console to forward motor channel
         self.send_command("LOG ENABLE MOTOR")
         time.sleep(0.3)
@@ -166,18 +168,18 @@ class MotorCharacterizer:
         # Start telemetry for requested motor(s)
         if motor is None:
             # both sides
-            self.send_command("MOTOR TELEMETRY LEFT 20")
+            self.send_command(f"MOTOR TELEMETRY LEFT {self.telemetry_interval_ms}")
             time.sleep(0.2)
-            self.send_command("MOTOR TELEMETRY RIGHT 20")
+            self.send_command(f"MOTOR TELEMETRY RIGHT {self.telemetry_interval_ms}")
         else:
             m = motor.upper()
             if m in ('LEFT', 'RIGHT'):
-                self.send_command(f"MOTOR TELEMETRY {m} 20")
+                self.send_command(f"MOTOR TELEMETRY {m} {self.telemetry_interval_ms}")
             else:
                 # fallback to both
-                self.send_command("MOTOR TELEMETRY LEFT 20")
+                self.send_command(f"MOTOR TELEMETRY LEFT {self.telemetry_interval_ms}")
                 time.sleep(0.2)
-                self.send_command("MOTOR TELEMETRY RIGHT 20")
+                self.send_command(f"MOTOR TELEMETRY RIGHT {self.telemetry_interval_ms}")
 
         time.sleep(1.0)  # Wait for telemetry to start
         # Verify telemetry is working
@@ -635,9 +637,13 @@ class MotorCharacterizer:
                 break
             ax = axes[i // 2, i % 2]
             
-            if result.samples and result.command_entry_us:
-                # Use command entry as t0 to avoid showing samples before motor responds
-                t0 = result.command_entry_us
+            if result.samples:
+                # Use command entry as t0 if available, otherwise use first sample
+                if result.command_entry_us:
+                    t0 = result.command_entry_us
+                else:
+                    t0 = result.samples[0].timestamp_us
+                    
                 times = [(s.timestamp_us - t0) / 1e6 for s in result.samples]  # seconds
                 speeds = [abs(s.speed) for s in result.samples]
                 
@@ -718,6 +724,7 @@ def main():
     parser.add_argument('--port', type=int, default=2333, help='WiFi console port')
     parser.add_argument('--step-duration', type=float, default=3.0, help='Step test duration (seconds)')
     parser.add_argument('--sweep-step', type=float, default=0.05, help='Sweep command step size')
+    parser.add_argument('--telemetry-interval', type=int, default=20, help='Telemetry interval in milliseconds (default: 20ms)')
     parser.add_argument('--output', default='artifacts/motor_tests', help='Output directory')
     
     args = parser.parse_args()
@@ -736,7 +743,7 @@ def main():
         return
         
     # Initialize
-    char = MotorCharacterizer(args.host, args.port, args.output)
+    char = MotorCharacterizer(args.host, args.port, args.output, args.telemetry_interval)
     char.connect()
     char.enable_telemetry()  # Initial setup - just enable logging
     
