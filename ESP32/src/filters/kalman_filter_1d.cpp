@@ -20,6 +20,15 @@ public:
     rate_ = 0.0f;
   }
   void begin(const fusion::FusionConfig &cfg) override { (void)cfg; }
+  void reset() override {
+    angle_ = 0.0f;
+    bias_ = 0.0f;
+    P00 = 1e-3f;
+    P01 = 0.0f;
+    P10 = 0.0f;
+    P11 = 1e-3f;
+    rate_ = 0.0f;
+  }
   unsigned long getWarmupDurationMs() const override {
     return IMU_FILTER_WARMUP_MS_KALMAN1D;
   }

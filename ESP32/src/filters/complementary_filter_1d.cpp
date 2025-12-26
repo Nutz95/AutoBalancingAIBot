@@ -13,6 +13,10 @@ public:
     angle_ = 0.0f;
     rate_ = 0.0f;
   }
+  void reset() override {
+    angle_ = 0.0f;
+    rate_ = 0.0f;
+  }
   unsigned long getWarmupDurationMs() const override {
     return IMU_FILTER_WARMUP_MS_COMPLEMENTARY1D;
   }

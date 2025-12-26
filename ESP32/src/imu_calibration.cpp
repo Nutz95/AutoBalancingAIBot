@@ -47,7 +47,10 @@ bool saveCalibration(const Calibration &cal) {
 }
 
 void applyCalibrationToSample(struct abbot::IMUSample &s) {
-  if (!g_cal.valid)
+  // CRITICAL: Do not apply calibration while calibration is in progress!
+  // Otherwise the calibration routine receives already-calibrated samples
+  // from the queue, causing incorrect offset calculation (e.g., -19.57 on Z).
+  if (!g_cal.valid || g_is_calibrating)
     return;
   // NOTE: gyro bias is applied at runtime by the balancer task (abbot
   // namespace) to support warm-up estimation and EMA refinement. Do NOT

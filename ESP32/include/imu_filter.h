@@ -10,6 +10,8 @@ public:
   virtual ~IMUFilter() {}
   // Initialize filter with FusionConfig (contains sample_rate and axis mapping)
   virtual void begin(const fusion::FusionConfig &cfg) = 0;
+  // Reset filter state (quaternion/angles) to identity/upright orientation
+  virtual void reset() = 0;
   // Update filter with gyro (rad/s) and accel (m/s^2) in robot axes
   virtual void update(float gx, float gy, float gz, float ax, float ay,
                       float az, float dt) = 0;

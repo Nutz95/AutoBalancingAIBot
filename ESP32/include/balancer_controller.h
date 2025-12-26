@@ -53,6 +53,13 @@ void setAutotuneMaxAngle(float max_pitch_deg);
 // Motor gain adjustment (for asymmetric motor compensation)
 void setMotorGains(float left_gain, float right_gain);
 void getMotorGains(float &left_gain, float &right_gain);
+
+// Calibrated trim management: allows storing a fixed reference trim
+// (captured when robot is on a support at true vertical) instead of
+// dynamically capturing at each START.
+void calibrateTrim();   // Capture current pitch as calibrated trim, persist to NVS
+void showTrim();        // Display calibrated and dynamic trim values
+void resetTrim();       // Clear calibrated trim (reverts to dynamic capture)
 } // namespace controller
 
 } // namespace balancer

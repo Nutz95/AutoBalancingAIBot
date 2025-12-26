@@ -374,36 +374,44 @@ class MotorCharacterizer:
 
         v_63 = 0.63 * abs(steady)
 
-        # Determine t0: prefer firmware command entry timestamp if available
-        t0_us = None
+        # Determine command entry time from firmware logs
+        command_entry_us = None
         if log_pos is not None and motor is not None:
-            # Search only NEW lines added after command was sent for the SPECIFIC motor
-            # IMPORTANT: Skip raw=0 (stop commands), only use raw≠0 (movement commands)
             new_lines = self.console_log[log_pos:]
             motor_pattern = f'command entry {motor.upper()}'
             for line in new_lines:
                 if motor_pattern in line and 'us' in line:
-                    # Check if this is NOT a stop command (raw=0)
                     if 'raw=0)' not in line:
                         match = re.search(r'at (\d+) us', line)
                         if match:
-                            t0_us = int(match.group(1))
-                            break  # Take FIRST non-zero command entry for this motor
+                            command_entry_us = int(match.group(1))
+                            break
 
-        if t0_us is None:
-            # Fallback to first sample timestamp
-            t0_us = samples[0].timestamp_us
-
-        # Find first sample reaching 63% of steady speed
-        # CRITICAL: Only consider samples AFTER command entry
+        # Find ACTUAL start of movement (first sample with speed > 5% of steady)
+        # This handles deadzone delay where motor doesn't move immediately
+        movement_start_us = None
+        movement_threshold = 0.05 * abs(steady)  # 5% of final speed
+        
         for sample in samples:
-            # Skip samples that arrived during command processing
-            if t0_us and sample.timestamp_us <= t0_us:
+            # Skip samples before command entry if we have it
+            if command_entry_us and sample.timestamp_us < command_entry_us:
+                continue
+            
+            if abs(sample.speed) >= movement_threshold:
+                movement_start_us = sample.timestamp_us
+                break
+        
+        if movement_start_us is None:
+            # No movement detected, use command entry or first sample as fallback
+            movement_start_us = command_entry_us if command_entry_us else samples[0].timestamp_us
+
+        # Now find tau from ACTUAL movement start (not command entry)
+        for sample in samples:
+            if sample.timestamp_us <= movement_start_us:
                 continue
                 
             if abs(sample.speed) >= v_63:
-                tau_us = sample.timestamp_us - t0_us
-                # Tau should be positive and reasonable
+                tau_us = sample.timestamp_us - movement_start_us
                 if tau_us <= 0:
                     return None
                 return tau_us / 1e6  # seconds

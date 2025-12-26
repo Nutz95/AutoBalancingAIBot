@@ -6,10 +6,11 @@ namespace fusion {
 
 struct FusionConfig {
     // Madgwick gain: how much to trust accelerometer vs gyroscope
-    // Lower value (0.1-0.2) = trust gyro more, smoother but may drift slowly
-    // Higher value (0.3-0.5) = trust accel more, corrects drift but noisier
-    // For active robot (with linear accelerations), use 0.15-0.25
-    float beta = 0.15f;
+    // Lower value (0.01-0.05) = trust gyro more, smoother but may drift slowly
+    // Higher value (0.1-0.3) = trust accel more, corrects drift but noisier
+    // For balancing robot with motor vibrations, use 0.033 (standard Madgwick)
+    // Higher values (0.079) caused filter divergence with uncalibrated accel
+    float beta = 0.033f;
     float sample_rate = 400.0f; // Hz (target sample rate, synchronized with BMI088Config)
     // Axis mapping: allow remapping/inversion of sensor axes into the robot
     // coordinate frame used by the fusion/filter. This makes it easy to
@@ -30,13 +31,17 @@ struct FusionConfig {
     //   - Robot Z = up
     //
     // Mapping: robot X := sensor Y, robot Y := sensor X, robot Z := sensor Z
-    // Sign adjustment: invert robot X (accel_sign[0] = -1) so that pitch > 0 means forward tilt
+    // Sign adjustment: 
+    // - Invert robot X (accel_sign[0]=-1): sensor Y reads negative when tilted forward,
+    //   but we want positive pitch for forward tilt
+    // - Robot Y normal (accel_sign[1]=+1): sensor X orientation matches
+    // - Robot Z normal (accel_sign[2]=+1): sensor Z reads +9.8 when pointing up (correct)
     int accel_map[3] = {1, 0, 2};
-    int accel_sign[3] = {-1, 1, 1};  // Invert X to get correct pitch sign
+    int accel_sign[3] = {1, 1, 1};  // Invert X for correct pitch sign
 
     // same for gyro (rad/s) - must match accel mapping for consistent fusion
     int gyro_map[3] = {1, 0, 2};
-    int gyro_sign[3] = {-1, 1, 1};  // Invert X to match accel
+    int gyro_sign[3] = {1, 1, 1};  // Invert X to match accel
 };
 
 } // namespace fusion

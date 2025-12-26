@@ -1,4 +1,5 @@
 #include "imu_consumer_helpers.h"
+#include "SystemTasks.h" // For ENABLE_DEBUG_LOGS
 #include "../include/balancer_controller.h"
 #include "imu_calibration.h"
 #include "imu_mapping.h"

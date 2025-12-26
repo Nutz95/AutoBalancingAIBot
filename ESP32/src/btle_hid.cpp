@@ -1,5 +1,6 @@
 // Clean NimBLE HID gamepad reader
 #include "btle_hid.h"
+#include "../config/controller_config.h"       // Button mapping configuration
 #include "../config/motor_configs/servo_motor_config.h" // LEFT_MOTOR_ID / RIGHT_MOTOR_ID
 #include "SystemTasks.h"
 #include "balancer_controller.h" // for balance toggle
@@ -11,10 +12,6 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include <vector>
-
-// Button mapping for Xbox controller (byte index, bit mask)
-#define BALANCE_TOGGLE_BYTE 15   // Last byte of HID report
-#define BALANCE_TOGGLE_MASK 0x01 // Bit 0
 
 // Helper: wait for the NimBLE client to report connected state (with timeout).
 // Returns the number of milliseconds actually waited.
@@ -53,37 +50,79 @@ NimBLEClient *g_client = nullptr;
 NimBLEAdvertisedDevice *g_targetDevice = nullptr;
 volatile bool g_connected = false;
 
-// Track button state for edge detection
-static uint8_t g_lastButtonState = 0;
+// Track button states for edge detection (one byte per tracked button)
+static uint8_t g_lastBalanceButtonState = 0;
+static uint8_t g_lastTrimButtonState = 0;
 
-// Handle controller button presses - returns true if any action was taken
+// Handle controller button presses
 static void handleControllerButtons(const uint8_t *pData, size_t length) {
-  if (length <= BALANCE_TOGGLE_BYTE)
+  using namespace controller_config;
+
+  if (length < MIN_HID_REPORT_LENGTH) {
     return;
-
-  uint8_t currentButton = pData[BALANCE_TOGGLE_BYTE] & BALANCE_TOGGLE_MASK;
-  uint8_t wasPressed = g_lastButtonState & BALANCE_TOGGLE_MASK;
-
-  // Balance toggle: falling edge (button released)
-  if (wasPressed && !currentButton) {
-    if (abbot::balancer::controller::isActive()) {
-      abbot::balancer::controller::stop();
-      if (auto d = abbot::motor::getActiveMotorDriver())
-        d->disableMotors();
-      LOG_PRINTLN(abbot::log::CHANNEL_BLE,
-                  ">>> BALANCE STOP (controller button)");
-    } else {
-      if (auto d = abbot::motor::getActiveMotorDriver()) {
-        if (!d->areMotorsEnabled())
-          d->enableMotors();
-      }
-      abbot::balancer::controller::start(abbot::getFusedPitch());
-      LOG_PRINTLN(abbot::log::CHANNEL_BLE,
-                  ">>> BALANCE START (controller button)");
-    }
   }
 
-  g_lastButtonState = pData[BALANCE_TOGGLE_BYTE];
+  // --- Balance Toggle Button ---
+  if (length > BALANCE_TOGGLE_BYTE) {
+    uint8_t currentButton = pData[BALANCE_TOGGLE_BYTE] & BALANCE_TOGGLE_MASK;
+    uint8_t wasPressed = g_lastBalanceButtonState;
+
+    if (currentButton != wasPressed) {
+      char buf[96];
+      snprintf(buf, sizeof(buf),
+               "BLE BTN balance byte=%u mask=0x%02X state=%s",
+               static_cast<unsigned>(BALANCE_TOGGLE_BYTE),
+               static_cast<unsigned>(BALANCE_TOGGLE_MASK),
+               currentButton ? "pressed" : "released");
+      LOG_PRINTLN(abbot::log::CHANNEL_BLE, buf);
+    }
+
+    // Balance toggle: falling edge (button released)
+    if (wasPressed && !currentButton) {
+      if (abbot::balancer::controller::isActive()) {
+        abbot::balancer::controller::stop();
+        if (auto d = abbot::motor::getActiveMotorDriver()) {
+          d->disableMotors();
+        }
+        LOG_PRINTLN(abbot::log::CHANNEL_BLE,
+                    ">>> BALANCE STOP (controller button)");
+      } else {
+        if (auto d = abbot::motor::getActiveMotorDriver()) {
+          if (!d->areMotorsEnabled()) {
+            d->enableMotors();
+          }
+        }
+        abbot::balancer::controller::start(abbot::getFusedPitch());
+        LOG_PRINTLN(abbot::log::CHANNEL_BLE,
+                    ">>> BALANCE START (controller button)");
+      }
+    }
+    g_lastBalanceButtonState = currentButton;
+  }
+
+  // --- Trim Calibrate Button ---
+  if (length > TRIM_CALIBRATE_BYTE) {
+    uint8_t currentButton = pData[TRIM_CALIBRATE_BYTE] & TRIM_CALIBRATE_MASK;
+    uint8_t wasPressed = g_lastTrimButtonState;
+
+    if (currentButton != wasPressed) {
+      char buf[96];
+      snprintf(buf, sizeof(buf),
+               "BLE BTN trim byte=%u mask=0x%02X state=%s",
+               static_cast<unsigned>(TRIM_CALIBRATE_BYTE),
+               static_cast<unsigned>(TRIM_CALIBRATE_MASK),
+               currentButton ? "pressed" : "released");
+      LOG_PRINTLN(abbot::log::CHANNEL_BLE, buf);
+    }
+
+    // Trim calibrate: falling edge (button released)
+    if (wasPressed && !currentButton) {
+      abbot::balancer::controller::calibrateTrim();
+      LOG_PRINTLN(abbot::log::CHANNEL_BLE,
+                  ">>> TRIM CALIBRATED (controller button)");
+    }
+    g_lastTrimButtonState = currentButton;
+  }
 }
 
 void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,

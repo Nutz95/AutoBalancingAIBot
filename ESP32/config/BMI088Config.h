@@ -18,6 +18,16 @@ struct BMI088Config {
   // Increased to 400Hz for faster control loop and better gyro integration
   uint16_t sampling_hz = 400;
 
+  // Sensor axis signs: +1 or -1 to correct for physical mounting orientation.
+  // These are applied at the driver level BEFORE calibration and mapping.
+  // If sensor reads -9.8 m/s² on az when Z points up, set accel_sign_z = -1.
+  int8_t accel_sign_x = 1;
+  int8_t accel_sign_y = -1;
+  int8_t accel_sign_z = -1;  // BMI088 mounted upside-down: Z reads negative when up
+  int8_t gyro_sign_x = 1;
+  int8_t gyro_sign_y = -1;
+  int8_t gyro_sign_z = -1;   // Match accel Z inversion for consistency
+
   // Convenience: compute interval in milliseconds (integer, may lose precision)
   unsigned long sampling_interval_ms() const {
     return (sampling_hz > 0) ? (1000u / sampling_hz) : 0u;

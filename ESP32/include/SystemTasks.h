@@ -46,6 +46,11 @@ void requestTuningWarmupSeconds(float seconds);
 // Useful to inspect filter state just before starting the balancer.
 void printMadgwickDiagnostics();
 
+// Reinitialize the filter's orientation from the current accelerometer reading.
+// Call this at balance START to instantly match the filter to the actual
+// robot orientation, avoiding slow convergence when beta is low.
+void reinitFilterFromAccel();
+
 // Fusion readiness helpers
 // Returns true when Madgwick has been seeded and gyro bias initialized
 bool isFusionReady();

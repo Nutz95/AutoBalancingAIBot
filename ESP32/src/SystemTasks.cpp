@@ -49,6 +49,8 @@ static float g_filter_sample_rate_hz = 200.0f;
 static float g_fused_pitch_rad = 0.0f;
 static float g_fused_pitch_rate_rads = 0.0f;
 static SemaphoreHandle_t g_fusion_mutex = nullptr;
+// Last mapped accelerometer values (robot frame) for filter reinitialization
+static float g_last_accel_robot[3] = {0.0f, 0.0f, 9.8f};
 // Consumer mutable state (warmup, bias, persistence) moved into a dedicated
 // struct
 static abbot::imu_consumer::ConsumerState g_consumer;
@@ -93,8 +95,11 @@ static void imuProducerTask(void *pvParameters) {
         xQueueOverwrite(calibQueue, &sample);
       }
     }
-    // Short delay to yield; real timing enforced by driver->read
-    vTaskDelay(pdMS_TO_TICKS(2));
+    // Use 1 tick delay (~1ms) to yield CPU and prevent busy-loop.
+    // This achieves ~333Hz effective rate (limited by tick granularity),
+    // which is sufficient for control. The driver throttles reads to the
+    // configured interval (2500µs = 400Hz target) using micros().
+    vTaskDelay(1);
   }
 }
 
@@ -147,6 +152,11 @@ static void imuConsumerTask(void *pvParameters) {
     abbot::imu_consumer::mapSensorToRobotFrame(g_fusion_cfg, sample,
                                                g_consumer.gyro_bias,
                                                gyro_robot, accel_robot);
+
+    // Store last mapped accel for filter reinitialization on balance START
+    g_last_accel_robot[0] = accel_robot[0];
+    g_last_accel_robot[1] = accel_robot[1];
+    g_last_accel_robot[2] = accel_robot[2];
 
     // Update active filter with mapped data
     {
@@ -383,6 +393,23 @@ float getFusedPitchRate() {
     }
   }
   return out;
+}
+
+void reinitFilterFromAccel() {
+  // Reinitialize the active filter's orientation from the last mapped
+  // accelerometer reading. This is used when starting balance to ensure
+  // the filter matches the current physical orientation, especially after
+  // the robot was moved while stopped (filter would otherwise take too long
+  // to converge with low beta).
+  auto filter = abbot::filter::getActiveFilter();
+  if (filter) {
+    filter->setFromAccel(g_last_accel_robot[0], g_last_accel_robot[1],
+                         g_last_accel_robot[2]);
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "FILTER: reinitialized from accel (ax=%.2f ay=%.2f az=%.2f)\n",
+               g_last_accel_robot[0], g_last_accel_robot[1],
+               g_last_accel_robot[2]);
+  }
 }
 
 void requestTuningWarmupSeconds(float seconds) {

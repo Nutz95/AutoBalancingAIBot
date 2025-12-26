@@ -59,8 +59,11 @@
 #endif
 
 // Maximum absolute pitch rate (deg/s) allowed for the initial enable window.
+// Lowered from 8.0 to 3.0 to ensure robot is truly stable (not falling) when
+// motors enable. With 8.0, robot could be falling at -8.14 deg/s and motors
+// would still enable, causing immediate instability and violent oscillations.
 #ifndef BALANCER_START_STABLE_PITCH_RATE_DEG_S
-#define BALANCER_START_STABLE_PITCH_RATE_DEG_S 8.0f
+#define BALANCER_START_STABLE_PITCH_RATE_DEG_S 3.0f
 #endif
 
 // Maximum absolute trim applied at start (degrees). The controller will capture

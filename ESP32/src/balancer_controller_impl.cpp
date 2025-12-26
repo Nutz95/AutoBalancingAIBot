@@ -18,6 +18,9 @@
 #include "../config/balancer_config.h"
 #include "../config/motor_configs/servo_motor_config.h"
 #include <cstdio>
+#include <algorithm>
+#include <freertos/FreeRTOS.h>
+#include <freertos/task.h>
 
 namespace abbot {
 namespace balancer {
@@ -29,6 +32,8 @@ static float g_last_cmd = 0.0f;
 static const float g_cmd_slew = BALANCER_CMD_SLEW_LIMIT;
 static float g_deadband = BALANCER_MOTOR_MIN_OUTPUT;
 static float g_pitch_trim_rad = 0.0f;
+static float g_calibrated_trim_rad = 0.0f;  // Calibrated trim from NVS (absolute 0° reference)
+static bool g_has_calibrated_trim = false;  // True if calibrated trim was loaded from NVS
 static Preferences g_prefs;
 static bool g_prefs_started = false;
 static AutotuneController g_autotune;
@@ -55,7 +60,7 @@ static EncoderVelocityState g_encoder_velocity_state;
 static float g_drive_target_v = 0.0f; // desired normalized forward [-1..1]
 static float g_drive_target_w = 0.0f; // desired normalized turn [-1..1]
 static float g_drive_v_filtered = 0.0f;
-static float g_drive_last_pitch_sp = 0.0f;
+static float g_drive_last_pitch_sp_deg = 0.0f; // last pitch setpoint in degrees
 // Configuration for drive->pitch mapping (from balancer_config.h)
 static float g_drive_max_pitch_rad =
     degToRad(DRIVE_MAX_PITCH_DEG); // configured max pitch (deg)
@@ -113,12 +118,23 @@ void init() {
     g_pid.setGains(bp, bi, bd);
     // deadband remains global
     g_deadband = g_prefs.getFloat("db", g_deadband);
+    // Load calibrated pitch trim from NVS (absolute 0° reference)
+    g_calibrated_trim_rad = g_prefs.getFloat("trim_cal", 0.0f);
+    g_has_calibrated_trim = g_prefs.getBool("trim_ok", false);
     char buf[128];
     snprintf(buf, sizeof(buf),
              "BALANCER: controller initialized (Kp=%.4f Ki=%.4f Kd=%.4f "
              "deadband=%.4f)",
              (double)bp, (double)bi, (double)bd, (double)g_deadband);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+    if (g_has_calibrated_trim) {
+      LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                 "BALANCER: calibrated trim loaded = %.3f deg\n",
+                 (double)radToDeg(g_calibrated_trim_rad));
+    } else {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "BALANCER: no calibrated trim - will use dynamic capture");
+    }
   } else {
     g_prefs_started = false;
     char buf[128];
@@ -153,13 +169,26 @@ void start(float fused_pitch_rad) {
     return;
   g_active = true;
   abbot::log::enableChannel(abbot::log::CHANNEL_BALANCER);
-  // Capture a small trim to compensate floor tilt/sensor bias. Clamp to avoid
-  // masking large errors or upside-down starts.
-  if (fabsf(fused_pitch_rad) > g_trim_max_rad) {
-    g_pitch_trim_rad = copysignf(g_trim_max_rad, fused_pitch_rad);
+  
+  // Use calibrated trim if available (absolute 0° reference from NVS),
+  // otherwise fall back to dynamic capture from current pitch.
+  if (g_has_calibrated_trim) {
+    g_pitch_trim_rad = g_calibrated_trim_rad;
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "BALANCER: using calibrated trim = %.3f deg\n",
+               (double)radToDeg(g_pitch_trim_rad));
   } else {
-    g_pitch_trim_rad = fused_pitch_rad;
+    // Dynamic capture: clamp to avoid masking large errors or upside-down starts
+    if (fabsf(fused_pitch_rad) > g_trim_max_rad) {
+      g_pitch_trim_rad = copysignf(g_trim_max_rad, fused_pitch_rad);
+    } else {
+      g_pitch_trim_rad = fused_pitch_rad;
+    }
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "BALANCER: dynamic trim captured = %.3f deg (no calibration)\n",
+               (double)radToDeg(g_pitch_trim_rad));
   }
+  
   // Defer motor enabling briefly and only enable when fusion reports ready
   // and the robot is within the auto-enable angle. This avoids enabling
   // motors while the fusion/filter state is still settling after a stop
@@ -183,13 +212,20 @@ void start(float fused_pitch_rad) {
   }
   g_pid.reset();
   g_last_cmd = 0.0f;
+  
+  // Reinitialize the filter from current accelerometer to instantly match
+  // the actual robot orientation. With low beta (0.033), the filter takes
+  // too long to converge if the robot was moved while stopped. This ensures
+  // the filter state matches reality when we START balancing.
+  abbot::reinitFilterFromAccel();
+  
   // Reset drive setpoint state on start to avoid carrying over joystick
   // commands or previous pitch setpoints which can cause the robot to
   // request a non-zero pitch immediately after re-enabling.
   g_drive_target_v = 0.0f;
   g_drive_target_w = 0.0f;
   g_drive_v_filtered = 0.0f;
-  g_drive_last_pitch_sp = 0.0f;
+  g_drive_last_pitch_sp_deg = 0.0f;
   char buf[128];
   {
     bool men = false;
@@ -220,7 +256,7 @@ void stop() {
   g_drive_target_v = 0.0f;
   g_drive_target_w = 0.0f;
   g_drive_v_filtered = 0.0f;
-  g_drive_last_pitch_sp = 0.0f;
+  g_drive_last_pitch_sp_deg = 0.0f;
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
               "BALANCER: stopped - motors DISABLED");
 }
@@ -356,8 +392,9 @@ void calibrateDeadband() {
 // Helper: apply drive->pitch mapping with slew limiting and compute PID output
 // Returns the raw PID controller output (not yet slew/ deadband/clamped for
 // motor)
-static float computePidWithDriveSetpoint(float fused_pitch,
-                                         float fused_pitch_rate, float dt) {
+// NOTE: fused_pitch and fused_pitch_rate are now expected in DEGREES
+static float computePidWithDriveSetpoint(float fused_pitch_deg,
+                                         float fused_pitch_rate_deg_s, float dt) {
   // Filter normalized v toward target with simple first-order slew limiter
   if (g_drive_v_filtered != g_drive_target_v) {
     float max_dv = g_drive_v_slew * dt;
@@ -368,24 +405,28 @@ static float computePidWithDriveSetpoint(float fused_pitch,
       dv = -max_dv;
     g_drive_v_filtered += dv;
   }
-  // pitch setpoint from filtered velocity command
-  float pitch_sp = g_drive_v_filtered * g_drive_max_pitch_rad;
-  // clamp pitch setpoint
-  if (pitch_sp > g_drive_max_pitch_rad)
-    pitch_sp = g_drive_max_pitch_rad;
-  if (pitch_sp < -g_drive_max_pitch_rad)
-    pitch_sp = -g_drive_max_pitch_rad;
-  // estimate pitch_sp rate
-  float pitch_sp_rate = 0.0f;
+  // pitch setpoint from filtered velocity command (convert to degrees)
+  float pitch_sp_rad = g_drive_v_filtered * g_drive_max_pitch_rad;
+  // clamp pitch setpoint (in radians before conversion)
+  if (pitch_sp_rad > g_drive_max_pitch_rad)
+    pitch_sp_rad = g_drive_max_pitch_rad;
+  if (pitch_sp_rad < -g_drive_max_pitch_rad)
+    pitch_sp_rad = -g_drive_max_pitch_rad;
+  
+  float pitch_sp_deg = radToDeg(pitch_sp_rad);
+  
+  // estimate pitch_sp rate (in deg/s)
+  float pitch_sp_rate_deg_s = 0.0f;
   if (dt > 0.0f) {
-    pitch_sp_rate = (pitch_sp - g_drive_last_pitch_sp) / dt;
+    pitch_sp_rate_deg_s = (pitch_sp_deg - g_drive_last_pitch_sp_deg) / dt;
   }
-  g_drive_last_pitch_sp = pitch_sp;
+  g_drive_last_pitch_sp_deg = pitch_sp_deg;
 
-  // PID input: error = fused_pitch - pitch_sp (target = pitch_sp)
-  float pid_in = fused_pitch - pitch_sp;
-  float pid_rate = fused_pitch_rate - pitch_sp_rate;
-  float pid_out = g_pid.update(pid_in, pid_rate, dt);
+  // PID input: error = setpoint - measurement (so positive error commands forward)
+  // When robot leans forward (positive pitch), error is negative → command backward to correct
+  float pid_in_deg = pitch_sp_deg - fused_pitch_deg;
+  float pid_rate_deg_s = pitch_sp_rate_deg_s - fused_pitch_rate_deg_s;
+  float pid_out = g_pid.update(pid_in_deg, pid_rate_deg_s, dt);
 
   // Rate-limited debug logging to avoid spamming serial
   static uint32_t last_dbg_ms = 0;
@@ -396,8 +437,8 @@ static float computePidWithDriveSetpoint(float fused_pitch,
                "pitch_sp_rate=%.3fdeg/s pid_in=%.3fdeg pid_rate=%.3fdeg/s "
                "pid_out=%.3f\n",
                (double)g_drive_target_v, (double)g_drive_v_filtered,
-               (double)radToDeg(pitch_sp), (double)radToDeg(pitch_sp_rate),
-               (double)radToDeg(pid_in), (double)radToDeg(pid_rate),
+               (double)pitch_sp_deg, (double)pitch_sp_rate_deg_s,
+               (double)pid_in_deg, (double)pid_rate_deg_s,
                (double)pid_out);
     last_dbg_ms = now_ms;
   }
@@ -580,14 +621,19 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   //       DO NOT change motor inversion in motor_config.h!
   //       Pitch sign is handled by accel_sign/gyro_sign in FusionConfig.h
 
+  // Convert pitch from radians to degrees for PID (more intuitive gains)
+  float pitch_for_control_deg = radToDeg(fused_pitch - g_pitch_trim_rad);
+  float pitch_rate_deg_s = radToDeg(fused_pitch_rate);
+  
   // Compute PID output taking into account the drive-setpoint->pitch mapping
-  float pitch_for_control = fused_pitch - g_pitch_trim_rad;
   float pid_out =
-      computePidWithDriveSetpoint(pitch_for_control, fused_pitch_rate, dt);
-  // Compute pid_in here (pitch error) for logging (pitch_sp computed from
-  // filtered drive)
-  float pitch_sp = g_drive_v_filtered * g_drive_max_pitch_rad;
-  float pid_in = pitch_for_control - pitch_sp;
+      computePidWithDriveSetpoint(pitch_for_control_deg, pitch_rate_deg_s, dt);
+  
+  // Compute pid_in here (pitch error in degrees) for logging
+  // NOTE: error = setpoint - measurement (same sign as in computePidWithDriveSetpoint)
+  float pitch_sp_deg = radToDeg(g_drive_v_filtered * g_drive_max_pitch_rad);
+  float pid_in_deg = pitch_sp_deg - pitch_for_control_deg;
+  
   float cmd = pid_out; // No negation - same sign as pitch for catching behavior
   // clamp (pre-slew). Keep a copy for logging to inspect clamp vs slew behavior
   float cmd_pre_slew = cmd;
@@ -616,10 +662,10 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   if (log_interval == 0 || (now_cmd_dbg_ms - last_cmd_dbg_ms >= log_interval)) {
     LOG_PRINTF(
         abbot::log::CHANNEL_BALANCER,
-        "BALANCER_DBG pitch=%.2fdeg pitch_rate=%.2fdeg/s pid_in=%.3f "
+        "BALANCER_DBG pitch=%.2fdeg pitch_rate=%.2fdeg/s pid_in=%.3fdeg "
         "pid_out=%.3f cmd_pre_slew=%.3f cmd_after_slew=%.3f last_cmd=%.3f\n",
         (double)radToDeg(fused_pitch), (double)radToDeg(fused_pitch_rate),
-        (double)radToDeg(pid_in), (double)pid_out, (double)cmd_pre_slew,
+        (double)pid_in_deg, (double)pid_out, (double)cmd_pre_slew,
         (double)cmd, (double)g_last_cmd);
     last_cmd_dbg_ms = now_cmd_dbg_ms;
   }
@@ -823,6 +869,74 @@ void setMotorGains(float left_gain, float right_gain) {
 void getMotorGains(float &left_gain, float &right_gain) {
   left_gain = g_left_motor_gain;
   right_gain = g_right_motor_gain;
+}
+
+// --- Calibrated trim management ---
+void calibrateTrim() {
+  // Reinitialize the filter from the current accelerometer reading so the
+  // fused pitch is immediately consistent with gravity. Then sample a few
+  // fused-pitch readings and use the median to reject brief noise spikes.
+  ::abbot::reinitFilterFromAccel();
+
+  // Let filter settle briefly
+  vTaskDelay(pdMS_TO_TICKS(30));
+
+  const int N = 7; // odd so median is simple
+  float samples[N];
+  for (int i = 0; i < N; ++i) {
+    samples[i] = ::abbot::getFusedPitch();
+    // stagger samples to allow tiny sensor noise to decorrelate
+    vTaskDelay(pdMS_TO_TICKS(20));
+  }
+
+  // compute median
+  std::sort(samples, samples + N);
+  float median = samples[N/2];
+
+  g_calibrated_trim_rad = median;
+  g_has_calibrated_trim = true;
+
+  // Persist to NVS
+  if (g_prefs_started) {
+    g_prefs.putFloat("trim_cal", g_calibrated_trim_rad);
+    g_prefs.putBool("trim_ok", true);
+  }
+
+  float trim_deg = radToDeg(g_calibrated_trim_rad);
+  char buf[128];
+  snprintf(buf, sizeof(buf),
+           "BALANCER: calibrated trim set to %.4f° (%.6f rad), persisted=%s",
+           (double)trim_deg, (double)g_calibrated_trim_rad,
+           g_prefs_started ? "yes" : "no");
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+}
+
+void showTrim() {
+  float calibrated_deg = radToDeg(g_calibrated_trim_rad);
+  float dynamic_deg = radToDeg(g_pitch_trim_rad);
+  char buf[256];
+  snprintf(buf, sizeof(buf),
+           "BALANCER: calibrated_trim=%.4f° (valid=%s), dynamic_trim=%.4f°, "
+           "using=%s",
+           (double)calibrated_deg, g_has_calibrated_trim ? "yes" : "no",
+           (double)dynamic_deg,
+           g_has_calibrated_trim ? "calibrated" : "dynamic");
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+}
+
+void resetTrim() {
+  g_calibrated_trim_rad = 0.0f;
+  g_has_calibrated_trim = false;
+  g_pitch_trim_rad = 0.0f;
+
+  // Remove from NVS
+  if (g_prefs_started) {
+    g_prefs.remove("trim_cal");
+    g_prefs.remove("trim_ok");
+  }
+
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+              "BALANCER: calibrated trim reset (will use dynamic capture)");
 }
 
 } // namespace controller

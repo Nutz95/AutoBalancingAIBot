@@ -616,6 +616,16 @@ static SerialMenu *buildBalancerMenu() {
   });
   bal->addEntry(17, "BALANCE MOTOR_GAINS SET <left> <right>",
                 [](const String &p) { balancerMotorGainsSetHandler(p); });
+  // Group: calibrated trim
+  bal->addEntry(18, "BALANCE TRIM CALIBRATE", [](const String &) {
+    abbot::balancer::controller::calibrateTrim();
+  });
+  bal->addEntry(19, "BALANCE TRIM SHOW", [](const String &) {
+    abbot::balancer::controller::showTrim();
+  });
+  bal->addEntry(20, "BALANCE TRIM RESET", [](const String &) {
+    abbot::balancer::controller::resetTrim();
+  });
   return bal;
 }
 

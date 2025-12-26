@@ -71,12 +71,13 @@ bool BMI088Driver::read(IMUSample &out) {
 bool BMI088Driver::readRaw(IMUSample &out) {
   // immediate raw read without timing guard; useful for calibration
   imu_.readSensor();
-  out.ax = imu_.getAccelX_mss();
-  out.ay = imu_.getAccelY_mss();
-  out.az = imu_.getAccelZ_mss();
-  out.gx = imu_.getGyroX_rads();
-  out.gy = imu_.getGyroY_rads();
-  out.gz = imu_.getGyroZ_rads();
+  // Apply sensor axis signs from config to correct for physical mounting
+  out.ax = cfg_.accel_sign_x * imu_.getAccelX_mss();
+  out.ay = cfg_.accel_sign_y * imu_.getAccelY_mss();
+  out.az = cfg_.accel_sign_z * imu_.getAccelZ_mss();
+  out.gx = cfg_.gyro_sign_x * imu_.getGyroX_rads();
+  out.gy = cfg_.gyro_sign_y * imu_.getGyroY_rads();
+  out.gz = cfg_.gyro_sign_z * imu_.getGyroZ_rads();
   out.temp_C = imu_.getTemperature_C();
   out.time_ps = imu_.getTime_ps();
   out.ts_ms = millis();

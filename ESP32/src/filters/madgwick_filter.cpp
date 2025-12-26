@@ -9,6 +9,7 @@ public:
   MadgwickFilter() {}
   virtual ~MadgwickFilter() {}
   void begin(const fusion::FusionConfig &cfg) override { madgwick_.begin(cfg); }
+  void reset() override { madgwick_.reset(); }
   unsigned long getWarmupDurationMs() const override {
     return IMU_FILTER_WARMUP_MS_MADGWICK;
   }
