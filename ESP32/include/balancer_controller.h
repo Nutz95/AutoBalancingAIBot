@@ -49,6 +49,10 @@ void applyAutotuneGains(); // Apply gains if autotune completed successfully
 void setAutotuneRelay(float amplitude);
 void setAutotuneDeadband(float deadband_deg);
 void setAutotuneMaxAngle(float max_pitch_deg);
+
+// Motor gain adjustment (for asymmetric motor compensation)
+void setMotorGains(float left_gain, float right_gain);
+void getMotorGains(float &left_gain, float &right_gain);
 } // namespace controller
 
 } // namespace balancer

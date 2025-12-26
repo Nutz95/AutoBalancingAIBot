@@ -119,10 +119,14 @@
 
 // PWM frequency / resolution defaults used by DC driver. Adjust as needed.
 #ifndef DC_PWM_FREQUENCY_HZ
-#define DC_PWM_FREQUENCY_HZ 20000
+// 2Khz is Optimal for BTS7960, It won't support well 20Khz and create a big deadzone.
+// 2Khz is also quiet enough for most applications.
+// 2Khz will create more torque at low speeds compared to higher frequencies.
+#define DC_PWM_FREQUENCY_HZ 2000 
 #endif
 #ifndef DC_PWM_RESOLUTION_BITS
-#define DC_PWM_RESOLUTION_BITS 8
+//14 bits is popssible with ESP32-S3 LEDC @ 2Khz, gives more control resolution than 8 bits.
+#define DC_PWM_RESOLUTION_BITS 14
 #endif
 
 // DC-specific velocity mapping (separate from servo VELOCITY_* constants)

@@ -18,23 +18,23 @@
 
 // Per-side measured characterization (prefer these for per-motor tuning)
 #ifndef MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD
-// Measured: ~40491.743 counts/sec per raw command unit (LEFT)
-#define MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD 40491.743f
+// Measured: ~42387.65 counts/sec per raw command unit (LEFT) @ 2ms telemetry
+#define MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD 34406f
 #endif
 
 #ifndef MOTOR_CHAR_LEFT_GAIN_RPM_PER_CMD
 // Equivalent RPM per command unit
-#define MOTOR_CHAR_LEFT_GAIN_RPM_PER_CMD 986.000f
+#define MOTOR_CHAR_LEFT_GAIN_RPM_PER_CMD 1032.5f
 #endif
 
 #ifndef MOTOR_CHAR_LEFT_TAU_S
-// Time constant (seconds) from telemetry fit (LEFT) - corrected measurement
-#define MOTOR_CHAR_LEFT_TAU_S 0.12f
+// Time constant (seconds) from telemetry fit (LEFT) - conservative unified value
+#define MOTOR_CHAR_LEFT_TAU_S 0.081f
 #endif
 
 #ifndef MOTOR_CHAR_LEFT_LATENCY_S
-// Measured latency (seconds) for LEFT - realistic measurement ~18ms
-#define MOTOR_CHAR_LEFT_LATENCY_S 0.018f
+// Measured latency (seconds) for LEFT - conservative max value 20.7ms
+#define MOTOR_CHAR_LEFT_LATENCY_S 0.0207f
 #endif
 
 #ifndef MOTOR_CHAR_LEFT_INVERT
@@ -43,23 +43,23 @@
 #endif
 
 #ifndef MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD
-// Measured: ~-39469.970 counts/sec per raw command unit (RIGHT)
-#define MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD -39469.970f
+// Measured: ~44102.2 counts/sec per raw command unit (RIGHT) @ 2ms telemetry
+#define MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD 40569f
 #endif
 
 #ifndef MOTOR_CHAR_RIGHT_GAIN_RPM_PER_CMD
 // Equivalent RPM per command unit
-#define MOTOR_CHAR_RIGHT_GAIN_RPM_PER_CMD -961.119f
+#define MOTOR_CHAR_RIGHT_GAIN_RPM_PER_CMD 1074.3f
 #endif
 
 #ifndef MOTOR_CHAR_RIGHT_TAU_S
-// Time constant (seconds) from telemetry fit (RIGHT) - corrected measurement
-#define MOTOR_CHAR_RIGHT_TAU_S 0.12f
+// Time constant (seconds) from telemetry fit (RIGHT) - conservative unified value
+#define MOTOR_CHAR_RIGHT_TAU_S 0.081f
 #endif
 
 #ifndef MOTOR_CHAR_RIGHT_LATENCY_S
-// Measured latency (seconds) for RIGHT - realistic measurement ~18ms
-#define MOTOR_CHAR_RIGHT_LATENCY_S 0.018f
+// Measured latency (seconds) for RIGHT - conservative max value 20.7ms
+#define MOTOR_CHAR_RIGHT_LATENCY_S 0.0207f
 #endif
 
 #ifndef MOTOR_CHAR_RIGHT_INVERT
@@ -67,14 +67,14 @@
 #define MOTOR_CHAR_RIGHT_INVERT 1
 #endif
 
-// Time constant (seconds) estimated from step response - corrected value
+// Time constant (seconds) estimated from step response - conservative unified value (81ms)
 #ifndef MOTOR_CHAR_TAU_S
-#define MOTOR_CHAR_TAU_S 0.12f
+#define MOTOR_CHAR_TAU_S 0.081f
 #endif
 
-// Measured latency (seconds) - updated with realistic measurement
+// Measured latency (seconds) - conservative max value from 2ms telemetry (20.7ms)
 #ifndef MOTOR_CHAR_LATENCY_S
-#define MOTOR_CHAR_LATENCY_S 0.018f
+#define MOTOR_CHAR_LATENCY_S 0.0207f
 #endif
 
 // Wheel diameter in millimeters
@@ -82,9 +82,10 @@
 #define MOTOR_CHAR_WHEEL_DIAM_MM 67.0f
 #endif
 
-// Deadzone command threshold (command units, e.g., normalized 0..1)
+// Deadzone command threshold (command units, normalized 0..1)
+// Open interval ]-0.08, 0.08[ - conservative value based on sweep measurements
 #ifndef MOTOR_CHAR_DEADZONE_CMD
-#define MOTOR_CHAR_DEADZONE_CMD 0.02f
+#define MOTOR_CHAR_DEADZONE_CMD 0.01f
 #endif
 
 // Invert motor command sign if required (0 = normal, 1 = invert)

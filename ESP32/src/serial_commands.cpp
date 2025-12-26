@@ -69,6 +69,7 @@ static void balancerTuningStartHandler(const String &p);
 static void balancerTuningStopHandler(const String &p);
 static void balancerDeadbandSetHandler(const String &p);
 static void balancerStartHandler(const String &p);
+static void balancerMotorGainsSetHandler(const String &p);
 static void autotuneRelayHandler(const String &p);
 static void autotuneDeadbandHandler(const String &p);
 static void autotuneMaxAngleHandler(const String &p);
@@ -605,6 +606,16 @@ static SerialMenu *buildBalancerMenu() {
                 [](const String &p) { autotuneDeadbandHandler(p); });
   bal->addEntry(15, "AUTOTUNE MAXANGLE <deg>",
                 [](const String &p) { autotuneMaxAngleHandler(p); });
+  bal->addEntry(16, "BALANCE MOTOR_GAINS GET", [](const String &) {
+    float left, right;
+    abbot::balancer::controller::getMotorGains(left, right);
+    char buf[128];
+    snprintf(buf, sizeof(buf), "BALANCER: motor gains L=%.3f R=%.3f",
+             (double)left, (double)right);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+  });
+  bal->addEntry(17, "BALANCE MOTOR_GAINS SET <left> <right>",
+                [](const String &p) { balancerMotorGainsSetHandler(p); });
   return bal;
 }
 
@@ -930,6 +941,19 @@ static void autotuneMaxAngleHandler(const String &p) {
   abbot::balancer::controller::setAutotuneMaxAngle(maxa);
 }
 
+static void balancerMotorGainsSetHandler(const String &p) {
+  String s = p;
+  s.trim();
+  float left = 1.0f, right = 1.0f;
+  int matched = sscanf(s.c_str(), "%f %f", &left, &right);
+  if (matched < 2) {
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "Usage: BALANCE MOTOR_GAINS <left> <right>");
+    return;
+  }
+  abbot::balancer::controller::setMotorGains(left, right);
+}
+
 // Command handlers: return true if the command was handled
 static bool handleCalib(abbot::BMI088Driver *driver, const String &line,
                         const String &up) {
@@ -1170,11 +1194,46 @@ static bool handleBalance(const String &line, const String &up) {
       abbot::balancer::controller::calibrateDeadband();
       return true;
     }
+  } else if (strcmp(arg, "MOTOR_GAINS") == 0) {
+    if (nt < 3) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "BALANCE MOTOR_GAINS usage: MOTOR_GAINS GET | MOTOR_GAINS SET <left> <right>");
+      return true;
+    }
+    char *sub = tok[2];
+    if (strcmp(sub, "GET") == 0) {
+      float left, right;
+      abbot::balancer::controller::getMotorGains(left, right);
+      char buf[128];
+      snprintf(buf, sizeof(buf), "BALANCER: motor_gains left=%.3f right=%.3f", 
+               (double)left, (double)right);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+      return true;
+    } else if (strcmp(sub, "SET") == 0) {
+      if (nt < 5) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                    "Usage: BALANCE MOTOR_GAINS SET <left> <right>");
+        return true;
+      }
+      float left = atof(tok[3]);
+      float right = atof(tok[4]);
+      if (left < 0.1f || left > 2.0f || right < 0.1f || right > 2.0f) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                    "ERROR: motor gains must be in range [0.1, 2.0]");
+        return true;
+      }
+      abbot::balancer::controller::setMotorGains(left, right);
+      char buf[128];
+      snprintf(buf, sizeof(buf), "BALANCER: motor_gains set to left=%.3f right=%.3f",
+               (double)left, (double)right);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+      return true;
+    }
   }
   LOG_PRINTLN(
       abbot::log::CHANNEL_DEFAULT,
       "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> "
-      "<kd>] | BALANCE RESET | BALANCE DEADBAND GET|SET|CALIBRATE");
+      "<kd>] | BALANCE RESET | BALANCE DEADBAND GET|SET|CALIBRATE | BALANCE MOTOR_GAINS GET|SET");
   return true;
 }
 

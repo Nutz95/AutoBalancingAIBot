@@ -4,20 +4,20 @@
 
 // Default PID gains (units: pitch in radians)
 // NOTE: These defaults are tuned for DIRECT VELOCITY control mode.
-// Kp=8.0 means 1 degree error (0.017 rad) -> 0.13 command (13% speed)
-// Saturation (100% speed) occurs at ~7.7 degrees error.
+// Adjusted for CG @ 6.5cm above wheel axis, mass 1.3kg, wheel diameter 67mm
+// Kp=2.1 means 1 degree error (0.017 rad) -> 0.036 command (3.6% speed)
+// Saturation (100% speed) occurs at ~27.4 degrees error.
 #ifndef BALANCER_DEFAULT_KP
-#define BALANCER_DEFAULT_KP 25.5f
+#define BALANCER_DEFAULT_KP 9.8f
 #endif
-
 // Ki=0 by default to avoid integral windup causing direction reversal
 // Add small Ki (0.01-0.05) only after Kp/Kd are tuned
 #ifndef BALANCER_DEFAULT_KI
-#define BALANCER_DEFAULT_KI 1.0f
+#define BALANCER_DEFAULT_KI 3.2f
 #endif
 
 #ifndef BALANCER_DEFAULT_KD
-#define BALANCER_DEFAULT_KD 0.9f
+#define BALANCER_DEFAULT_KD 0.43f
 #endif
 
 // Integrator anti-windup clamp (absolute limit applied to integrator state)
@@ -31,23 +31,25 @@
 #endif
 
 // Minimum absolute normalized motor output to overcome motor deadband/holding
-// NOTE: In POSITION mode with servo asservissement, deadband can be reduced
-// since the servo actively holds position even with small commands.
+// Value from motor characterization (measured deadzone ~0.11-0.15, conservative 0.20)
+// This is the physical threshold below which motors don't move.
 #ifndef BALANCER_MOTOR_MIN_OUTPUT
-#define BALANCER_MOTOR_MIN_OUTPUT 0.01f
+#define BALANCER_MOTOR_MIN_OUTPUT 0.20f
 #endif
 
-// Command slew limit (normalized units per second). Prevents instant full-power
-// steps from small transients. Set to 10.0f for faster response (command can change by 10.0 per second).
+// Command slew limit (normalized units per second).
+// DISABLED (set very high) - balancer needs instant response for corrections.
+// Slew rate limits prevent fast recovery from large pitch errors.
+// If oscillations occur, fix PID gains instead of adding slew rate.
 #ifndef BALANCER_CMD_SLEW_LIMIT
-#define BALANCER_CMD_SLEW_LIMIT 2000.0f
+#define BALANCER_CMD_SLEW_LIMIT 10000.0f
 #endif
 
 // Angle limit (degrees) for auto-enabling motors when starting balancer.
 // If the absolute fused pitch is greater than this value, motors will not
 // be auto-enabled to avoid trying to balance a fallen robot.
 #ifndef BALANCER_AUTO_ENABLE_ANGLE_DEG
-#define BALANCER_AUTO_ENABLE_ANGLE_DEG 6.0f
+#define BALANCER_AUTO_ENABLE_ANGLE_DEG 2.0f
 #endif
 
 // Smaller threshold (degrees) indicating the robot must be close to vertical
@@ -71,7 +73,7 @@
 // If the robot exceeds this absolute pitch (degrees), automatically stop the
 // balancer to avoid fighting on the ground after a fall.
 #ifndef BALANCER_FALL_STOP_ANGLE_DEG
-#define BALANCER_FALL_STOP_ANGLE_DEG 45.0f
+#define BALANCER_FALL_STOP_ANGLE_DEG 30.0f
 #endif
 
 // Optional pitch-rate guard (deg/s). Set to 0 to disable rate-based stop.
@@ -90,4 +92,41 @@
 // This limits how far the robot will lean to accelerate/decelerate. Default 6°.
 #ifndef DRIVE_MAX_PITCH_DEG
 #define DRIVE_MAX_PITCH_DEG 3.0f
+#endif
+
+// Motor command inversion for balancer (set to 1 if motor is mounted in mirror)
+// LEFT motor: 0 = normal, 1 = invert command sign
+// RIGHT motor: 0 = normal, 1 = invert command sign
+#ifndef BALANCER_LEFT_MOTOR_INVERT
+#define BALANCER_LEFT_MOTOR_INVERT 0
+#endif
+#ifndef BALANCER_RIGHT_MOTOR_INVERT
+#define BALANCER_RIGHT_MOTOR_INVERT 1
+#endif
+
+// Motor command gain scaling factors (to compensate for asymmetric motor response)
+// Initialized from motor characterization ratios if available, else 1.0
+// Use 1.0 for both if motors are matched. Adjust to balance robot behavior:
+// - If robot drifts left: increase LEFT_GAIN or decrease RIGHT_GAIN
+// - If robot drifts right: increase RIGHT_GAIN or decrease LEFT_GAIN
+// Example: LEFT=1.0, RIGHT=0.95 means right motor gets 95% of commanded value
+#ifndef BALANCER_LEFT_MOTOR_GAIN
+#if defined(MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD) && defined(MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD)
+// Auto-scale based on measured motor gains (normalize to average)
+#define BALANCER_LEFT_MOTOR_GAIN \
+  (2.0f * MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD / \
+   (MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD + MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD))
+#else
+#define BALANCER_LEFT_MOTOR_GAIN 1.0f
+#endif
+#endif
+#ifndef BALANCER_RIGHT_MOTOR_GAIN
+#if defined(MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD) && defined(MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD)
+// Auto-scale based on measured motor gains (normalize to average)
+#define BALANCER_RIGHT_MOTOR_GAIN \
+  (2.0f * MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD / \
+   (MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD + MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD))
+#else
+#define BALANCER_RIGHT_MOTOR_GAIN 1.18f
+#endif
 #endif

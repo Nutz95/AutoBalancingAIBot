@@ -34,6 +34,9 @@ static bool g_prefs_started = false;
 static AutotuneController g_autotune;
 static bool g_autotune_active = false;
 static AutotuneController::Config g_autocfg; // configurable autotune params
+// Motor gain scaling (for asymmetric motor compensation)
+static float g_left_motor_gain = BALANCER_LEFT_MOTOR_GAIN;
+static float g_right_motor_gain = BALANCER_RIGHT_MOTOR_GAIN;
 // Drive setpoints (high-level): normalized forward and turn commands
 static float g_drive_target_v = 0.0f; // desired normalized forward [-1..1]
 static float g_drive_target_w = 0.0f; // desired normalized turn [-1..1]
@@ -446,10 +449,13 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
       return 0.0f;
     }
 
-    // Apply autotune command to motors
+    // Apply autotune command to motors (apply per-motor inversion and gain scaling)
     if (auto d = abbot::motor::getActiveMotorDriver()) {
-      if (d->areMotorsEnabled())
-        d->setMotorCommandBoth(autotune_cmd, autotune_cmd);
+      if (d->areMotorsEnabled()) {
+        float left_at = (BALANCER_LEFT_MOTOR_INVERT ? -autotune_cmd : autotune_cmd) * g_left_motor_gain;
+        float right_at = (BALANCER_RIGHT_MOTOR_INVERT ? -autotune_cmd : autotune_cmd) * g_right_motor_gain;
+        d->setMotorCommandBoth(left_at, right_at);
+      }
     }
 
     return autotune_cmd;
@@ -580,8 +586,10 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
       g_last_cmd = cmd;
       return cmd;
     }
-    // command both motors simultaneously
-    d->setMotorCommandBoth(cmd, cmd);
+    // command both motors simultaneously (apply per-motor inversion and gain scaling)
+    float left_cmd = (BALANCER_LEFT_MOTOR_INVERT ? -cmd : cmd) * g_left_motor_gain;
+    float right_cmd = (BALANCER_RIGHT_MOTOR_INVERT ? -cmd : cmd) * g_right_motor_gain;
+    d->setMotorCommandBoth(left_cmd, right_cmd);
   } else {
     static bool warned_no_drv = false;
     if (!warned_no_drv) {
@@ -739,6 +747,25 @@ void setAutotuneMaxAngle(float max_pitch_deg) {
   snprintf(buf, sizeof(buf), "AUTOTUNE: max angle set to %.1f°",
            (double)max_pitch_deg);
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+}
+
+// --- Motor gain adjustment (for asymmetric compensation) ---
+void setMotorGains(float left_gain, float right_gain) {
+  if (left_gain < 0.1f) left_gain = 0.1f;
+  if (left_gain > 2.0f) left_gain = 2.0f;
+  if (right_gain < 0.1f) right_gain = 0.1f;
+  if (right_gain > 2.0f) right_gain = 2.0f;
+  g_left_motor_gain = left_gain;
+  g_right_motor_gain = right_gain;
+  char buf[128];
+  snprintf(buf, sizeof(buf), "BALANCER: motor gains set L=%.3f R=%.3f",
+           (double)left_gain, (double)right_gain);
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+}
+
+void getMotorGains(float &left_gain, float &right_gain) {
+  left_gain = g_left_motor_gain;
+  right_gain = g_right_motor_gain;
 }
 
 } // namespace controller
