@@ -5,8 +5,12 @@ namespace abbot {
 namespace fusion {
 
 struct FusionConfig {
-    float beta = 0.4f;        // Madgwick gain - increased to 0.4 to reduce gyro drift
-    float sample_rate = 166.66667f; // Hz (measured sample rate)
+    // Madgwick gain: how much to trust accelerometer vs gyroscope
+    // Lower value (0.1-0.2) = trust gyro more, smoother but may drift slowly
+    // Higher value (0.3-0.5) = trust accel more, corrects drift but noisier
+    // For active robot (with linear accelerations), use 0.15-0.25
+    float beta = 0.15f;
+    float sample_rate = 400.0f; // Hz (target sample rate, synchronized with BMI088Config)
     // Axis mapping: allow remapping/inversion of sensor axes into the robot
     // coordinate frame used by the fusion/filter. This makes it easy to
     // accommodate different sensor mountings without changing fusion code.

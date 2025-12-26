@@ -15,12 +15,24 @@ struct BMI088Config {
   uint8_t gyro_cs_pin  = 5; // GPIO5 (chip select for gyro)
 
   // Sampling frequency in Hz (target read frequency)
-  uint16_t sampling_hz = 200;
+  // Increased to 400Hz for faster control loop and better gyro integration
+  uint16_t sampling_hz = 400;
 
-  // Convenience: compute interval in milliseconds
+  // Convenience: compute interval in milliseconds (integer, may lose precision)
   unsigned long sampling_interval_ms() const {
     return (sampling_hz > 0) ? (1000u / sampling_hz) : 0u;
   }
+
+  // Convenience: compute interval in microseconds (precise for non-integer ms)
+  // 400Hz -> 2500µs, 200Hz -> 5000µs, 500Hz -> 2000µs
+  unsigned long sampling_interval_us() const {
+    return (sampling_hz > 0) ? (1000000u / sampling_hz) : 0u;
+  }
+  // Note: the driver may program the sensor ODR to the nearest supported
+  // combined ODR (library exposes minimum combined ODR = 400Hz). When the
+  // requested `sampling_hz` is lower than the sensor's programmed ODR the
+  // driver will throttle reads using `sampling_interval_us()` to provide the
+  // configured effective sample rate.
 };
 
 } // namespace abbot

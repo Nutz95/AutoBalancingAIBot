@@ -32,28 +32,37 @@ bool BMI088Driver::begin() {
     }
     return false;
   }
-  // Try to set ODR to 400Hz on sensor if available, we'll sample at 200Hz
-  imu_.setOdr(Bmi088::ODR_400HZ);
-  last_read_ms_ = millis();
+  // Set ODR on sensor. The Bmi088 combined class only exposes ODR_2000HZ,
+  // ODR_1000HZ, and ODR_400HZ. For lower sample rates we still configure
+  // the sensor at 400Hz and throttle reads via sampling_interval_us().
+  if (cfg_.sampling_hz >= 1000) {
+    imu_.setOdr(Bmi088::ODR_1000HZ);
+  } else {
+    // 400Hz is the minimum combined ODR available
+    imu_.setOdr(Bmi088::ODR_400HZ);
+  }
+  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI088: configured for %d Hz sampling\\n",
+             cfg_.sampling_hz);
+  last_read_us_ = micros();
   return true;
 }
 
 bool BMI088Driver::read(IMUSample &out) {
-  unsigned long now = millis();
-  unsigned long interval = cfg_.sampling_interval_ms();
-  if (interval == 0) {
+  unsigned long now_us = micros();
+  unsigned long interval_us = cfg_.sampling_interval_us();
+  if (interval_us == 0) {
     return false;
   }
 
-  if ((now - last_read_ms_) < interval) {
+  if ((now_us - last_read_us_) < interval_us) {
     return false; // not time yet
   }
   // Use the raw read helper to avoid duplicating sensor access logic
   if (!readRaw(out)) {
     return false;
   }
-  out.ts_ms = now;
-  last_read_ms_ = now;
+  out.ts_ms = millis();
+  last_read_us_ = now_us;
   // apply calibration if available
   abbot::imu_cal::applyCalibrationToSample(out);
   return true;

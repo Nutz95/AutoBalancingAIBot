@@ -1,6 +1,7 @@
 #include "imu_consumer_helpers.h"
 #include "../include/balancer_controller.h"
 #include "imu_calibration.h"
+#include "imu_mapping.h"
 #include "logging.h"
 #include "motor_drivers/driver_manager.h"
 #include "tuning_capture.h"
@@ -317,14 +318,89 @@ void requestWarmup(ConsumerState &state, float seconds, float sample_rate_hz) {
 void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               float fused_pitch_rate_local, float left_cmd,
                               float right_cmd) {
-  if (!abbot::log::isChannelEnabled(abbot::log::CHANNEL_BALANCER))
+  if (!abbot::log::isChannelEnabled(abbot::log::CHANNEL_BALANCER)) {
     return;
+  }
   float pitch_deg = radToDeg(fused_pitch_local);
   float pitch_rate_deg = radToDeg(fused_pitch_rate_local);
   LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
              "%lu,pitch_deg=%.3f,pitch_rate_deg=%.3f,left=%.3f,right=%.3f\n",
              (unsigned long)ts_ms, pitch_deg, pitch_rate_deg, left_cmd,
              right_cmd);
+}
+
+bool measureAndLogImuFrequency(ImuFrequencyMeasurement &freq_state,
+                               float target_hz) {
+  uint32_t now_ms = millis();
+  
+  // Initialize start time on first call
+  if (freq_state.start_ms == 0) {
+    freq_state.start_ms = now_ms;
+  }
+  
+  freq_state.sample_count++;
+  
+  uint32_t elapsed_ms = now_ms - freq_state.start_ms;
+  if (elapsed_ms >= ImuFrequencyMeasurement::kLogIntervalMs) {
+    float measured_hz = (float)freq_state.sample_count / ((float)elapsed_ms / 1000.0f);
+    char freq_msg[128];
+    snprintf(freq_msg, sizeof(freq_msg),
+             "IMU: freq measured=%.1f Hz target=%.1f Hz (%.1f%%)",
+             (double)measured_hz, (double)target_hz,
+             (double)(100.0f * measured_hz / target_hz));
+    LOG_PRINTLN(abbot::log::CHANNEL_IMU, freq_msg);
+    
+    // Reset counters
+    freq_state.sample_count = 0;
+    freq_state.start_ms = now_ms;
+    return true;
+  }
+  return false;
+}
+
+void mapSensorToRobotFrame(const fusion::FusionConfig &cfg,
+                           const IMUSample &sample,
+                           const float gyro_bias[3],
+                           float gyro_robot[3],
+                           float accel_robot[3]) {
+  float raw_g[3] = {sample.gx, sample.gy, sample.gz};
+  float raw_a[3] = {sample.ax, sample.ay, sample.az};
+  abbot::imu_mapping::mapSensorToRobot(cfg, raw_g, raw_a, gyro_bias,
+                                       gyro_robot, accel_robot);
+}
+
+void getLastMotorCommands(float &left_cmd, float &right_cmd) {
+  left_cmd = 0.0f;
+  right_cmd = 0.0f;
+  if (auto drv = abbot::motor::getActiveMotorDriver()) {
+    left_cmd = drv->getLastMotorCommand(
+        abbot::motor::IMotorDriver::MotorSide::LEFT);
+    right_cmd = drv->getLastMotorCommand(
+        abbot::motor::IMotorDriver::MotorSide::RIGHT);
+  }
+}
+
+void emitImuDebugLogsIfEnabled(const IMUSample &sample, uint32_t &last_print_ms,
+                               uint32_t interval_ms) {
+#if defined(ENABLE_DEBUG_LOGS)
+  // Suppress debug logs while calibration runs
+  if (abbot::imu_cal::isCalibrating()) {
+    return;
+  }
+  uint32_t now = millis();
+  if ((uint32_t)(now - last_print_ms) >= interval_ms) {
+    last_print_ms = now;
+    LOG_PRINTF(
+        abbot::log::CHANNEL_IMU,
+        "IMU ts_ms=%lu ax=%.6f ay=%.6f az=%.6f gx=%.6f gy=%.6f gz=%.6f\n",
+        sample.ts_ms, sample.ax, sample.ay, sample.az, sample.gx, sample.gy,
+        sample.gz);
+  }
+#else
+  (void)sample;
+  (void)last_print_ms;
+  (void)interval_ms;
+#endif
 }
 
 } // namespace imu_consumer

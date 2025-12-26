@@ -106,121 +106,111 @@ static void wifiConsoleTask(void *pvParameters) {
   }
 }
 
+// imuConsumerTask
+// Responsibilities:
+// - Receive IMU samples from `imuQueue`.
+// - Measure and log the effective IMU sampling frequency.
+// - Map sensor-frame data into robot frame and apply gyro bias.
+// - Update the active filter, handle warmup, and publish fused outputs.
+// - Maintain gyro bias EMA, persist when stable, and drive the balancer cycle.
+// Helpers used: measureAndLogImuFrequency, mapSensorToRobotFrame,
+// finalizeWarmupIfDone, updateBiasEmaAndPersistIfNeeded, emitTuningOrStream,
+// emitImuDebugLogsIfEnabled.
 static void imuConsumerTask(void *pvParameters) {
   (void)pvParameters;
   IMUSample sample;
-  uint32_t last_print_ms = 0;
-  // g_fusion and g_fusionMutex are initialized in startIMUTasks
+  uint32_t last_debug_print_ms = 0;
+  
+  // IMU frequency measurement state
+  abbot::imu_consumer::ImuFrequencyMeasurement freq_measurement;
+  
   for (;;) {
-    if (imuQueue && xQueueReceive(imuQueue, &sample, portMAX_DELAY) == pdTRUE) {
-      // Compute dt
-      float dt = abbot::imu_consumer::computeDt(g_consumer, sample,
-                                                g_filter_sample_rate_hz);
+    if (!imuQueue || xQueueReceive(imuQueue, &sample, portMAX_DELAY) != pdTRUE) {
+      continue;
+    }
+    
+    // Measure and log actual IMU frequency
+    abbot::imu_consumer::measureAndLogImuFrequency(freq_measurement,
+                                                   g_filter_sample_rate_hz);
+    
+    // Compute dt from sample timestamps
+    float dt = abbot::imu_consumer::computeDt(g_consumer, sample,
+                                              g_filter_sample_rate_hz);
 
-      // Extract raw gyro & accel
-      float gx = sample.gx;
-      float gy = sample.gy;
-      float gz = sample.gz;
+    // Accumulate warmup samples (gyro raw values)
+    abbot::imu_consumer::accumulateWarmup(g_consumer, sample,
+                                          sample.gx, sample.gy, sample.gz);
 
-      // Warmup accumulation
-      abbot::imu_consumer::accumulateWarmup(g_consumer, sample, gx, gy, gz);
+    // Map sensor frame -> robot frame (with gyro bias compensation)
+    float gyro_robot[3];
+    float accel_robot[3];
+    abbot::imu_consumer::mapSensorToRobotFrame(g_fusion_cfg, sample,
+                                               g_consumer.gyro_bias,
+                                               gyro_robot, accel_robot);
 
-      // Map sensor -> robot (bias-compensated)
-      float gyro_robot[3];
-      float accel_robot[3];
-      float raw_g[3] = {gx, gy, gz};
-      float raw_a[3] = {sample.ax, sample.ay, sample.az};
-      float gyro_bias[3] = {g_consumer.gyro_bias[0], g_consumer.gyro_bias[1],
-                            g_consumer.gyro_bias[2]};
-      abbot::imu_mapping::mapSensorToRobot(g_fusion_cfg, raw_g, raw_a,
-                                           gyro_bias, gyro_robot, accel_robot);
-
-      // Update selected filter (always query active filter to avoid stale
-      // pointer)
-      {
-        auto active = abbot::filter::getActiveFilter();
-        if (active) {
-          active->update(gyro_robot[0], gyro_robot[1], gyro_robot[2],
-                         accel_robot[0], accel_robot[1], accel_robot[2], dt);
-        }
+    // Update active filter with mapped data
+    {
+      auto active = abbot::filter::getActiveFilter();
+      if (active) {
+        active->update(gyro_robot[0], gyro_robot[1], gyro_robot[2],
+                       accel_robot[0], accel_robot[1], accel_robot[2], dt);
       }
+    }
 
-      // Finalize warmup if it just completed
-      if (g_consumer.warmup_samples_remaining > 0) {
-        --g_consumer.warmup_samples_remaining;
-        {
-          auto active = abbot::filter::getActiveFilter();
-          if (active)
-            abbot::imu_consumer::finalizeWarmupIfDone(g_consumer, *active,
-                                                      g_fusion_cfg);
-        }
+    // Process warmup phase (decrement counter, finalize if done)
+    if (g_consumer.warmup_samples_remaining > 0) {
+      --g_consumer.warmup_samples_remaining;
+      auto active = abbot::filter::getActiveFilter();
+      if (active) {
+        abbot::imu_consumer::finalizeWarmupIfDone(g_consumer, *active,
+                                                  g_fusion_cfg);
       }
+    }
+    printWarmupProgressIfAny();
+    statusLedUpdateFromConsumer(g_consumer);
 
-      // Print warmup progress via helper to keep consumer task compact
-      printWarmupProgressIfAny();
+    // Update gyro bias EMA and persist when appropriate
+    abbot::imu_consumer::updateBiasEmaAndPersistIfNeeded(g_consumer, sample,
+                                                         gyro_robot);
 
-      // Visual feedback handled by status_led module
-      statusLedUpdateFromConsumer(g_consumer);
-
-      // Update bias EMA & persist when appropriate
-      abbot::imu_consumer::updateBiasEmaAndPersistIfNeeded(g_consumer, sample,
-                                                           gyro_robot);
-
-      // Publish fused outputs
-      float fused_pitch_local = 0.0f;
-      float fused_pitch_rate_local = 0.0f;
-      {
-        auto active = abbot::filter::getActiveFilter();
-        if (active) {
-          fused_pitch_local = active->getPitch();
-          fused_pitch_rate_local = active->getPitchRate();
-        }
+    // Get fused pitch outputs from active filter
+    float fused_pitch_local = 0.0f;
+    float fused_pitch_rate_local = 0.0f;
+    {
+      auto active = abbot::filter::getActiveFilter();
+      if (active) {
+        fused_pitch_local = active->getPitch();
+        fused_pitch_rate_local = active->getPitchRate();
       }
-      abbot::imu_consumer::publishFusedOutputsUnderMutex(
-          g_consumer, fused_pitch_local, fused_pitch_rate_local,
-          g_fused_pitch_rad, g_fused_pitch_rate_rads, &g_fusion_mutex);
+    }
 
-      // Read last motor commands (normalized) via motor driver API
-      float left_cmd = 0.0f;
-      float right_cmd = 0.0f;
-      if (auto drv = abbot::motor::getActiveMotorDriver()) {
-        left_cmd = drv->getLastMotorCommand(
-            abbot::motor::IMotorDriver::MotorSide::LEFT);
-        right_cmd = drv->getLastMotorCommand(
-            abbot::motor::IMotorDriver::MotorSide::RIGHT);
-      }
-      abbot::imu_consumer::runBalancerCycleIfActive(
-          fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd);
+    // Publish fused outputs under mutex for other tasks
+    abbot::imu_consumer::publishFusedOutputsUnderMutex(
+        g_consumer, fused_pitch_local, fused_pitch_rate_local,
+        g_fused_pitch_rad, g_fused_pitch_rate_rads, &g_fusion_mutex);
 
-      // Emit tuning stream or capture outputs
-      abbot::imu_consumer::emitTuningOrStream(
-          g_consumer, sample, fused_pitch_local, fused_pitch_rate_local,
-          accel_robot, gyro_robot, left_cmd, right_cmd);
+    // Get current motor commands for logging/telemetry
+    float left_cmd = 0.0f;
+    float right_cmd = 0.0f;
+    abbot::imu_consumer::getLastMotorCommands(left_cmd, right_cmd);
+
+    // Run balancer control cycle if active
+    abbot::imu_consumer::runBalancerCycleIfActive(
+        fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd);
+
+    // Emit tuning stream or capture outputs
+    abbot::imu_consumer::emitTuningOrStream(
+        g_consumer, sample, fused_pitch_local, fused_pitch_rate_local,
+        accel_robot, gyro_robot, left_cmd, right_cmd);
 
 #if defined(ENABLE_IMU_DEBUG_LOGS)
-      // Emit diagnostics if BALANCER channel enabled
-      abbot::imu_consumer::emitDiagnosticsIfEnabled(
-          sample.ts_ms, fused_pitch_local, fused_pitch_rate_local, left_cmd,
-          right_cmd);
+    abbot::imu_consumer::emitDiagnosticsIfEnabled(
+        sample.ts_ms, fused_pitch_local, fused_pitch_rate_local,
+        left_cmd, right_cmd);
 #endif
 
-#if defined(ENABLE_DEBUG_LOGS)
-      // Suppress debug logs while calibration runs
-      if (abbot::imu_cal::isCalibrating()) {
-        continue;
-      }
-      // Throttle logging to once every 1000 ms to avoid flooding the serial
-      uint32_t now = millis();
-      if ((uint32_t)(now - last_print_ms) >= 1000u) {
-        last_print_ms = now;
-        LOG_PRINTF(
-            abbot::log::CHANNEL_IMU,
-            "IMU ts_ms=%lu ax=%.6f ay=%.6f az=%.6f gx=%.6f gy=%.6f gz=%.6f\n",
-            sample.ts_ms, sample.ax, sample.ay, sample.az, sample.gx, sample.gy,
-            sample.gz);
-      }
-#endif
-    }
+    // Emit raw IMU debug logs (throttled)
+    abbot::imu_consumer::emitImuDebugLogsIfEnabled(sample, last_debug_print_ms);
   }
 }
 

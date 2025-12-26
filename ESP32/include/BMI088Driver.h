@@ -17,6 +17,13 @@ struct IMUSample {
   unsigned long ts_ms; // host timestamp (millis)
 };
 
+// BMI088Driver: thin wrapper around the Bmi088 sensor library.
+// Note: the combined `Bmi088::setOdr` API exposes a limited set of
+// combined ODR values (2000, 1000 and 400 Hz). To support arbitrary
+// configured sampling rates the driver programs the sensor to the
+// nearest supported ODR (minimum combined ODR is 400Hz) and throttles
+// reads using microsecond timing (`micros()`) to achieve the requested
+// sampling frequency via `sampling_interval_us()` in the config.
 class BMI088Driver {
 public:
   explicit BMI088Driver(const BMI088Config &cfg);
@@ -27,13 +34,15 @@ public:
   bool readRaw(IMUSample &out);
 
   // Accessor for configured sampling frequency (Hz)
-  uint16_t getSamplingHz() const { return cfg_.sampling_hz; }
+  uint16_t getSamplingHz() const {
+    return cfg_.sampling_hz;
+  }
 
 private:
   BMI088Config cfg_;
   Bmi088 imu_ =
       Bmi088(SPI, 0, 0); // placeholder will be reinitialized in begin()
-  unsigned long last_read_ms_ = 0;
+  unsigned long last_read_us_ = 0;  // microsecond timing for precise sampling
 };
 
 } // namespace abbot

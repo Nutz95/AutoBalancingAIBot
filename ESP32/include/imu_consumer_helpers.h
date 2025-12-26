@@ -10,6 +10,16 @@
 namespace abbot {
 namespace imu_consumer {
 
+/**
+ * IMU frequency measurement state used by the consumer to accumulate
+ * samples and periodically log the measured sampling rate.
+ */
+struct ImuFrequencyMeasurement {
+  uint32_t sample_count = 0;
+  uint32_t start_ms = 0;
+  static constexpr uint32_t kLogIntervalMs = 2000;  // Log every 2 seconds
+};
+
 // Mutable state used by the consumer helpers. Designed to be passed by
 // reference so helpers do not directly depend on SystemTasks globals.
 struct ConsumerState {
@@ -94,6 +104,44 @@ void requestWarmup(ConsumerState &state, float seconds, float sample_rate_hz);
 void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               float fused_pitch_rate_local, float left_cmd,
                               float right_cmd);
+
+/**
+ * Measure and log IMU frequency.
+ * Call this once for each sample received. The helper will accumulate
+ * counts and emit a single log line every `ImuFrequencyMeasurement::kLogIntervalMs`.
+ * @param freq_state mutable state used to accumulate samples and timing
+ * @param target_hz the configured target sampling rate (for percent calc)
+ * @return true if a log message was emitted during this call
+ */
+bool measureAndLogImuFrequency(ImuFrequencyMeasurement &freq_state,
+                               float target_hz);
+
+/**
+ * Map sensor-frame measurements from `sample` into the robot frame using
+ * `cfg` axis mapping and apply `gyro_bias` compensation.
+ * Outputs are written to `gyro_robot` and `accel_robot` arrays (size 3).
+ */
+void mapSensorToRobotFrame(const fusion::FusionConfig &cfg,
+                           const IMUSample &sample,
+                           const float gyro_bias[3],
+                           float gyro_robot[3],
+                           float accel_robot[3]);
+
+/**
+ * Read the most-recent motor commands from the active motor driver if
+ * available. If no driver is active, both outputs will be set to 0.0f.
+ */
+void getLastMotorCommands(float &left_cmd, float &right_cmd);
+
+/**
+ * Emit raw IMU debug logs (throttled) when `ENABLE_DEBUG_LOGS` is defined.
+ * This helper centralizes the throttling behavior used by `imuConsumerTask`.
+ * @param sample IMU sample to log
+ * @param last_print_ms mutable timestamp used to enforce throttle
+ * @param interval_ms throttling interval in milliseconds (default 1000)
+ */
+void emitImuDebugLogsIfEnabled(const IMUSample &sample, uint32_t &last_print_ms,
+                               uint32_t interval_ms = 1000);
 
 } // namespace imu_consumer
 } // namespace abbot

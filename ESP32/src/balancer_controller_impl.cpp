@@ -37,6 +37,20 @@ static AutotuneController::Config g_autocfg; // configurable autotune params
 // Motor gain scaling (for asymmetric motor compensation)
 static float g_left_motor_gain = BALANCER_LEFT_MOTOR_GAIN;
 static float g_right_motor_gain = BALANCER_RIGHT_MOTOR_GAIN;
+
+// Encoder velocity tracking for balancer (read at PID loop rate)
+// Provides high-frequency velocity feedback for future cascaded control
+struct EncoderVelocityState {
+  int32_t last_encoder_left = 0;
+  int32_t last_encoder_right = 0;
+  uint32_t last_read_time_us = 0;
+  float velocity_left_counts_per_sec = 0.0f;
+  float velocity_right_counts_per_sec = 0.0f;
+  bool initialized = false;
+};
+
+static EncoderVelocityState g_encoder_velocity_state;
+
 // Drive setpoints (high-level): normalized forward and turn commands
 static float g_drive_target_v = 0.0f; // desired normalized forward [-1..1]
 static float g_drive_target_w = 0.0f; // desired normalized turn [-1..1]
@@ -391,12 +405,53 @@ static float computePidWithDriveSetpoint(float fused_pitch,
   return pid_out;
 }
 
+// Read encoders and compute velocity at PID loop rate (400Hz)
+// Provides high-frequency velocity feedback for future cascaded control
+// or velocity-based compensation
+static void updateEncoderVelocity(float dt_sec) {
+  auto active_driver = abbot::motor::getActiveMotorDriver();
+  if (!active_driver) {
+    return;
+  }
+  
+  uint32_t now_us = (uint32_t)esp_timer_get_time();
+  int32_t encoder_left = abbot::motor::readEncoderBySide(
+      abbot::motor::IMotorDriver::MotorSide::LEFT);
+  int32_t encoder_right = abbot::motor::readEncoderBySide(
+      abbot::motor::IMotorDriver::MotorSide::RIGHT);
+  
+  if (g_encoder_velocity_state.initialized) {
+    uint32_t dt_us = now_us - g_encoder_velocity_state.last_read_time_us;
+    if (dt_us > 0) {
+      float dt_sec_actual = (float)dt_us / 1000000.0f;
+      
+      int32_t delta_left = encoder_left - g_encoder_velocity_state.last_encoder_left;
+      int32_t delta_right = encoder_right - g_encoder_velocity_state.last_encoder_right;
+      
+      // Velocity in counts/sec
+      g_encoder_velocity_state.velocity_left_counts_per_sec = 
+          (float)delta_left / dt_sec_actual;
+      g_encoder_velocity_state.velocity_right_counts_per_sec = 
+          (float)delta_right / dt_sec_actual;
+    }
+  }
+  
+  g_encoder_velocity_state.last_encoder_left = encoder_left;
+  g_encoder_velocity_state.last_encoder_right = encoder_right;
+  g_encoder_velocity_state.last_read_time_us = now_us;
+  g_encoder_velocity_state.initialized = true;
+}
+
 // Called each IMU loop to compute and (if active) command motors. Returns
 // the computed command (normalized) regardless of whether it was sent.
 // Note: Pitch sign is now handled by axis mapping in FusionConfig
 // (accel_sign/gyro_sign), so pitch arrives with correct sign: positive = tilted
 // forward.
 float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
+  // Update encoder velocity at PID loop rate (400Hz)
+  // This provides high-frequency velocity measurement for future use
+  updateEncoderVelocity(dt);
+  
   // Check if autotuning is active
   if (g_autotune_active && g_autotune.isActive()) {
     // Pitch is already correctly signed from fusion
@@ -553,10 +608,12 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   if (delta < -max_delta)
     delta = -max_delta;
   cmd = g_last_cmd + delta;
-  // Rate-limited debug logging for PID vs final commanded value (every ~200ms)
+  // Rate-limited debug logging for PID vs final commanded value
+  // Interval controlled by BALANCER_DEBUG_LOG_INTERVAL_MS (configurable for characterization)
   static uint32_t last_cmd_dbg_ms = 0;
   uint32_t now_cmd_dbg_ms = millis();
-  if ((int32_t)(now_cmd_dbg_ms - last_cmd_dbg_ms) >= 200) {
+  uint32_t log_interval = BALANCER_DEBUG_LOG_INTERVAL_MS;
+  if (log_interval == 0 || (now_cmd_dbg_ms - last_cmd_dbg_ms >= log_interval)) {
     LOG_PRINTF(
         abbot::log::CHANNEL_BALANCER,
         "BALANCER_DBG pitch=%.2fdeg pitch_rate=%.2fdeg/s pid_in=%.3f "

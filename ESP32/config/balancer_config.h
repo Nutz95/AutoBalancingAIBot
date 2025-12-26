@@ -81,6 +81,14 @@
 #define BALANCER_FALL_STOP_RATE_DEG_S 0.0f
 #endif
 
+// Debug logging interval (milliseconds)
+// Controls how often BALANCER_DBG logs are emitted to reduce console spam
+// Set to 0 to disable throttling, 1 for max rate (1000 Hz), 500 for 2 Hz
+// For motor characterization scripts, use 1-2ms (500-1000 Hz)
+#ifndef BALANCER_DEBUG_LOG_INTERVAL_MS
+#define BALANCER_DEBUG_LOG_INTERVAL_MS 500
+#endif
+
 // Drive interface configuration
 // How quickly the normalized forward command (v) may change (units/sec).
 // Higher = more responsive. Safe default = 2.0f (full step ~0.5s).
