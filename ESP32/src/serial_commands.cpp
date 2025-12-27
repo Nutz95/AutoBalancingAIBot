@@ -44,6 +44,12 @@ static SerialMenu *g_logMenu = nullptr;
 static SerialMenu *g_filterMenu = nullptr;
 static SerialMenu *g_wifiMenu = nullptr;
 
+// Complementary filter parameter keys (NVS)
+static constexpr const char *kPrefComplementaryKacc = "c1d_kacc";
+static constexpr const char *kPrefComplementaryKbias = "c1d_kbias";
+// Madgwick beta parameter key (NVS)
+static constexpr const char *kPrefMadgwickBeta = "mad_beta";
+
 // Forward-declare helper builders and ensureMenus
 static SerialMenu *buildCalibrationMenu(abbot::BMI088Driver *driver);
 static SerialMenu *buildMotorMenu();
@@ -68,12 +74,75 @@ static void balancerSetGainsHandler(const String &p);
 static void balancerTuningStartHandler(const String &p);
 static void balancerTuningStopHandler(const String &p);
 static void balancerDeadbandSetHandler(const String &p);
+static void balancerMinCmdSetHandler(const String &p);
 static void balancerStartHandler(const String &p);
 static void balancerMotorGainsSetHandler(const String &p);
 static void autotuneRelayHandler(const String &p);
 static void autotuneDeadbandHandler(const String &p);
 static void autotuneMaxAngleHandler(const String &p);
 static bool handleFusion(const String &line, const String &up);
+
+static void applyComplementaryParamsFromPrefs() {
+  Preferences pref;
+  if (!pref.begin("abbot", true)) {
+    return;
+  }
+  auto f = abbot::filter::getActiveFilter();
+  const char *fname = abbot::filter::getCurrentFilterName();
+  if (!f || !fname || strcmp(fname, "COMPLEMENTARY1D") != 0) {
+    pref.end();
+    return;
+  }
+  bool applied = false;
+  float val = 0.0f;
+  if (pref.isKey(kPrefComplementaryKacc)) {
+    val = pref.getFloat(kPrefComplementaryKacc, 0.02f);
+    f->setParam("KACC", val);
+    applied = true;
+  }
+  if (pref.isKey(kPrefComplementaryKbias)) {
+    val = pref.getFloat(kPrefComplementaryKbias, 0.01f);
+    f->setParam("KBIAS", val);
+    applied = true;
+  }
+  if (applied) {
+    float kacc = pref.getFloat(kPrefComplementaryKacc, 0.0f);
+    float kbias = pref.getFloat(kPrefComplementaryKbias, 0.0f);
+    char msg[180];
+    snprintf(msg, sizeof(msg),
+             "FILTER: restored complementary params from NVS (KACC=%.4f KBIAS=%.4f)",
+             (double)kacc, (double)kbias);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
+  }
+  pref.end();
+}
+
+static void applyMadgwickParamFromPrefs() {
+  Preferences pref;
+  if (!pref.begin("abbot", true)) {
+    return;
+  }
+  auto f = abbot::filter::getActiveFilter();
+  const char *fname = abbot::filter::getCurrentFilterName();
+  if (!f || !fname || strcmp(fname, "MADGWICK") != 0) {
+    pref.end();
+    return;
+  }
+  bool applied = false;
+  float val = 0.0f;
+  if (pref.isKey(kPrefMadgwickBeta)) {
+    val = pref.getFloat(kPrefMadgwickBeta, 0.021909f);
+    f->setParam("BETA", val);
+    applied = true;
+  }
+  if (applied) {
+    float beta = pref.getFloat(kPrefMadgwickBeta, 0.0f);
+    char msg[128];
+    snprintf(msg, sizeof(msg), "FILTER: restored Madgwick beta from NVS (BETA=%.8f)", (double)beta);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
+  }
+  pref.end();
+}
 
 static SerialMenu *buildCalibrationMenu(abbot::BMI088Driver *driver) {
   SerialMenu *m = new SerialMenu("Calibration Commands");
@@ -416,9 +485,55 @@ static SerialMenu *buildFilterMenu() {
             g_filterMenu->enter();
           }
         });
+    m->addEntry(3, "SET KACC (usage: FILTER SET KACC <v>)", [](const String &) {
+      auto a = abbot::filter::getActiveFilter();
+      if (a) {
+        float val = 0.0f;
+        if (a->getParam("KACC", val)) {
+          char out[128];
+          snprintf(out, sizeof(out),
+                   "FILTER: KACC=%.4f (use: FILTER SET KACC <value>)",
+                   (double)val);
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+        } else {
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                      "FILTER: current filter does not support KACC parameter");
+        }
+      } else {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: no active filter");
+      }
+      if (g_filterMenu) {
+        g_menuActive = true;
+        g_currentMenu = g_filterMenu;
+        g_filterMenu->enter();
+      }
+    });
+    m->addEntry(4, "SET KBIAS (usage: FILTER SET KBIAS <v>)", [](const String &) {
+      auto a = abbot::filter::getActiveFilter();
+      if (a) {
+        float val = 0.0f;
+        if (a->getParam("KBIAS", val)) {
+          char out[128];
+          snprintf(out, sizeof(out),
+                   "FILTER: KBIAS=%.4f (use: FILTER SET KBIAS <value>)",
+                   (double)val);
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+        } else {
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                      "FILTER: current filter does not support KBIAS parameter");
+        }
+      } else {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: no active filter");
+      }
+      if (g_filterMenu) {
+        g_menuActive = true;
+        g_currentMenu = g_filterMenu;
+        g_filterMenu->enter();
+      }
+    });
     // dynamic entries for available filters
     int count = abbot::filter::getAvailableFilterCount();
-    int id = 3;
+    int id = 5;
     const char *cur = abbot::filter::getCurrentFilterName();
     for (int i = 0; i < count; ++i) {
       const char *name = abbot::filter::getAvailableFilterName(i);
@@ -584,6 +699,15 @@ static SerialMenu *buildBalancerMenu() {
   bal->addEntry(8, "BALANCE DEADBAND CALIBRATE", [](const String &) {
     abbot::balancer::controller::calibrateDeadband();
   });
+  // Group: min command applied when outside deadband
+  bal->addEntry(21, "BALANCE MIN_CMD GET", [](const String &) {
+    float v = abbot::balancer::controller::getMinCmd();
+    char buf[128];
+    snprintf(buf, sizeof(buf), "BALANCER: min_cmd=%.6f", (double)v);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+  });
+  bal->addEntry(22, "BALANCE MIN_CMD SET <v>",
+                [](const String &p) { balancerMinCmdSetHandler(p); });
   // Group: autotune
   bal->addEntry(9, "AUTOTUNE START", [](const String &) {
     abbot::balancer::controller::startAutotune();
@@ -724,7 +848,7 @@ static void startTuningCapture(uint32_t samples, bool csv,
 
 // Extracted action handlers
 static void calibStartGyro(abbot::BMI088Driver *driver, const String &p) {
-  int n = 2000;
+  int n = 4000;
   if (p.length())
     n = p.toInt();
   if (!abbot::imu_cal::isCalibrating()) {
@@ -740,7 +864,7 @@ static void calibStartGyro(abbot::BMI088Driver *driver, const String &p) {
 }
 
 static void calibStartAccel(abbot::BMI088Driver *driver, const String &p) {
-  int n = 2000;
+  int n = 4000;
   if (p.length())
     n = p.toInt();
   if (!abbot::imu_cal::isCalibrating()) {
@@ -915,6 +1039,18 @@ static void balancerDeadbandSetHandler(const String &p) {
   abbot::balancer::controller::setDeadband(v);
 }
 
+static void balancerMinCmdSetHandler(const String &p) {
+  String s = p;
+  s.trim();
+  if (s.length() == 0) {
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "Usage: BALANCE MIN_CMD SET <value>");
+    return;
+  }
+  float v = s.toFloat();
+  abbot::balancer::controller::setMinCmd(v);
+}
+
 static void autotuneRelayHandler(const String &p) {
   String s = p;
   s.trim();
@@ -979,7 +1115,7 @@ static bool handleCalib(abbot::BMI088Driver *driver, const String &line,
     char *what = (nt >= 3) ? tok[2] : nullptr;
     if (!what)
       return true;
-    int sampleCount = 2000;
+    int sampleCount = 4000;
     if (nt >= 4) {
       int v = atoi(tok[3]);
       if (v > 0)
@@ -1117,7 +1253,7 @@ static bool handleBalance(const String &line, const String &up) {
         abbot::log::CHANNEL_DEFAULT,
         "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> "
         "<ki> <kd>] (persisted for current FILTER) | BALANCE RESET | BALANCE "
-        "GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE");
+        "GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE | BALANCE MIN_CMD GET|SET");
     return true;
   }
   char *arg = tok[1];
@@ -1184,25 +1320,52 @@ static bool handleBalance(const String &line, const String &up) {
                   "DEADBAND CALIBRATE");
       return true;
     }
-    char *sub = tok[2];
-    if (strcmp(sub, "GET") == 0) {
-      float db = abbot::balancer::controller::getDeadband();
-      char buf[128];
-      snprintf(buf, sizeof(buf), "BALANCER: deadband=%.6f", (double)db);
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
-      return true;
-    } else if (strcmp(sub, "SET") == 0) {
-      if (nt < 4) {
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                    "Usage: BALANCE DEADBAND SET <value>");
+    {
+      char *sub = tok[2];
+      if (strcmp(sub, "GET") == 0) {
+        float db = abbot::balancer::controller::getDeadband();
+        char buf[128];
+        snprintf(buf, sizeof(buf), "BALANCER: deadband=%.6f", (double)db);
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+        return true;
+      } else if (strcmp(sub, "SET") == 0) {
+        if (nt < 4) {
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                      "Usage: BALANCE DEADBAND SET <value>");
+          return true;
+        }
+        float v = atof(tok[3]);
+        abbot::balancer::controller::setDeadband(v);
+        return true;
+      } else if (strcmp(sub, "CALIBRATE") == 0) {
+        abbot::balancer::controller::calibrateDeadband();
         return true;
       }
-      float v = atof(tok[3]);
-      abbot::balancer::controller::setDeadband(v);
+    }
+  } else if (strcmp(arg, "MIN_CMD") == 0) {
+    if (nt < 3) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "BALANCE MIN_CMD usage: MIN_CMD GET | MIN_CMD SET <v>");
       return true;
-    } else if (strcmp(sub, "CALIBRATE") == 0) {
-      abbot::balancer::controller::calibrateDeadband();
-      return true;
+    }
+    {
+      char *sub = tok[2];
+      if (strcmp(sub, "GET") == 0) {
+        float v = abbot::balancer::controller::getMinCmd();
+        char buf[128];
+        snprintf(buf, sizeof(buf), "BALANCER: min_cmd=%.6f", (double)v);
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+        return true;
+      } else if (strcmp(sub, "SET") == 0) {
+        if (nt < 4) {
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                      "Usage: BALANCE MIN_CMD SET <value>");
+          return true;
+        }
+        float v = atof(tok[3]);
+        abbot::balancer::controller::setMinCmd(v);
+        return true;
+      }
     }
   } else if (strcmp(arg, "MOTOR_GAINS") == 0) {
     if (nt < 3) {
@@ -1240,10 +1403,10 @@ static bool handleBalance(const String &line, const String &up) {
       return true;
     }
   }
-  LOG_PRINTLN(
+    LOG_PRINTLN(
       abbot::log::CHANNEL_DEFAULT,
       "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> "
-      "<kd>] | BALANCE RESET | BALANCE DEADBAND GET|SET|CALIBRATE | BALANCE MOTOR_GAINS GET|SET");
+      "<kd>] | BALANCE RESET | BALANCE DEADBAND GET|SET|CALIBRATE | BALANCE MOTOR_GAINS GET|SET | BALANCE MIN_CMD GET|SET");
   return true;
 }
 
@@ -1401,6 +1564,8 @@ static bool handleFilter(const String &line, const String &up) {
     if (!ok) {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: unknown filter");
     } else {
+      applyComplementaryParamsFromPrefs();
+      applyMadgwickParamFromPrefs();
       auto a = abbot::filter::getActiveFilter();
       if (a) {
         unsigned long ms = a->getWarmupDurationMs();
@@ -1416,35 +1581,62 @@ static bool handleFilter(const String &line, const String &up) {
     }
     return true;
   } else if (strcmp(cmd, "SET") == 0) {
-    // FILTER SET ALPHA <value>
+    // FILTER SET <PARAM> <value>
     if (nt < 4) {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                  "Usage: FILTER SET ALPHA <value>");
+                  "Usage: FILTER SET <ALPHA|KACC|KBIAS> <value>");
       return true;
     }
     char *param = tok[2];
-    if (strcmp(param, "ALPHA") == 0) {
-      char *valtok = tok[3];
-      float v = atof(valtok);
-      auto a = abbot::filter::getActiveFilter();
-      if (!a) {
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: no active filter");
-        return true;
-      }
-      bool ok = a->setParam("ALPHA", v);
-      if (ok) {
-        char out[128];
-        snprintf(out, sizeof(out), "FILTER: ALPHA set to %.6f", (double)v);
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
-      } else {
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                    "FILTER: active filter does not support ALPHA or value out "
-                    "of range");
-      }
+    char *valtok = tok[3];
+    float v = atof(valtok);
+    auto a = abbot::filter::getActiveFilter();
+    if (!a) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "FILTER: no active filter");
       return true;
     }
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                "FILTER SET usage: FILTER SET ALPHA <value>");
+    const char *pname = nullptr;
+    if (strcmp(param, "ALPHA") == 0) {
+      pname = "ALPHA";
+    } else if (strcmp(param, "KACC") == 0) {
+      pname = "KACC";
+    } else if (strcmp(param, "KBIAS") == 0) {
+      pname = "KBIAS";
+    } else if (strcmp(param, "BETA") == 0) {
+      pname = "BETA";
+    }
+    if (!pname) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "FILTER SET usage: FILTER SET <ALPHA|KACC|KBIAS> <value>");
+      return true;
+    }
+    bool ok = a->setParam(pname, v);
+    if (ok) {
+      char out[160];
+      snprintf(out, sizeof(out), "FILTER: %s set to %.6f", pname, (double)v);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+      Preferences pref;
+      if (pref.begin("abbot", false)) {
+        if (strcmp(pname, "KACC") == 0) {
+          pref.putFloat(kPrefComplementaryKacc, v);
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                      "FILTER: complementary param persisted to NVS");
+        } else if (strcmp(pname, "KBIAS") == 0) {
+          pref.putFloat(kPrefComplementaryKbias, v);
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                      "FILTER: complementary param persisted to NVS");
+        } else if (strcmp(pname, "BETA") == 0) {
+          pref.putFloat(kPrefMadgwickBeta, v);
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                      "FILTER: Madgwick beta persisted to NVS");
+        }
+        pref.end();
+      }
+    } else {
+      LOG_PRINTLN(
+          abbot::log::CHANNEL_DEFAULT,
+          "FILTER: active filter does not support parameter or value out of range");
+    }
     return true;
   }
   LOG_PRINTLN(

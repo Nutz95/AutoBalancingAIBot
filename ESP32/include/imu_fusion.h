@@ -24,6 +24,9 @@ public:
   // Initialize quaternion from accelerometer vector (ax,ay,az)
   // Accelerometer units are arbitrary; function will normalize internally.
   void setFromAccel(float ax, float ay, float az);
+  // Runtime tuning accessors
+  void setBeta(float b);
+  float getBeta() const;
 
 private:
   float q0_, q1_, q2_, q3_;

@@ -31,6 +31,7 @@ static bool g_active = false;
 static float g_last_cmd = 0.0f;
 static const float g_cmd_slew = BALANCER_CMD_SLEW_LIMIT;
 static float g_deadband = BALANCER_MOTOR_MIN_OUTPUT;
+static float g_min_cmd = BALANCER_MIN_CMD; // Valeur minimale configurable appliquée hors deadband
 static float g_pitch_trim_rad = 0.0f;
 static float g_calibrated_trim_rad = 0.0f;  // Calibrated trim from NVS (absolute 0° reference)
 static bool g_has_calibrated_trim = false;  // True if calibrated trim was loaded from NVS
@@ -42,6 +43,9 @@ static AutotuneController::Config g_autocfg; // configurable autotune params
 // Motor gain scaling (for asymmetric motor compensation)
 static float g_left_motor_gain = BALANCER_LEFT_MOTOR_GAIN;
 static float g_right_motor_gain = BALANCER_RIGHT_MOTOR_GAIN;
+// Latest IMU sample (robot frame)
+static float g_last_accel[3] = {0.0f, 0.0f, 0.0f};
+static float g_last_gyro[3] = {0.0f, 0.0f, 0.0f}; // rad/s
 
 // Encoder velocity tracking for balancer (read at PID loop rate)
 // Provides high-frequency velocity feedback for future cascaded control
@@ -118,14 +122,16 @@ void init() {
     g_pid.setGains(bp, bi, bd);
     // deadband remains global
     g_deadband = g_prefs.getFloat("db", g_deadband);
+    // Load persisted minimum command applied outside deadband
+    g_min_cmd = g_prefs.getFloat("min_cmd", g_min_cmd);
     // Load calibrated pitch trim from NVS (absolute 0° reference)
     g_calibrated_trim_rad = g_prefs.getFloat("trim_cal", 0.0f);
     g_has_calibrated_trim = g_prefs.getBool("trim_ok", false);
     char buf[128];
     snprintf(buf, sizeof(buf),
-             "BALANCER: controller initialized (Kp=%.4f Ki=%.4f Kd=%.4f "
-             "deadband=%.4f)",
-             (double)bp, (double)bi, (double)bd, (double)g_deadband);
+         "BALANCER: controller initialized (Kp=%.4f Ki=%.4f Kd=%.4f "
+         "deadband=%.4f min_cmd=%.4f)",
+         (double)bp, (double)bi, (double)bd, (double)g_deadband, (double)g_min_cmd);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
     if (g_has_calibrated_trim) {
       LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
@@ -139,10 +145,10 @@ void init() {
     g_prefs_started = false;
     char buf[128];
     snprintf(buf, sizeof(buf),
-             "BALANCER: controller initialized (defaults used) - Kp=%.4f "
-             "Ki=%.4f Kd=%.4f deadband=%.4f",
-             (double)BALANCER_DEFAULT_KP, (double)BALANCER_DEFAULT_KI,
-             (double)BALANCER_DEFAULT_KD, (double)g_deadband);
+         "BALANCER: controller initialized (defaults used) - Kp=%.4f "
+         "Ki=%.4f Kd=%.4f deadband=%.4f min_cmd=%.4f",
+         (double)BALANCER_DEFAULT_KP, (double)BALANCER_DEFAULT_KI,
+         (double)BALANCER_DEFAULT_KD, (double)g_deadband, (double)g_min_cmd);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
   }
 }
@@ -389,6 +395,33 @@ void calibrateDeadband() {
               "SET <v>' to store a value.");
 }
 
+// Setter/Getter pour min_cmd
+void setMinCmd(float min_cmd) {
+  g_min_cmd = min_cmd;
+  if (g_prefs_started) {
+    g_prefs.putFloat("min_cmd", g_min_cmd);
+  }
+  char buf[64];
+  snprintf(buf, sizeof(buf), "BALANCER: min_cmd set to %.6f (persisted=%s)",
+           (double)g_min_cmd, g_prefs_started ? "yes" : "no");
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+}
+
+float getMinCmd() { return g_min_cmd; }
+
+void setLatestImuSample(const float accel_robot[3], const float gyro_robot[3]) {
+  if (accel_robot) {
+    g_last_accel[0] = accel_robot[0];
+    g_last_accel[1] = accel_robot[1];
+    g_last_accel[2] = accel_robot[2];
+  }
+  if (gyro_robot) {
+    g_last_gyro[0] = gyro_robot[0];
+    g_last_gyro[1] = gyro_robot[1];
+    g_last_gyro[2] = gyro_robot[2];
+  }
+}
+
 // Helper: apply drive->pitch mapping with slew limiting and compute PID output
 // Returns the raw PID controller output (not yet slew/ deadband/clamped for
 // motor)
@@ -431,17 +464,17 @@ static float computePidWithDriveSetpoint(float fused_pitch_deg,
   // Rate-limited debug logging to avoid spamming serial
   static uint32_t last_dbg_ms = 0;
   uint32_t now_ms = millis();
-  if (now_ms - last_dbg_ms > 20) {
+  /*if (now_ms - last_dbg_ms > 20) {
     LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
-               "DRIVE DBG tgtV=%.3f filtV=%.3f pitch_sp=%.3fdeg "
+               "DRIVE DBG t=%lums tgtV=%.3f filtV=%.3f pitch_sp=%.3fdeg "
                "pitch_sp_rate=%.3fdeg/s pid_in=%.3fdeg pid_rate=%.3fdeg/s "
                "pid_out=%.3f\n",
-               (double)g_drive_target_v, (double)g_drive_v_filtered,
-               (double)pitch_sp_deg, (double)pitch_sp_rate_deg_s,
-               (double)pid_in_deg, (double)pid_rate_deg_s,
-               (double)pid_out);
+               (unsigned long)now_ms, (double)g_drive_target_v,
+               (double)g_drive_v_filtered, (double)pitch_sp_deg,
+               (double)pitch_sp_rate_deg_s, (double)pid_in_deg,
+               (double)pid_rate_deg_s, (double)pid_out);
     last_dbg_ms = now_ms;
-  }
+  }*/
 
   return pid_out;
 }
@@ -660,22 +693,38 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   uint32_t now_cmd_dbg_ms = millis();
   uint32_t log_interval = BALANCER_DEBUG_LOG_INTERVAL_MS;
   if (log_interval == 0 || (now_cmd_dbg_ms - last_cmd_dbg_ms >= log_interval)) {
+    float gx_dps = radToDeg(g_last_gyro[0]);
+    float gy_dps = radToDeg(g_last_gyro[1]);
+    float gz_dps = radToDeg(g_last_gyro[2]);
     LOG_PRINTF(
-        abbot::log::CHANNEL_BALANCER,
-        "BALANCER_DBG pitch=%.2fdeg pitch_rate=%.2fdeg/s pid_in=%.3fdeg "
-        "pid_out=%.3f cmd_pre_slew=%.3f cmd_after_slew=%.3f last_cmd=%.3f\n",
-        (double)radToDeg(fused_pitch), (double)radToDeg(fused_pitch_rate),
-        (double)pid_in_deg, (double)pid_out, (double)cmd_pre_slew,
-        (double)cmd, (double)g_last_cmd);
+      abbot::log::CHANNEL_BALANCER,
+      "BALANCER_DBG t=%lums pitch=%.2fdeg pitch_rate=%.2fdeg/s pid_in=%.3fdeg "
+      "pid_out=%.3f cmd_pre_slew=%.3f cmd_after_slew=%.3f last_cmd=%.3f "
+      "ax=%.3f ay=%.3f az=%.3f gx=%.3fdeg/s gy=%.3fdeg/s gz=%.3fdeg/s\n",
+      (unsigned long)now_cmd_dbg_ms, (double)radToDeg(fused_pitch),
+      (double)radToDeg(fused_pitch_rate), (double)pid_in_deg,
+      (double)pid_out, (double)cmd_pre_slew, (double)cmd,
+      (double)g_last_cmd, (double)g_last_accel[0], (double)g_last_accel[1],
+      (double)g_last_accel[2], (double)gx_dps, (double)gy_dps,
+      (double)gz_dps);
     last_cmd_dbg_ms = now_cmd_dbg_ms;
   }
-  // deadband: only apply when command is non-zero after slew
-  // If magnitude below threshold, zero it (allows smooth zero-crossing)
-  // BUT: skip deadband if last_cmd was zero (startup/recovery) to allow initial
-  // response
-  if (fabsf(g_last_cmd) > 0.001f && fabsf(cmd) < g_deadband) {
-    cmd = 0.0f;
+  // deadband: if command is small but non-zero, push to the edge instead of
+  // zeroing so motors overcome static friction. Skip if last_cmd was zero to
+  // avoid jolts at startup.
+  // Nouvelle logique : si |cmd| < deadband, appliquer min_cmd (signe correct),
+  // mais si |cmd| est très petit, alors cmd = 0
+  if (fabsf(cmd) < g_deadband) {
+    if (fabsf(cmd) < 1e-4f) {
+      cmd = 0.0f;
+    } else {
+      float sign = (cmd > 0.0f) ? 1.0f : -1.0f;
+      cmd = sign * ((fabsf(cmd) > g_min_cmd) ? fabsf(cmd) : g_min_cmd);
+    }
   }
+  // Charger min_cmd depuis les préférences au démarrage
+  // (à placer dans la fonction d'init appropriée, ex : balancerInit ou setup)
+  // g_min_cmd = g_prefs.getFloat("min_cmd", g_min_cmd);
   // if motors disabled, skip commanding but return computed value
   if (auto d = abbot::motor::getActiveMotorDriver()) {
     if (!d->areMotorsEnabled()) {

@@ -1,6 +1,10 @@
 // balancer_config.h
 // Default configuration for the balancer PID controller.
+// Minimum command applied when outside deadband (feedforward to overcome static friction)
 #pragma once
+#ifndef BALANCER_MIN_CMD
+#define BALANCER_MIN_CMD 0.09f
+#endif
 
 // Default PID gains (units: pitch in radians)
 // NOTE: These defaults are tuned for DIRECT VELOCITY control mode.
@@ -89,7 +93,7 @@
 // Set to 0 to disable throttling, 1 for max rate (1000 Hz), 500 for 2 Hz
 // For motor characterization scripts, use 1-2ms (500-1000 Hz)
 #ifndef BALANCER_DEBUG_LOG_INTERVAL_MS
-#define BALANCER_DEBUG_LOG_INTERVAL_MS 500
+#define BALANCER_DEBUG_LOG_INTERVAL_MS 1000
 #endif
 
 // Drive interface configuration

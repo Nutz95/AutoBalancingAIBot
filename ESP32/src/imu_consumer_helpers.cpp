@@ -1,5 +1,6 @@
 #include "imu_consumer_helpers.h"
 #include "SystemTasks.h" // For ENABLE_DEBUG_LOGS
+#include "../config/imu_filter_config.h"
 #include "../include/balancer_controller.h"
 #include "imu_calibration.h"
 #include "imu_mapping.h"
@@ -16,12 +17,12 @@ namespace imu_consumer {
 float computeDt(ConsumerState &state, const IMUSample &sample,
                 float sample_rate_hz) {
   float dt = 1.0f / sample_rate_hz;
-  if (state.last_sample_timestamp_ms != 0) {
-    unsigned long delta_ms = sample.ts_ms - state.last_sample_timestamp_ms;
-    if (delta_ms > 0)
-      dt = (float)delta_ms / 1000.0f;
+  if (state.last_sample_timestamp_us != 0) {
+    unsigned long delta_us = sample.ts_us - state.last_sample_timestamp_us;
+    if (delta_us > 0)
+      dt = (float)delta_us / 1000000.0f;
   }
-  state.last_sample_timestamp_ms = sample.ts_ms;
+  state.last_sample_timestamp_us = sample.ts_us;
   return dt;
 }
 
@@ -94,7 +95,7 @@ void updateBiasEmaAndPersistIfNeeded(ConsumerState &state,
   float ang_rate_mag =
       sqrtf(gyro_robot[0] * gyro_robot[0] + gyro_robot[1] * gyro_robot[1] +
             gyro_robot[2] * gyro_robot[2]);
-  bool gyro_stationary = ang_rate_mag < 0.1f;
+  bool gyro_stationary = ang_rate_mag < IMU_GYRO_STATIONARY_THRESHOLD_RAD_S;
   if (accel_stationary && gyro_stationary) {
     float gx = sample.gx;
     float gy = sample.gy;
@@ -174,9 +175,12 @@ void publishFusedOutputsUnderMutex(ConsumerState &state,
 
 void runBalancerCycleIfActive(float fused_pitch_local,
                               float fused_pitch_rate_local, float dt,
+                              const float accel_robot[3],
+                              const float gyro_robot[3],
                               float &left_cmd, float &right_cmd) {
   if (abbot::balancer::controller::isActive() ||
       abbot::balancer::controller::isAutotuning()) {
+    abbot::balancer::controller::setLatestImuSample(accel_robot, gyro_robot);
     (void)abbot::balancer::controller::processCycle(fused_pitch_local,
                                                     fused_pitch_rate_local, dt);
     if (auto drv = abbot::motor::getActiveMotorDriver()) {

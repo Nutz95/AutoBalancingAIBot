@@ -62,6 +62,7 @@ bool BMI088Driver::read(IMUSample &out) {
     return false;
   }
   out.ts_ms = millis();
+  out.ts_us = now_us;
   last_read_us_ = now_us;
   // apply calibration if available
   abbot::imu_cal::applyCalibrationToSample(out);
@@ -81,6 +82,7 @@ bool BMI088Driver::readRaw(IMUSample &out) {
   out.temp_C = imu_.getTemperature_C();
   out.time_ps = imu_.getTime_ps();
   out.ts_ms = millis();
+  out.ts_us = micros();
   return true;
 }
 

@@ -1,21 +1,25 @@
-#include "../../config/imu_filter_config.h"
-#include "imu_filter.h"
 #include <cmath>
 #include <cstring>
+
+#include "../../config/imu_filter_config.h"
+#include "imu_filter.h"
 
 namespace abbot {
 
 class ComplementaryFilter1D : public IMUFilter {
 public:
-  ComplementaryFilter1D() : alpha_(0.98f), angle_(0.0f), rate_(0.0f) {}
+  ComplementaryFilter1D()
+      : k_acc_(0.02f), k_bias_(0.01f), angle_(0.0f), rate_(0.0f),
+        bias_(0.0f) {
+  }
   void begin(const fusion::FusionConfig &cfg) override {
     (void)cfg;
-    angle_ = 0.0f;
-    rate_ = 0.0f;
+    reset();
   }
   void reset() override {
     angle_ = 0.0f;
     rate_ = 0.0f;
+    bias_ = 0.0f;
   }
   unsigned long getWarmupDurationMs() const override {
     return IMU_FILTER_WARMUP_MS_COMPLEMENTARY1D;
@@ -23,46 +27,85 @@ public:
   void update(float gx, float gy, float gz, float ax, float ay, float az,
               float dt) override {
     // Compute accel pitch (approx): assuming robot x axis forward
-    float accel_pitch = atan2f(-ax, sqrtf(ay * ay + az * az));
-    // integrate gyro (assume gyro x is pitch rate)
+    // Compute pitch using robot-frame X axis (positive when tilting forward)
+    float accel_pitch = atan2f(ax, sqrtf(ay * ay + az * az));
+    // integrate gyro (assume gyro x is pitch rate, aligned with accel sign)
     float gyro_rate = gx; // rad/s
-    angle_ = alpha_ * (angle_ + gyro_rate * dt) + (1.0f - alpha_) * accel_pitch;
-    rate_ = gyro_rate;
+
+    // Estimate gyro bias using accel-correction error (simple PI-like form)
+    float error = accel_pitch - angle_;
+    bias_ += k_bias_ * error * dt;
+
+    float gyro_unbiased = gyro_rate - bias_;
+    angle_ += gyro_unbiased * dt;
+    // Complementary accel correction
+    angle_ += k_acc_ * error;
+    rate_ = gyro_unbiased;
   }
-  float getPitch() override { return angle_; }
-  float getPitchRate() override { return rate_; }
-  // Parameter API: support ALPHA tuning at runtime
+  void setFromAccel(float ax, float ay, float az) override {
+    float accel_pitch = atan2f(ax, sqrtf(ay * ay + az * az));
+    angle_ = accel_pitch;
+    rate_ = 0.0f;
+    bias_ = 0.0f;
+  }
+  float getPitch() override {
+    return angle_;
+  }
+  float getPitchRate() override {
+    return rate_;
+  }
+  // Parameter API: support KACC (accel correction) and KBIAS (bias integrator)
   bool setParam(const char *name, float value) override {
-    if (!name)
+    if (!name) {
       return false;
-    // tokens passed from serial command are upper-case; compare directly
-    if (strcmp(name, "ALPHA") == 0) {
-      // constrain plausible range
-      if (value <= 0.0f)
+    }
+    if (strcmp(name, "KACC") == 0) {
+      if (value <= 0.0f) {
         return false;
-      if (value > 1.0f)
+      }
+      if (value > 1.0f) {
         value = 1.0f;
-      alpha_ = value;
+      }
+      k_acc_ = value;
+      return true;
+    }
+    if (strcmp(name, "KBIAS") == 0) {
+      if (value < 0.0f) {
+        return false;
+      }
+      if (value > 1.0f) {
+        value = 1.0f;
+      }
+      k_bias_ = value;
       return true;
     }
     return false;
   }
   bool getParam(const char *name, float &out) override {
-    if (!name)
+    if (!name) {
       return false;
-    if (strcmp(name, "ALPHA") == 0) {
-      out = alpha_;
+    }
+    if (strcmp(name, "KACC") == 0) {
+      out = k_acc_;
+      return true;
+    }
+    if (strcmp(name, "KBIAS") == 0) {
+      out = k_bias_;
       return true;
     }
     return false;
   }
 
 private:
-  float alpha_;
+  float k_acc_;
+  float k_bias_;
   float angle_;
   float rate_;
+  float bias_;
 };
 
-IMUFilter *createComplementaryFilter1D() { return new ComplementaryFilter1D(); }
+IMUFilter *createComplementaryFilter1D() {
+  return new ComplementaryFilter1D();
+}
 
 } // namespace abbot

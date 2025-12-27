@@ -25,6 +25,8 @@ void resetGainsToDefaults(); // Reset gains to compile-time defaults from
 void setDeadband(float db);
 float getDeadband();
 void calibrateDeadband();
+void setMinCmd(float min_cmd);
+float getMinCmd();
 // Called each IMU loop to compute (and optionally apply) motor command.
 // Arguments: fused_pitch_rad (radians), fused_pitch_rate_rads (radians/sec),
 // dt_s (seconds). Returns computed normalized command in [-1,1]. Note: Pitch
@@ -60,6 +62,10 @@ void getMotorGains(float &left_gain, float &right_gain);
 void calibrateTrim();   // Capture current pitch as calibrated trim, persist to NVS
 void showTrim();        // Display calibrated and dynamic trim values
 void resetTrim();       // Clear calibrated trim (reverts to dynamic capture)
+
+// Provide latest IMU sample (robot frame) for logging/diagnostics.
+// accel in m/s^2, gyro in rad/s.
+void setLatestImuSample(const float accel_robot[3], const float gyro_robot[3]);
 } // namespace controller
 
 } // namespace balancer

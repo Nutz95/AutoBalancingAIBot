@@ -90,6 +90,7 @@ void begin() {
     // Ensure WiFi subsystem is in station mode before starting network
     // operations
     WiFi.mode(WIFI_STA);
+    // WiFi.setSleep(false); // Disable WiFi power save to prevent timing jitter
     WiFi.begin(s_ssid.c_str(), s_pass.c_str());
     // Non-blocking: we'll poll in loop() for connection; start server once
     // connected

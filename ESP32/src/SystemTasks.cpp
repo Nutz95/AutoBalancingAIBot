@@ -58,6 +58,10 @@ static abbot::imu_consumer::ConsumerState g_consumer;
 static Preferences g_prefs;
 static bool g_prefs_started = false;
 
+// Complementary filter parameter keys (NVS)
+static constexpr const char *kPrefComplementaryKacc = "c1d_kacc";
+static constexpr const char *kPrefComplementaryKbias = "c1d_kbias";
+
 // Default warmup duration in seconds to seed Madgwick and gyro bias on power-up
 static constexpr float kDefaultFusionWarmupSeconds = 4.0f;
 
@@ -79,15 +83,53 @@ static void printWarmupProgressIfAny() {
   }
 }
 
+static void applyComplementaryParamsFromPrefs(Preferences &prefs,
+                                              const std::shared_ptr<IMUFilter> &filter) {
+  if (!filter) {
+    return;
+  }
+  const char *fname = abbot::filter::getCurrentFilterName();
+  if (!fname || strcmp(fname, "COMPLEMENTARY1D") != 0) {
+    return;
+  }
+  bool applied = false;
+  float val = 0.0f;
+  if (prefs.isKey(kPrefComplementaryKacc)) {
+    val = prefs.getFloat(kPrefComplementaryKacc, 0.02f);
+    filter->setParam("KACC", val);
+    applied = true;
+  }
+  if (prefs.isKey(kPrefComplementaryKbias)) {
+    val = prefs.getFloat(kPrefComplementaryKbias, 0.01f);
+    filter->setParam("KBIAS", val);
+    applied = true;
+  }
+  if (applied) {
+    float kacc = prefs.getFloat(kPrefComplementaryKacc, 0.0f);
+    float kbias = prefs.getFloat(kPrefComplementaryKbias, 0.0f);
+    char msg[180];
+    snprintf(msg, sizeof(msg),
+             "FILTER: restored complementary params from NVS (KACC=%.4f KBIAS=%.4f)",
+             (double)kacc, (double)kbias);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
+  }
+}
+
 static void imuProducerTask(void *pvParameters) {
   BMI088Driver *driver = reinterpret_cast<BMI088Driver *>(pvParameters);
   IMUSample sample;
+  static uint32_t drop_count = 0;
+  static uint32_t last_drop_log = 0;
+
   for (;;) {
     // Attempt to read; BMI088Driver::read will enforce sampling interval
     if (driver->read(sample)) {
-      // Single-slot overwrite keeps only the latest sample
+      // Push to queue (non-blocking). If full, we drop the sample (better than blocking).
+      // With size 10, this handles jitter.
       if (imuQueue) {
-        xQueueOverwrite(imuQueue, &sample);
+        if (xQueueSend(imuQueue, &sample, 0) != pdTRUE) {
+          drop_count++;
+        }
       }
       // If a calibration queue is attached, push sample there as well
       // (non-blocking)
@@ -95,6 +137,17 @@ static void imuProducerTask(void *pvParameters) {
         xQueueOverwrite(calibQueue, &sample);
       }
     }
+
+    // Log drops periodically
+    uint32_t now = millis();
+    if (drop_count > 0 && (now - last_drop_log > 5000)) {
+      char buf[64];
+      snprintf(buf, sizeof(buf), "IMU: dropped %lu samples (queue full)", (unsigned long)drop_count);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+      drop_count = 0;
+      last_drop_log = now;
+    }
+
     // Use 1 tick delay (~1ms) to yield CPU and prevent busy-loop.
     // This achieves ~333Hz effective rate (limited by tick granularity),
     // which is sufficient for control. The driver throttles reads to the
@@ -206,7 +259,8 @@ static void imuConsumerTask(void *pvParameters) {
 
     // Run balancer control cycle if active
     abbot::imu_consumer::runBalancerCycleIfActive(
-        fused_pitch_local, fused_pitch_rate_local, dt, left_cmd, right_cmd);
+      fused_pitch_local, fused_pitch_rate_local, dt, accel_robot,
+      gyro_robot, left_cmd, right_cmd);
 
     // Emit tuning stream or capture outputs
     abbot::imu_consumer::emitTuningOrStream(
@@ -230,7 +284,7 @@ bool startIMUTasks(BMI088Driver *driver) {
   }
   g_driver = driver;
   if (!imuQueue) {
-    imuQueue = xQueueCreate(1, sizeof(IMUSample));
+    imuQueue = xQueueCreate(50, sizeof(IMUSample));
     if (!imuQueue) {
       return false;
     }
@@ -287,11 +341,12 @@ bool startIMUTasks(BMI088Driver *driver) {
                                                                 g_prefs);
     // If a filter preference was stored, apply it now (overrides the default)
     if (g_prefs.isKey("filter")) {
-      String fn = g_prefs.getString("filter", "MADGWICK");
+      String fn = g_prefs.getString("filter", "COMPLEMENTARY1D");
       if (fn.length() > 0) {
         abbot::filter::setCurrentFilterByName(fn.c_str());
         // Request filter-specific warmup if provided
         auto a = abbot::filter::getActiveFilter();
+        applyComplementaryParamsFromPrefs(g_prefs, a);
         if (a) {
           unsigned long ms = a->getWarmupDurationMs();
           if (ms > 0) {
@@ -306,6 +361,10 @@ bool startIMUTasks(BMI088Driver *driver) {
           }
         }
       }
+    }
+    // If no filter key was stored, still attempt to restore complementary params
+    if (!g_prefs.isKey("filter")) {
+      applyComplementaryParamsFromPrefs(g_prefs, abbot::filter::getActiveFilter());
     }
   }
 
@@ -345,12 +404,12 @@ bool startIMUTasks(BMI088Driver *driver) {
     requestTuningWarmupSeconds(kDefaultFusionWarmupSeconds);
   }
 
-  // Create producer task (higher priority)
-  BaseType_t r1 = xTaskCreate(imuProducerTask, "IMUProducer", 4096, driver,
-                              configMAX_PRIORITIES - 2, nullptr);
-  // Create consumer task (lower priority)
-  BaseType_t r2 = xTaskCreate(imuConsumerTask, "IMUConsumer", 4096, nullptr,
-                              configMAX_PRIORITIES - 3, nullptr);
+  // Create producer task (higher priority) - Pinned to Core 1 (APP_CPU)
+  BaseType_t r1 = xTaskCreatePinnedToCore(imuProducerTask, "IMUProducer", 4096, driver,
+                              configMAX_PRIORITIES - 2, nullptr, 1);
+  // Create consumer task (lower priority) - Pinned to Core 1 (APP_CPU)
+  BaseType_t r2 = xTaskCreatePinnedToCore(imuConsumerTask, "IMUConsumer", 4096, nullptr,
+                              configMAX_PRIORITIES - 3, nullptr, 1);
 
   // Create serial command task for calibration UI (low priority)
   BaseType_t r3 = xTaskCreate(abbot::serialcmds::serialTaskEntry, "IMUSerial",
@@ -361,8 +420,9 @@ bool startIMUTasks(BMI088Driver *driver) {
   // with IMU timing.
   // Wi‑Fi console uses moderate stack (WiFi library + small buffers). Allocate
   // more stack to avoid watchpoint / canary failures on some chips.
-  BaseType_t r4 = xTaskCreate(wifiConsoleTask, "WiFiConsole", 8192, nullptr,
-                              configMAX_PRIORITIES - 5, nullptr);
+  // Pinned to Core 0 (PRO_CPU) to separate from control loop
+  BaseType_t r4 = xTaskCreatePinnedToCore(wifiConsoleTask, "WiFiConsole", 8192, nullptr,
+                              configMAX_PRIORITIES - 5, nullptr, 0);
 
   return (r1 == pdPASS) && (r2 == pdPASS) && (r3 == pdPASS) && (r4 == pdPASS);
 }

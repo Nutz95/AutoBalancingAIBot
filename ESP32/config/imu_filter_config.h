@@ -1,6 +1,6 @@
 // Choose IMU filter implementation at compile-time.
 // Define exactly one of the following before building.
-// Default: MADGWICK
+// Default runtime selection: COMPLEMENTARY1D
 #pragma once
 
 // Available options: IMU_FILTER_MADGWICK, IMU_FILTER_COMPLEMENTARY, IMU_FILTER_KALMAN1D
@@ -20,4 +20,11 @@
 #endif
 #ifndef IMU_FILTER_WARMUP_MS_COMPLEMENTARY1D
 #define IMU_FILTER_WARMUP_MS_COMPLEMENTARY1D 500ul
+#endif
+
+// Threshold for zero-motion detection (rad/s) used for continuous gyro bias update.
+// Lower values make the update stricter (robot must be very still).
+// 0.02 rad/s ~= 1.15 deg/s
+#ifndef IMU_GYRO_STATIONARY_THRESHOLD_RAD_S
+#define IMU_GYRO_STATIONARY_THRESHOLD_RAD_S 0.02f
 #endif

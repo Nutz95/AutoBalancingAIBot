@@ -15,6 +15,7 @@ struct IMUSample {
   float temp_C;        // sensor temperature Celsius (from accel temp register)
   uint64_t time_ps;    // sensor timestamp in picoseconds (if available)
   unsigned long ts_ms; // host timestamp (millis)
+  unsigned long ts_us; // host timestamp (micros)
 };
 
 // BMI088Driver: thin wrapper around the Bmi088 sensor library.

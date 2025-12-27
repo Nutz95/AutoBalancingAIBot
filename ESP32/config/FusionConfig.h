@@ -9,8 +9,7 @@ struct FusionConfig {
     // Lower value (0.01-0.05) = trust gyro more, smoother but may drift slowly
     // Higher value (0.1-0.3) = trust accel more, corrects drift but noisier
     // For balancing robot with motor vibrations, use 0.033 (standard Madgwick)
-    // Higher values (0.079) caused filter divergence with uncalibrated accel
-    float beta = 0.033f;
+    float beta = 0.021909f;
     float sample_rate = 400.0f; // Hz (target sample rate, synchronized with BMI088Config)
     // Axis mapping: allow remapping/inversion of sensor axes into the robot
     // coordinate frame used by the fusion/filter. This makes it easy to

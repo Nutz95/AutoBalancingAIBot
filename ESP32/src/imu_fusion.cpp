@@ -183,3 +183,7 @@ float Madgwick::getRoll() const {
 }
 
 float Madgwick::getPitchRate() const { return last_pitch_rate_; }
+
+void Madgwick::setBeta(float b) { beta_ = b; }
+
+float Madgwick::getBeta() const { return beta_; }

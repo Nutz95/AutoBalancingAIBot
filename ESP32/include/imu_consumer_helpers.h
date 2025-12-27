@@ -23,7 +23,7 @@ struct ImuFrequencyMeasurement {
 // Mutable state used by the consumer helpers. Designed to be passed by
 // reference so helpers do not directly depend on SystemTasks globals.
 struct ConsumerState {
-  uint32_t last_sample_timestamp_ms = 0;
+  unsigned long last_sample_timestamp_us = 0;
   // warmup counters and accumulators
   uint32_t warmup_samples_remaining = 0;
   uint32_t warmup_samples_total = 0;
@@ -76,9 +76,12 @@ void publishFusedOutputsUnderMutex(ConsumerState &state,
                                    float &out_fused_pitch_rate_rads,
                                    SemaphoreHandle_t *fusion_mutex);
 
-// Run balancer cycle (calls controller) and refresh last motor commands
+// Run balancer cycle (calls controller) and refresh last motor commands.
+// Pass accel/gyro in robot frame (m/s^2, rad/s) for logging.
 void runBalancerCycleIfActive(float fused_pitch_local,
                               float fused_pitch_rate_local, float dt,
+                              const float accel_robot[3],
+                              const float gyro_robot[3],
                               float &left_cmd, float &right_cmd);
 
 // Emit tuning/capture output (CSV or capture submit)

@@ -31,7 +31,7 @@ static Entry s_entries[] = {
 };
 
 static std::shared_ptr<IMUFilter> s_active;
-static char s_current_name[32] = "MADGWICK";
+static char s_current_name[32] = "COMPLEMENTARY1D";
 static fusion::FusionConfig s_cfg;
 
 void init(const fusion::FusionConfig &cfg) {
@@ -40,8 +40,9 @@ void init(const fusion::FusionConfig &cfg) {
   // create default filter (MADGWICK)
   // construct and initialize a new shared_ptr, then atomically publish it
   std::shared_ptr<IMUFilter> f(createMadgwickFilter());
-  if (f)
+  if (f) {
     f->begin(s_cfg);
+  }
   std::atomic_store(&s_active, f);
   strncpy(s_current_name, "MADGWICK", sizeof(s_current_name) - 1);
   s_current_name[sizeof(s_current_name) - 1] = '\0';

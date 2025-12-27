@@ -1,6 +1,7 @@
 #include "../../config/imu_filter_config.h"
 #include "imu_filter.h"
 #include "imu_fusion.h"
+#include <cstring>
 
 namespace abbot {
 
@@ -24,6 +25,24 @@ public:
   float getPitchRate() override { return madgwick_.getPitchRate(); }
   void getQuaternion(float &w, float &x, float &y, float &z) override {
     madgwick_.getQuaternion(w, x, y, z);
+  }
+
+  bool setParam(const char *name, float value) override {
+    if (!name) return false;
+    if (strcmp(name, "BETA") == 0) {
+      madgwick_.setBeta(value);
+      return true;
+    }
+    return false;
+  }
+
+  bool getParam(const char *name, float &out) override {
+    if (!name) return false;
+    if (strcmp(name, "BETA") == 0) {
+      out = madgwick_.getBeta();
+      return true;
+    }
+    return false;
   }
 
 private:
