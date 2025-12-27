@@ -297,7 +297,9 @@ void disableMotors() {
 #endif
 }
 
-bool areMotorsEnabled() { return s_motors_enabled; }
+bool areMotorsEnabled() {
+  return s_motors_enabled;
+}
 
 void printStatus() {
   LOG_PRINT(abbot::log::CHANNEL_MOTOR, "motor_driver: status enabled=");
@@ -408,11 +410,17 @@ void setMotorCommandRaw(int id, int16_t rawSpeed) {
         "motor_driver: REAL raw set called but servo bus not initialized");
     return;
   }
-  // Send raw velocity command directly
-  int rc = s_servoBus.WriteSpe((uint8_t)id, (s16)rawSpeed, 0);
+  // Send raw velocity command directly (respecting inversion)
+  int16_t speed = rawSpeed;
+  if (id == LEFT_MOTOR_ID && LEFT_MOTOR_INVERT) {
+    speed = -speed;
+  } else if (id == RIGHT_MOTOR_ID && RIGHT_MOTOR_INVERT) {
+    speed = -speed;
+  }
+  int rc = s_servoBus.WriteSpe((uint8_t)id, (s16)speed, 0);
   LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-             "motor_driver: REAL set (RAW) id=%d raw=%d rc=%d\n", id, rawSpeed,
-             rc);
+             "motor_driver: REAL set (RAW) id=%d raw=%d (sent=%d) rc=%d\n", id, rawSpeed,
+             speed, rc);
 #else
   (void)rawSpeed;
   LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
@@ -430,12 +438,19 @@ int32_t readEncoder(int id) {
     return 0;
   }
   // Return accumulated position (with unwrap)
+  int32_t logicalPosition = 0;
   if (id == LEFT_MOTOR_ID) {
-    return (int32_t)s_accumulated_pos_left;
+    logicalPosition = (int32_t)s_accumulated_pos_left;
+    if (LEFT_MOTOR_INVERT) {
+      logicalPosition = -logicalPosition;
+    }
   } else if (id == RIGHT_MOTOR_ID) {
-    return (int32_t)s_accumulated_pos_right;
+    logicalPosition = (int32_t)s_accumulated_pos_right;
+    if (RIGHT_MOTOR_INVERT) {
+      logicalPosition = -logicalPosition;
+    }
   }
-  return 0;
+  return logicalPosition;
 #else
   (void)id;
   return 0;
@@ -695,13 +710,10 @@ bool processSerialCommand(const String &line) {
       return true;
     }
     int id = -1;
-    bool invert = false;
     if (strcmp(arg, "LEFT") == 0) {
       id = LEFT_MOTOR_ID;
-      invert = LEFT_MOTOR_INVERT;
     } else if (strcmp(arg, "RIGHT") == 0) {
       id = RIGHT_MOTOR_ID;
-      invert = RIGHT_MOTOR_INVERT;
     } else {
       id = atoi(arg);
     }
@@ -713,34 +725,14 @@ bool processSerialCommand(const String &line) {
       return true;
     }
     int16_t speed = (int16_t)atoi(v);
-    if (invert)
-      speed = -speed;
-#if MOTOR_DRIVER_REAL
-    if (!s_motors_enabled) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
-                  "motor_driver: motors not enabled");
-      return true;
-    }
-    if (!s_servoInitialized) {
-      LOG_PRINTLN(abbot::log::CHANNEL_MOTOR,
-                  "motor_driver: servo bus not initialized");
-      return true;
-    }
-    int rc = s_servoBus.WriteSpe((uint8_t)id, speed, 0);
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-               "motor_driver: VEL id=%d speed=%d (invert=%d) rc=%d\n", id,
-               speed, invert, rc);
-
+    setMotorCommandRaw(id, speed);
+    
     // Immediately attempt to update the firmware-side accumulated encoder so
     // that subsequent "MOTOR READ" calls reflect recent motion even when the
     // command was issued via the direct VEL console path.
     // A small inter-command delay helps the servo update its registers first.
     delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
     (void)readAndUpdateEncoder(id);
-#else
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-               "motor_driver: STUB VEL id=%d speed=%d\n", id, speed);
-#endif
     return true;
   }
 

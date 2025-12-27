@@ -109,16 +109,6 @@
 #define DRIVE_MAX_PITCH_DEG 3.0f
 #endif
 
-// Motor command inversion for balancer (set to 1 if motor is mounted in mirror)
-// LEFT motor: 0 = normal, 1 = invert command sign
-// RIGHT motor: 0 = normal, 1 = invert command sign
-#ifndef BALANCER_LEFT_MOTOR_INVERT
-#define BALANCER_LEFT_MOTOR_INVERT 0
-#endif
-#ifndef BALANCER_RIGHT_MOTOR_INVERT
-#define BALANCER_RIGHT_MOTOR_INVERT 1
-#endif
-
 // Motor command gain scaling factors (to compensate for asymmetric motor response)
 // Initialized from motor characterization ratios if available, else 1.0
 // Use 1.0 for both if motors are matched. Adjust to balance robot behavior:

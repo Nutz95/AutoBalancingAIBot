@@ -9,35 +9,149 @@ namespace motor {
 
 class DCMirrorDriver : public AbstractMotorDriver {
 public:
+  /**
+   * @brief Construct a new DCMirrorDriver object.
+   */
   DCMirrorDriver();
+
+  /**
+   * @brief Destroy the DCMirrorDriver object.
+   */
   virtual ~DCMirrorDriver() {}
+
+  /**
+   * @brief Initialize the DC motor driver hardware and state.
+   */
   void initMotorDriver() override;
+
+  /**
+   * @brief Clear internal command and target state.
+   */
   void clearCommandState() override;
+
+  /**
+   * @brief Get the last normalized command sent to a motor.
+   * @param side Motor side to query.
+   * @return float Normalized command [-1.0..1.0].
+   */
   float getLastMotorCommand(MotorSide side) override;
+
+  /**
+   * @brief Enable torque/power to the motors.
+   */
   void enableMotors() override;
+
+  /**
+   * @brief Disable torque/power to the motors (safe state).
+   */
   void disableMotors() override;
+
+  /**
+   * @brief Check if motors are currently enabled.
+   * @return true if enabled, false otherwise.
+   */
   bool areMotorsEnabled() override;
+
+  /**
+   * @brief Print driver status to the log.
+   */
   void printStatus() override;
+
+  /**
+   * @brief Dump detailed driver configuration to the log.
+   */
   void dumpConfig() override;
+
+  /**
+   * @brief Set normalized commands for both motors simultaneously.
+   * @param left_command Normalized command for left motor [-1.0..1.0].
+   * @param right_command Normalized command for right motor [-1.0..1.0].
+   */
   void setMotorCommandBoth(float left_command, float right_command) override;
+
+  /**
+   * @brief Set normalized command for a single motor.
+   * @param side Motor side to command.
+   * @param command Normalized command [-1.0..1.0].
+   */
   void setMotorCommand(MotorSide side, float command) override;
+
+  /**
+   * @brief Set raw speed command for a single motor.
+   * @param side Motor side to command.
+   * @param rawSpeed Raw speed units.
+   */
   void setMotorCommandRaw(MotorSide side, int16_t rawSpeed) override;
+
+  /**
+   * @brief Read the current logical encoder position for a side.
+   * @param side Motor side to query.
+   * @return int32_t Logical position (respects inversion).
+   */
   int32_t readEncoder(MotorSide side) override;
+
+  /**
+   * @brief Reset encoder position tracking to zero.
+   */
   void resetPositionTracking() override;
+
+  /**
+   * @brief Process a driver-specific serial command.
+   * @param line The command line string.
+   * @return true if the command was handled, false otherwise.
+   */
   bool processSerialCommand(const String &line) override;
 
-  // Configuration/query API (implements the IMotorDriver queries)
+  /**
+   * @brief Get the hardware ID for a motor side.
+   * @param side Motor side to query.
+   * @return int Hardware ID.
+   */
   int getMotorId(MotorSide side) const override;
+
+  /**
+   * @brief Check if a motor side is physically inverted.
+   * @param side Motor side to query.
+   * @return true if inverted, false otherwise.
+   */
   bool isMotorInverted(MotorSide side) const override;
+
+  /**
+   * @brief Get the maximum speed in raw units.
+   * @return float Max speed.
+   */
   float getVelocityMaxSpeed() const override;
+
+  /**
+   * @brief Get the scale factor for target increments.
+   * @return float Increment scale.
+   */
   float getVelocityTargetIncrementScale() const override;
+
+  /**
+   * @brief Get the position loop proportional gain (if applicable).
+   * @return float Kp value.
+   */
   float getVelocityPositionKp() const override;
+
+  /**
+   * @brief Get the descriptive name of the driver.
+   * @return const char* Driver name.
+   */
   const char *getDriverName() const override;
-  // Provide a filtered speed estimate in counts/sec for the requested side
+
+  /**
+   * @brief Provide a filtered speed estimate in counts/sec.
+   * @param side Motor side to query.
+   * @return float Speed in counts/sec.
+   */
   float readSpeed(MotorSide side) override;
-  // Reset internal speed estimator state
+
+  /**
+   * @brief Reset internal speed estimator state.
+   */
   void resetSpeedEstimator() override;
-  // Return timestamp (microseconds) when last command was applied for the side
+
   /**
    * @brief Return timestamp (microseconds) when the last command was applied.
    *

@@ -123,6 +123,36 @@ Procedure example:
 5. Send `CALIB DUMP` to confirm the saved values.
 6. Reboot and verify calibration is loaded automatically.
 
+## Serial Command System & Interactive Menu
+
+The robot features a modular command system accessible via the Serial Monitor (115200 baud) or the WiFi Web Console.
+
+### Interactive Menu
+Type `HELP` or `?` to enter the interactive menu. You can navigate using numbers:
+1.  **WIFI**: Configure SSID, password, and check connection status.
+2.  **MOTOR**: Manual motor control, encoder testing, and telemetry.
+3.  **BALANCE**: Start/Stop the balancer, tune PID gains, and adjust trim.
+4.  **AUTOTUNE**: Run the automated PID tuning process.
+5.  **CALIB**: IMU calibration (Gyro/Accel).
+6.  **FILTER**: Select IMU fusion filter (Complementary, Kalman, Madgwick).
+7.  **TUNING**: Real-time data streaming for analysis.
+8.  **LOG**: Enable/disable debug log channels.
+9.  **FUSION**: IMU fusion diagnostics.
+10. **SYS**: System info (Heap, Tasks) and Reboot.
+
+### Direct Commands
+You can also send commands directly without entering the menu:
+- `MOTOR SET LEFT 0.5` - Set left motor to 50% speed.
+- `BALANCE START` - Start the balancing controller.
+- `LOG ENABLE TUNING` - Enable high-frequency tuning data.
+- `SYS REBOOT` - Restart the ESP32.
+
+## Motor Direction & Inversion
+
+Motor directions are configured in `config/motor_configs/servo_motor_config.h`. 
+- `LEFT_MOTOR_INVERT` and `RIGHT_MOTOR_INVERT` should be set so that a positive manual command (e.g., `MOTOR SET LEFT 0.5`) moves the robot **forward**.
+- The balancer logic sends raw commands where positive values move the robot forward. If the manual commands are correct, the balancer will work correctly.
+
 ## Motor driver (SCServo)
 
 This project includes a minimal motor driver integrating with the `SCServo`/STS family of servos.

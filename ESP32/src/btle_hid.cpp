@@ -81,15 +81,15 @@ static void handleControllerButtons(const uint8_t *pData, size_t length) {
     if (wasPressed && !currentButton) {
       if (abbot::balancer::controller::isActive()) {
         abbot::balancer::controller::stop();
-        if (auto d = abbot::motor::getActiveMotorDriver()) {
-          d->disableMotors();
+        if (auto driver = abbot::motor::getActiveMotorDriver()) {
+          driver->disableMotors();
         }
         LOG_PRINTLN(abbot::log::CHANNEL_BLE,
                     ">>> BALANCE STOP (controller button)");
       } else {
-        if (auto d = abbot::motor::getActiveMotorDriver()) {
-          if (!d->areMotorsEnabled()) {
-            d->enableMotors();
+        if (auto driver = abbot::motor::getActiveMotorDriver()) {
+          if (!driver->areMotorsEnabled()) {
+            driver->enableMotors();
           }
         }
         abbot::balancer::controller::start(abbot::getFusedPitch());

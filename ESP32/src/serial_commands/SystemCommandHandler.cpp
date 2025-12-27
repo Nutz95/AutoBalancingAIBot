@@ -14,11 +14,14 @@ bool SystemCommandHandler::handleCommand(const String& line, const String& lineU
     }
     if (lineUpper == "HEAP") {
         LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "Free heap: ");
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, String(ESP.getFreeHeap()));
+        LOG_PRINT(abbot::log::CHANNEL_DEFAULT, String(ESP.getFreeHeap()));
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, " bytes");
         return true;
     }
     if (lineUpper == "TASKS") {
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Task List (vTaskList disabled in sdkconfig)");
+        LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "Number of tasks: ");
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, String(uxTaskGetNumberOfTasks()));
         /*
         char buffer[1024];
         vTaskList(buffer);
@@ -37,10 +40,13 @@ SerialMenu* SystemCommandHandler::buildMenu() {
         m_menu->addEntry(id++, "Reboot", [](const String&) { ESP.restart(); });
         m_menu->addEntry(id++, "Show Heap", [](const String&) {
             LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "Free heap: ");
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, String(ESP.getFreeHeap()));
+            LOG_PRINT(abbot::log::CHANNEL_DEFAULT, String(ESP.getFreeHeap()));
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, " bytes");
         });
         m_menu->addEntry(id++, "Show Tasks", [](const String&) {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Task List (vTaskList disabled in sdkconfig)");
+            LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "Number of tasks: ");
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, String(uxTaskGetNumberOfTasks()));
             /*
             char buffer[1024];
             vTaskList(buffer);

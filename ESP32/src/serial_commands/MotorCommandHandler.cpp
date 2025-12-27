@@ -11,51 +11,51 @@ MotorCommandHandler::MotorCommandHandler(IMotorService* motorService)
     m_menu.reset(new SerialMenu("Motor Commands"));
     
     m_menu->addEntry(1, "MOTOR ENABLE", [this](const String &) {
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->enableMotors();
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->enableMotors();
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
     m_menu->addEntry(2, "MOTOR DISABLE", [this](const String &) {
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->disableMotors();
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->disableMotors();
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
     m_menu->addEntry(3, "MOTOR STATUS", [this](const String &) {
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->printStatus();
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->printStatus();
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
     m_menu->addEntry(4, "MOTOR DUMP", [this](const String &) {
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->dumpConfig();
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->dumpConfig();
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
     m_menu->addEntry(5, "MOTOR RESETPOS", [this](const String &) {
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->resetPositionTracking();
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->resetPositionTracking();
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
     m_menu->addEntry(6, "MOTOR POS", [this](const String &) {
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->processSerialCommand("POS");
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->processSerialCommand("POS");
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
     m_menu->addEntry(7, "MOTOR VEL <LEFT|RIGHT> <speed>", [this](const String &p) {
         String cmd = "VEL " + p;
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->processSerialCommand(cmd);
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->processSerialCommand(cmd);
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
@@ -64,24 +64,24 @@ MotorCommandHandler::MotorCommandHandler(IMotorService* motorService)
                 [this](const String &p) { this->motorSetHandler(p); });
     m_menu->addEntry(9, "MOTOR PARAMS <LEFT|RIGHT>", [this](const String &p) {
         String cmd = "PARAMS " + p;
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->processSerialCommand(cmd);
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->processSerialCommand(cmd);
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
     m_menu->addEntry(10, "MOTOR ACC <LEFT|RIGHT> <value>", [this](const String &p) {
         String cmd = "ACC " + p;
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->processSerialCommand(cmd);
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->processSerialCommand(cmd);
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
     m_menu->addEntry(11, "MOTOR INVERT <LEFT|RIGHT|ID> [0|1]", [this](const String &p) {
         String cmd = "INVERT " + p;
-        if (auto d = m_motorService->getActiveDriver()) {
-            d->processSerialCommand(cmd);
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->processSerialCommand(cmd);
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
@@ -120,12 +120,15 @@ MotorCommandHandler::MotorCommandHandler(IMotorService* motorService)
                        rep.leftId, (double)lsp, rep.rightId, (double)rsp);
         } else {
             float s = 0;
-            if (rep.requestedId == rep.leftId) s = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::LEFT);
-            else if (rep.requestedId == rep.rightId) s = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::RIGHT);
-            else {
+            if (rep.requestedId == rep.leftId) {
+                s = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::LEFT);
+            } else if (rep.requestedId == rep.rightId) {
+                s = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+            } else {
                 abbot::motor::IMotorDriver::MotorSide side;
-                if (abbot::motor::getSideForId(rep.requestedId, side)) s = drv->readSpeed(side);
-                else {
+                if (abbot::motor::getSideForId(rep.requestedId, side)) {
+                    s = drv->readSpeed(side);
+                } else {
                     LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "MOTOR: speed id=%d unknown\n", rep.requestedId);
                     return;
                 }
@@ -143,16 +146,22 @@ bool MotorCommandHandler::handleCommand(const String& line, const String& lineUp
         return false;
     }
 
-    if (handleMotorGetEncoder(line, lineUpper)) return true;
-    if (handleMotorTelemetry(line, lineUpper)) return true;
+    if (handleMotorGetEncoder(line, lineUpper)) {
+        return true;
+    }
+    if (handleMotorTelemetry(line, lineUpper)) {
+        return true;
+    }
 
     // Fallback for other MOTOR commands that might be handled by the driver directly
-    if (auto d = m_motorService->getActiveDriver()) {
+    if (auto driver = m_motorService->getActiveDriver()) {
         int spaceIdx = lineUpper.indexOf(' ');
         if (spaceIdx != -1) {
             String subCmd = line.substring(spaceIdx + 1);
             subCmd.trim();
-            if (d->processSerialCommand(subCmd)) return true;
+            if (driver->processSerialCommand(subCmd)) {
+                return true;
+            }
         }
     }
 
@@ -175,29 +184,32 @@ void MotorCommandHandler::motorSetHandler(const String &p) {
   String val = s.substring(sp + 1);
   side.toUpperCase();
   
-  auto d = m_motorService->getActiveDriver();
-  if (!d) {
+  auto driver = m_motorService->getActiveDriver();
+  if (!driver) {
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
     return;
   }
 
   if (side == "LEFT") {
-    d->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT, val.toFloat());
+    driver->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT, val.toFloat());
   } else if (side == "RIGHT") {
-    d->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT, val.toFloat());
+    driver->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT, val.toFloat());
   } else {
     int id = side.toInt();
-    if (id == LEFT_MOTOR_ID)
-      d->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::LEFT, (int16_t)val.toInt());
-    else if (id == RIGHT_MOTOR_ID)
-      d->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::RIGHT, (int16_t)val.toInt());
-    else
+    if (id == LEFT_MOTOR_ID) {
+      driver->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::LEFT, (int16_t)val.toInt());
+    } else if (id == RIGHT_MOTOR_ID) {
+      driver->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::RIGHT, (int16_t)val.toInt());
+    } else {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Unknown motor id");
+    }
   }
 }
 
 bool MotorCommandHandler::handleMotorGetEncoder(const String &line, const String &up) {
-  if (!up.startsWith("MOTOR GET ENCODER")) return false;
+  if (!up.startsWith("MOTOR GET ENCODER")) {
+    return false;
+  }
   
   String arg = line.substring(17);
   arg.trim();
@@ -219,7 +231,9 @@ bool MotorCommandHandler::handleMotorGetEncoder(const String &line, const String
 }
 
 bool MotorCommandHandler::handleMotorTelemetry(const String &line, const String &up) {
-  if (!up.startsWith("MOTOR TELEMETRY")) return false;
+  if (!up.startsWith("MOTOR TELEMETRY")) {
+    return false;
+  }
   
   String arg = line.substring(15);
   arg.trim();
@@ -250,10 +264,15 @@ bool MotorCommandHandler::handleMotorTelemetry(const String &line, const String 
   bool reportBoth = false;
   bool leftSelected = true;
   sideTok.toUpperCase();
-  if (sideTok == "ALL") reportBoth = true;
-  else if (sideTok == "LEFT") { reportBoth = false; leftSelected = true; }
-  else if (sideTok == "RIGHT") { reportBoth = false; leftSelected = false; }
-  else {
+  if (sideTok == "ALL") {
+    reportBoth = true;
+  } else if (sideTok == "LEFT") {
+    reportBoth = false;
+    leftSelected = true;
+  } else if (sideTok == "RIGHT") {
+    reportBoth = false;
+    leftSelected = false;
+  } else {
     LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Usage: MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)");
     return true;
   }

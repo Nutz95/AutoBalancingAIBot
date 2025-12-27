@@ -101,8 +101,9 @@ void init() {
       size_t max_name = (suf >= max_nvs_key) ? 0 : (max_nvs_key - suf);
       // copy up to max_name characters from fname
       size_t copylen = strlen(fname);
-      if (copylen > max_name)
+      if (copylen > max_name) {
         copylen = max_name;
+      }
       if (copylen > 0) {
         memcpy(out, fname, copylen);
         out[copylen] = '\0';
@@ -155,14 +156,18 @@ void init() {
 
 void setDriveSetpoints(float v_norm, float w_norm) {
   // clamp inputs to [-1,1]
-  if (v_norm > 1.0f)
+  if (v_norm > 1.0f) {
     v_norm = 1.0f;
-  if (v_norm < -1.0f)
+  }
+  if (v_norm < -1.0f) {
     v_norm = -1.0f;
-  if (w_norm > 1.0f)
+  }
+  if (w_norm > 1.0f) {
     w_norm = 1.0f;
-  if (w_norm < -1.0f)
+  }
+  if (w_norm < -1.0f) {
     w_norm = -1.0f;
+  }
   g_drive_target_v = v_norm;
   g_drive_target_w = w_norm;
   // Log the requested setpoints for debugging
@@ -171,8 +176,9 @@ void setDriveSetpoints(float v_norm, float w_norm) {
 }
 
 void start(float fused_pitch_rad) {
-  if (g_active)
+  if (g_active) {
     return;
+  }
   g_active = true;
   abbot::log::enableChannel(abbot::log::CHANNEL_BALANCER);
   
@@ -235,8 +241,9 @@ void start(float fused_pitch_rad) {
   char buf[128];
   {
     bool men = false;
-    if (auto d = abbot::motor::getActiveMotorDriver())
-      men = d->areMotorsEnabled();
+    if (auto driver = abbot::motor::getActiveMotorDriver()) {
+      men = driver->areMotorsEnabled();
+    }
     snprintf(buf, sizeof(buf), "BALANCER: started (defaults used) - motors %s",
              men ? "ENABLED" : "NOT ENABLED");
   }
@@ -244,14 +251,15 @@ void start(float fused_pitch_rad) {
 }
 
 void stop() {
-  if (!g_active)
+  if (!g_active) {
     return;
+  }
   g_active = false;
   g_pitch_trim_rad = 0.0f;
   abbot::log::disableChannel(abbot::log::CHANNEL_BALANCER);
-  if (auto d = abbot::motor::getActiveMotorDriver()) {
-    d->setMotorCommandBoth(0.0f, 0.0f);
-    d->disableMotors();
+  if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    driver->setMotorCommandBoth(0.0f, 0.0f);
+    driver->disableMotors();
   }
   g_pid.reset();
   g_last_cmd = 0.0f;
@@ -267,7 +275,9 @@ void stop() {
               "BALANCER: stopped - motors DISABLED");
 }
 
-bool isActive() { return g_active; }
+bool isActive() {
+  return g_active;
+}
 
 void setGains(float kp, float ki, float kd) {
   g_pid.setGains(kp, ki, kd);
@@ -280,8 +290,9 @@ void setGains(float kp, float ki, float kd) {
       size_t suf = strlen(suffix);
       size_t max_name = (suf >= max_nvs_key) ? 0 : (max_nvs_key - suf);
       size_t copylen = strlen(fname);
-      if (copylen > max_name)
+      if (copylen > max_name) {
         copylen = max_name;
+      }
       if (copylen > 0) {
         memcpy(out, fname, copylen);
         out[copylen] = '\0';
@@ -315,8 +326,9 @@ void getGains(float &kp, float &ki, float &kd) {
       size_t suf = strlen(suffix);
       size_t max_name = (suf >= max_nvs_key) ? 0 : (max_nvs_key - suf);
       size_t copylen = strlen(fname);
-      if (copylen > max_name)
+      if (copylen > max_name) {
         copylen = max_name;
+      }
       if (copylen > 0) {
         memcpy(out, fname, copylen);
         out[copylen] = '\0';
@@ -349,8 +361,9 @@ void resetGainsToDefaults() {
       size_t suf = strlen(suffix);
       size_t max_name = (suf >= max_nvs_key) ? 0 : (max_nvs_key - suf);
       size_t copylen = strlen(fname);
-      if (copylen > max_name)
+      if (copylen > max_name) {
         copylen = max_name;
+      }
       if (copylen > 0) {
         memcpy(out, fname, copylen);
         out[copylen] = '\0';
@@ -379,15 +392,18 @@ void resetGainsToDefaults() {
 
 void setDeadband(float db) {
   g_deadband = db;
-  if (g_prefs_started)
+  if (g_prefs_started) {
     g_prefs.putFloat("db", g_deadband);
+  }
   char buf[128];
   snprintf(buf, sizeof(buf), "BALANCER: deadband set to %.6f (persisted=%s)",
            (double)g_deadband, g_prefs_started ? "yes" : "no");
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
 }
 
-float getDeadband() { return g_deadband; }
+float getDeadband() {
+  return g_deadband;
+}
 
 void calibrateDeadband() {
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
@@ -407,7 +423,9 @@ void setMinCmd(float min_cmd) {
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
 }
 
-float getMinCmd() { return g_min_cmd; }
+float getMinCmd() {
+  return g_min_cmd;
+}
 
 void setLatestImuSample(const float accel_robot[3], const float gyro_robot[3]) {
   if (accel_robot) {
@@ -432,19 +450,23 @@ static float computePidWithDriveSetpoint(float fused_pitch_deg,
   if (g_drive_v_filtered != g_drive_target_v) {
     float max_dv = g_drive_v_slew * dt;
     float dv = g_drive_target_v - g_drive_v_filtered;
-    if (dv > max_dv)
+    if (dv > max_dv) {
       dv = max_dv;
-    if (dv < -max_dv)
+    }
+    if (dv < -max_dv) {
       dv = -max_dv;
+    }
     g_drive_v_filtered += dv;
   }
   // pitch setpoint from filtered velocity command (convert to degrees)
   float pitch_sp_rad = g_drive_v_filtered * g_drive_max_pitch_rad;
   // clamp pitch setpoint (in radians before conversion)
-  if (pitch_sp_rad > g_drive_max_pitch_rad)
+  if (pitch_sp_rad > g_drive_max_pitch_rad) {
     pitch_sp_rad = g_drive_max_pitch_rad;
-  if (pitch_sp_rad < -g_drive_max_pitch_rad)
+  }
+  if (pitch_sp_rad < -g_drive_max_pitch_rad) {
     pitch_sp_rad = -g_drive_max_pitch_rad;
+  }
   
   float pitch_sp_deg = radToDeg(pitch_sp_rad);
   
@@ -455,10 +477,10 @@ static float computePidWithDriveSetpoint(float fused_pitch_deg,
   }
   g_drive_last_pitch_sp_deg = pitch_sp_deg;
 
-  // PID input: error = setpoint - measurement (so positive error commands forward)
-  // When robot leans forward (positive pitch), error is negative → command backward to correct
-  float pid_in_deg = pitch_sp_deg - fused_pitch_deg;
-  float pid_rate_deg_s = pitch_sp_rate_deg_s - fused_pitch_rate_deg_s;
+  // PID input: error = measurement - setpoint (so positive error commands forward)
+  // When robot leans forward (positive pitch), error is positive → command forward to correct
+  float pid_in_deg = fused_pitch_deg - pitch_sp_deg;
+  float pid_rate_deg_s = fused_pitch_rate_deg_s - pitch_sp_rate_deg_s;
   float pid_out = g_pid.update(pid_in_deg, pid_rate_deg_s, dt);
 
   // Rate-limited debug logging to avoid spamming serial
@@ -544,8 +566,9 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
     if (now_ms - last_log_ms > 500) {
       char dbg[128];
       int men = 0;
-      if (auto d = abbot::motor::getActiveMotorDriver())
-        men = d->areMotorsEnabled() ? 1 : 0;
+      if (auto driver = abbot::motor::getActiveMotorDriver()) {
+        men = driver->areMotorsEnabled() ? 1 : 0;
+      }
       snprintf(dbg, sizeof(dbg),
                "AUTOTUNE: state=%d err=%.2f° cmd=%.3f motors_en=%d",
                (int)g_autotune.getState(), (double)error_deg,
@@ -569,29 +592,30 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
       }
 
       // Zero and disable motors
-      if (auto d = abbot::motor::getActiveMotorDriver()) {
-        d->setMotorCommandBoth(0.0f, 0.0f);
-        d->disableMotors();
+      if (auto driver = abbot::motor::getActiveMotorDriver()) {
+        driver->setMotorCommandBoth(0.0f, 0.0f);
+        driver->disableMotors();
       }
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
                   "AUTOTUNE: motors disabled automatically");
       return 0.0f;
     }
 
-    // Apply autotune command to motors (apply per-motor inversion and gain scaling)
-    if (auto d = abbot::motor::getActiveMotorDriver()) {
-      if (d->areMotorsEnabled()) {
-        float left_at = (BALANCER_LEFT_MOTOR_INVERT ? -autotune_cmd : autotune_cmd) * g_left_motor_gain;
-        float right_at = (BALANCER_RIGHT_MOTOR_INVERT ? -autotune_cmd : autotune_cmd) * g_right_motor_gain;
-        d->setMotorCommandBoth(left_at, right_at);
+    // Apply autotune command to motors (apply per-motor gain scaling)
+    if (auto driver = abbot::motor::getActiveMotorDriver()) {
+      if (driver->areMotorsEnabled()) {
+        float left_at = autotune_cmd * g_left_motor_gain;
+        float right_at = autotune_cmd * g_right_motor_gain;
+        driver->setMotorCommandBoth(left_at, right_at);
       }
     }
 
     return autotune_cmd;
   }
 
-  if (!g_active)
+  if (!g_active) {
     return 0.0f;
+  }
 
   // Fall-detection guard: if the robot is clearly down, stop the balancer to
   // avoid fighting on the ground. Uses both angle and optional rate threshold.
@@ -635,8 +659,9 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
         g_pending_enable_ts = now + g_enable_delay_ms;
       } else {
-        if (auto d = abbot::motor::getActiveMotorDriver())
-          d->enableMotors();
+        if (auto driver = abbot::motor::getActiveMotorDriver()) {
+          driver->enableMotors();
+        }
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
                     "BALANCER: motors ENABLED after settle");
         g_pending_enable_ts = 0;
@@ -670,22 +695,28 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   float cmd = pid_out; // No negation - same sign as pitch for catching behavior
   // clamp (pre-slew). Keep a copy for logging to inspect clamp vs slew behavior
   float cmd_pre_slew = cmd;
-  if (cmd_pre_slew > 1.0f)
+  if (cmd_pre_slew > 1.0f) {
     cmd_pre_slew = 1.0f;
-  if (cmd_pre_slew < -1.0f)
+  }
+  if (cmd_pre_slew < -1.0f) {
     cmd_pre_slew = -1.0f;
+  }
   // apply the clamp to cmd (we'll apply slew after)
-  if (cmd > 1.0f)
+  if (cmd > 1.0f) {
     cmd = 1.0f;
-  if (cmd < -1.0f)
+  }
+  if (cmd < -1.0f) {
     cmd = -1.0f;
+  }
   // slew (apply rate limit to prevent abrupt changes)
   float max_delta = g_cmd_slew * dt;
   float delta = cmd - g_last_cmd;
-  if (delta > max_delta)
+  if (delta > max_delta) {
     delta = max_delta;
-  if (delta < -max_delta)
+  }
+  if (delta < -max_delta) {
     delta = -max_delta;
+  }
   cmd = g_last_cmd + delta;
   // Rate-limited debug logging for PID vs final commanded value
   // Interval controlled by BALANCER_DEBUG_LOG_INTERVAL_MS (configurable for characterization)
@@ -726,8 +757,8 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   // (à placer dans la fonction d'init appropriée, ex : balancerInit ou setup)
   // g_min_cmd = g_prefs.getFloat("min_cmd", g_min_cmd);
   // if motors disabled, skip commanding but return computed value
-  if (auto d = abbot::motor::getActiveMotorDriver()) {
-    if (!d->areMotorsEnabled()) {
+  if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    if (!driver->areMotorsEnabled()) {
       static bool warned = false;
       if (!warned) {
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
@@ -738,10 +769,10 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
       g_last_cmd = cmd;
       return cmd;
     }
-    // command both motors simultaneously (apply per-motor inversion and gain scaling)
-    float left_cmd = (BALANCER_LEFT_MOTOR_INVERT ? -cmd : cmd) * g_left_motor_gain;
-    float right_cmd = (BALANCER_RIGHT_MOTOR_INVERT ? -cmd : cmd) * g_right_motor_gain;
-    d->setMotorCommandBoth(left_cmd, right_cmd);
+    // command both motors simultaneously (apply per-motor gain scaling)
+    float left_cmd = cmd * g_left_motor_gain;
+    float right_cmd = cmd * g_right_motor_gain;
+    driver->setMotorCommandBoth(left_cmd, right_cmd);
   } else {
     static bool warned_no_drv = false;
     if (!warned_no_drv) {
@@ -776,8 +807,9 @@ void startAutotune() {
   g_autotune_active = true;
 
   // Always enable motors for autotuning
-  if (auto d = abbot::motor::getActiveMotorDriver())
-    d->enableMotors();
+  if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    driver->enableMotors();
+  }
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
               "AUTOTUNE: motors enabled automatically");
 
@@ -795,17 +827,19 @@ void stopAutotune() {
   g_autotune_active = false;
 
   // Zero and disable motors
-  if (auto d = abbot::motor::getActiveMotorDriver()) {
-    d->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT, 0.0f);
-    d->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT, 0.0f);
-    d->disableMotors();
+  if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    driver->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT, 0.0f);
+    driver->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT, 0.0f);
+    driver->disableMotors();
   }
 
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
               "AUTOTUNE: stopped - motors disabled");
 }
 
-bool isAutotuning() { return g_autotune_active && g_autotune.isActive(); }
+bool isAutotuning() {
+  return g_autotune_active && g_autotune.isActive();
+}
 
 const char *getAutotuneStatus() {
   if (!g_autotune_active) {
@@ -866,10 +900,12 @@ void applyAutotuneGains() {
 
 // --- Autotune configuration setters ---
 void setAutotuneRelay(float amplitude) {
-  if (amplitude < 0.05f)
+  if (amplitude < 0.05f) {
     amplitude = 0.05f;
-  if (amplitude > 1.0f)
+  }
+  if (amplitude > 1.0f) {
     amplitude = 1.0f;
+  }
   g_autocfg.relay_amplitude = amplitude;
   char buf[128];
   snprintf(buf, sizeof(buf), "AUTOTUNE: relay amplitude set to %.3f",
@@ -878,10 +914,12 @@ void setAutotuneRelay(float amplitude) {
 }
 
 void setAutotuneDeadband(float deadband_deg) {
-  if (deadband_deg < 0.0f)
+  if (deadband_deg < 0.0f) {
     deadband_deg = 0.0f;
-  if (deadband_deg > 10.0f)
+  }
+  if (deadband_deg > 10.0f) {
     deadband_deg = 10.0f;
+  }
   g_autocfg.deadband = deadband_deg;
   char buf[128];
   snprintf(buf, sizeof(buf), "AUTOTUNE: deadband set to %.3f°",
@@ -890,10 +928,12 @@ void setAutotuneDeadband(float deadband_deg) {
 }
 
 void setAutotuneMaxAngle(float max_pitch_deg) {
-  if (max_pitch_deg < 5.0f)
+  if (max_pitch_deg < 5.0f) {
     max_pitch_deg = 5.0f;
-  if (max_pitch_deg > 90.0f)
+  }
+  if (max_pitch_deg > 90.0f) {
     max_pitch_deg = 90.0f;
+  }
   g_autocfg.max_pitch_abort = max_pitch_deg;
   char buf[128];
   snprintf(buf, sizeof(buf), "AUTOTUNE: max angle set to %.1f°",
@@ -903,10 +943,18 @@ void setAutotuneMaxAngle(float max_pitch_deg) {
 
 // --- Motor gain adjustment (for asymmetric compensation) ---
 void setMotorGains(float left_gain, float right_gain) {
-  if (left_gain < 0.1f) left_gain = 0.1f;
-  if (left_gain > 2.0f) left_gain = 2.0f;
-  if (right_gain < 0.1f) right_gain = 0.1f;
-  if (right_gain > 2.0f) right_gain = 2.0f;
+  if (left_gain < 0.1f) {
+    left_gain = 0.1f;
+  }
+  if (left_gain > 2.0f) {
+    left_gain = 2.0f;
+  }
+  if (right_gain < 0.1f) {
+    right_gain = 0.1f;
+  }
+  if (right_gain > 2.0f) {
+    right_gain = 2.0f;
+  }
   g_left_motor_gain = left_gain;
   g_right_motor_gain = right_gain;
   char buf[128];

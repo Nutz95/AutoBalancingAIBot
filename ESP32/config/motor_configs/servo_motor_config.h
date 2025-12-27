@@ -21,7 +21,7 @@
 // For differential drive balancing: motors must rotate opposite directions.
 // WARNING: Motor directions have been validated with MOTOR VEL LEFT/RIGHT 500 commands.
 #ifndef LEFT_MOTOR_INVERT
-#define LEFT_MOTOR_INVERT 1
+#define LEFT_MOTOR_INVERT 0
 #endif
 #ifndef RIGHT_MOTOR_INVERT
 #define RIGHT_MOTOR_INVERT 0

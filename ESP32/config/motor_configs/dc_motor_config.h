@@ -162,13 +162,21 @@
 #endif
 
 // Prefer per-side characterization macros when available (falls back to global)
+// Note: We only use these if the DC_ macros haven't been explicitly set above.
+#ifndef DC_LEFT_MOTOR_INVERT
 #ifdef MOTOR_CHAR_LEFT_INVERT
-#undef DC_LEFT_MOTOR_INVERT
 #define DC_LEFT_MOTOR_INVERT MOTOR_CHAR_LEFT_INVERT
+#else
+#define DC_LEFT_MOTOR_INVERT 0
 #endif
+#endif
+
+#ifndef DC_RIGHT_MOTOR_INVERT
 #ifdef MOTOR_CHAR_RIGHT_INVERT
-#undef DC_RIGHT_MOTOR_INVERT
 #define DC_RIGHT_MOTOR_INVERT MOTOR_CHAR_RIGHT_INVERT
+#else
+#define DC_RIGHT_MOTOR_INVERT 0
+#endif
 #endif
 
 // Expose per-side gain/tau/latency under DC-prefixed macros for firmware use
