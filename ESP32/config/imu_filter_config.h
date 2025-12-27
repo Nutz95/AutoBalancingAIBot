@@ -30,9 +30,11 @@
 #endif
 
 // Feature flag to enable/disable automatic gyro bias update during operation.
-// If enabled (1), the system will continuously update the gyro bias when the robot is stationary.
+// If enabled (1), the system will continuously update the gyro bias when the robot is stationary
+// and periodically save it to NVS.
 // If disabled (0), the gyro bias is only set during initial calibration or manual trim.
-// Recommended: 0 (Disabled) to prevent learning bad bias during balancing.
+// Note: Disabling this does NOT prevent loading the last saved bias from NVS at startup.
+// Recommended: 0 (Disabled) for balancing robots to prevent learning bad bias during oscillations.
 #ifndef IMU_AUTO_GYRO_BIAS_UPDATE
 #define IMU_AUTO_GYRO_BIAS_UPDATE 0
 #endif

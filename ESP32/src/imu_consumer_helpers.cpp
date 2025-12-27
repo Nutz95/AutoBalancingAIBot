@@ -83,79 +83,94 @@ void finalizeWarmupIfDone(ConsumerState &state, abbot::IMUFilter &filter,
   }
 }
 
+/**
+ * @brief Persists the current gyro bias to NVS if it has changed significantly.
+ * 
+ * This is called periodically when the robot is stationary to ensure the 
+ * learned bias survives a reboot.
+ */
+void persistBiasToNVS(ConsumerState &state, uint32_t now) {
+  if (!state.prefs || !state.prefs_started) {
+    return;
+  }
+
+  float stored_x = state.prefs->getFloat("gbx", 0.0f);
+  float stored_y = state.prefs->getFloat("gby", 0.0f);
+  float stored_z = state.prefs->getFloat("gbz", 0.0f);
+
+  bool changed = fabsf(state.gyro_bias[0] - stored_x) > state.persist_delta_thresh ||
+                 fabsf(state.gyro_bias[1] - stored_y) > state.persist_delta_thresh ||
+                 fabsf(state.gyro_bias[2] - stored_z) > state.persist_delta_thresh;
+
+  if (changed) {
+    state.prefs->putFloat("gbx", state.gyro_bias[0]);
+    state.prefs->putFloat("gby", state.gyro_bias[1]);
+    state.prefs->putFloat("gbz", state.gyro_bias[2]);
+    state.last_persist_ms = now;
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: persisted updated gyro bias to NVS");
+  } else {
+    state.last_persist_ms = now;
+  }
+}
+
 void updateBiasEmaAndPersistIfNeeded(ConsumerState &state,
                                      const IMUSample &sample,
                                      const float gyro_robot[3]) {
 #if IMU_AUTO_GYRO_BIAS_UPDATE
-  if (!state.gyro_bias_initialized)
+  if (!state.gyro_bias_initialized) {
     return;
+  }
+
+  // Check if robot is stationary (both accel and gyro)
   float a_norm = sqrtf(sample.ax * sample.ax + sample.ay * sample.ay +
                        sample.az * sample.az);
   const float g_nominal = 9.80665f;
   bool accel_stationary = fabsf(a_norm - g_nominal) < 0.2f;
+
+  // We use the bias-corrected robot-frame gyro to detect motion.
+  // This checks if the current rate is close to our current bias estimate.
   float ang_rate_mag =
       sqrtf(gyro_robot[0] * gyro_robot[0] + gyro_robot[1] * gyro_robot[1] +
             gyro_robot[2] * gyro_robot[2]);
   bool gyro_stationary = ang_rate_mag < IMU_GYRO_STATIONARY_THRESHOLD_RAD_S;
+
   if (accel_stationary && gyro_stationary) {
-    float gx = sample.gx;
-    float gy = sample.gy;
-    float gz = sample.gz;
+    // Update bias EMA using raw sensor-frame values.
+    // The bias is the average raw value when the sensor is stationary.
     state.gyro_bias[0] = (1.0f - state.bias_ema_alpha) * state.gyro_bias[0] +
-                         state.bias_ema_alpha * gx;
+                         state.bias_ema_alpha * sample.gx;
     state.gyro_bias[1] = (1.0f - state.bias_ema_alpha) * state.gyro_bias[1] +
-                         state.bias_ema_alpha * gy;
+                         state.bias_ema_alpha * sample.gy;
     state.gyro_bias[2] = (1.0f - state.bias_ema_alpha) * state.gyro_bias[2] +
-                         state.bias_ema_alpha * gz;
+                         state.bias_ema_alpha * sample.gz;
+
     uint32_t now = millis();
 
+    // Handle initial persistence after warmup stability check
     if (state.pending_initial_persist) {
       if ((int32_t)(now - state.initial_persist_deadline_ms) >= 0) {
-        if (fabsf(state.gyro_bias[0] - state.initial_persist_candidate[0]) <=
-                state.persist_delta_thresh &&
-            fabsf(state.gyro_bias[1] - state.initial_persist_candidate[1]) <=
-                state.persist_delta_thresh &&
-            fabsf(state.gyro_bias[2] - state.initial_persist_candidate[2]) <=
-                state.persist_delta_thresh) {
-          if (state.prefs && state.prefs_started) {
-            state.prefs->putFloat("gbx", state.gyro_bias[0]);
-            state.prefs->putFloat("gby", state.gyro_bias[1]);
-            state.prefs->putFloat("gbz", state.gyro_bias[2]);
-            state.last_persist_ms = now;
-          }
+        bool stable = fabsf(state.gyro_bias[0] - state.initial_persist_candidate[0]) <= state.persist_delta_thresh &&
+                      fabsf(state.gyro_bias[1] - state.initial_persist_candidate[1]) <= state.persist_delta_thresh &&
+                      fabsf(state.gyro_bias[2] - state.initial_persist_candidate[2]) <= state.persist_delta_thresh;
+
+        if (stable) {
+          persistBiasToNVS(state, now);
           state.pending_initial_persist = false;
           LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                      "TUNING: initial gyro bias persisted to NVS after "
-                      "stability check");
+                      "TUNING: initial gyro bias persisted to NVS after stability check");
         } else {
           state.initial_persist_candidate[0] = state.gyro_bias[0];
           state.initial_persist_candidate[1] = state.gyro_bias[1];
           state.initial_persist_candidate[2] = state.gyro_bias[2];
-          state.initial_persist_deadline_ms =
-              now + state.initial_persist_timeout_ms;
-          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                      "TUNING: initial persist deferred (candidate drift)");
+          state.initial_persist_deadline_ms = now + state.initial_persist_timeout_ms;
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: initial persist deferred (candidate drift)");
         }
       }
     }
 
-    if ((int32_t)(now - state.last_persist_ms) >=
-    (int32_t)state.persist_interval_ms) { if (state.prefs &&
-    state.prefs_started) { float stored_x = state.prefs->getFloat("gbx", 0.0f);
-        float stored_y = state.prefs->getFloat("gby", 0.0f);
-        float stored_z = state.prefs->getFloat("gbz", 0.0f);
-        if (fabsf(state.gyro_bias[0] - stored_x) > state.persist_delta_thresh ||
-            fabsf(state.gyro_bias[1] - stored_y) > state.persist_delta_thresh ||
-            fabsf(state.gyro_bias[2] - stored_z) > state.persist_delta_thresh) {
-          state.prefs->putFloat("gbx", state.gyro_bias[0]);
-          state.prefs->putFloat("gby", state.gyro_bias[1]);
-          state.prefs->putFloat("gbz", state.gyro_bias[2]);
-          state.last_persist_ms = now;
-          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: persisted updated gyro bias to NVS");
-        } else {
-          state.last_persist_ms = now;
-        }
-      }
+    // Periodic persistence
+    if ((int32_t)(now - state.last_persist_ms) >= (int32_t)state.persist_interval_ms) {
+      persistBiasToNVS(state, now);
     }
   }
 #endif
