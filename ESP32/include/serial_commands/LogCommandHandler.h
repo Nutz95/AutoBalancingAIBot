@@ -15,15 +15,37 @@ namespace serialcmds {
  */
 class LogCommandHandler : public ICommandHandler {
 public:
+    /**
+     * @brief Construct a new Log Command Handler object.
+     */
     LogCommandHandler();
     virtual ~LogCommandHandler() = default;
 
+    /**
+     * @brief Get the command prefix ("LOG").
+     * 
+     * @return const char* The prefix string.
+     */
     const char* getPrefix() const override { return "LOG"; }
+
+    /**
+     * @brief Handle log-specific commands.
+     * 
+     * @param line The original command line.
+     * @param up The command line in uppercase.
+     * @return true if the command was handled, false otherwise.
+     */
     bool handleCommand(const String& line, const String& up) override;
+
+    /**
+     * @brief Build and return the log configuration menu.
+     * 
+     * @return SerialMenu* Pointer to the built menu (owned by this handler).
+     */
     SerialMenu* buildMenu() override;
 
 private:
-    SerialMenu* m_menu;
+    std::unique_ptr<SerialMenu> m_menu;
     bool handleLog(const String& line, const String& up);
     
     // Menu handlers

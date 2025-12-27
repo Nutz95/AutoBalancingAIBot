@@ -10,9 +10,9 @@
 namespace abbot {
 namespace serialcmds {
 
-BalancerCommandHandler::BalancerCommandHandler(IFusionService* fusion)
-    : m_fusion(fusion) {
-    m_menu = new SerialMenu("Balancer (PID)");
+BalancerCommandHandler::BalancerCommandHandler(IFusionService* fusionService)
+    : m_fusionService(fusionService) {
+    m_menu.reset(new SerialMenu("Balancer (PID)"));
     m_menu->addEntry(1, "BALANCE START",
                   [this](const String &p) { balancerStartHandler(p); });
     m_menu->addEntry(2, "BALANCE STOP",
@@ -82,7 +82,7 @@ bool BalancerCommandHandler::handleCommand(const String& line, const String& up)
 }
 
 SerialMenu* BalancerCommandHandler::buildMenu() {
-    return m_menu;
+    return m_menu.get();
 }
 
 bool BalancerCommandHandler::handleBalance(const String& line, const String& up) {
@@ -215,10 +215,10 @@ void BalancerCommandHandler::balancerStartHandler(const String &p) {
       force = true;
   }
   
-  if (m_fusion) {
-    m_fusion->printDiagnostics();
-    if (!force && !m_fusion->isReady()) {
-      unsigned long rem = m_fusion->getWarmupRemaining();
+  if (m_fusionService) {
+    m_fusionService->printDiagnostics();
+    if (!force && !m_fusionService->isReady()) {
+      unsigned long rem = m_fusionService->getWarmupRemaining();
       char buf[256];
       snprintf(buf, sizeof(buf),
                "BALANCE: fusion not ready (warmup remaining=%lu). Use 'BALANCE "
@@ -227,7 +227,7 @@ void BalancerCommandHandler::balancerStartHandler(const String &p) {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
       return;
     }
-    abbot::balancer::controller::start(m_fusion->getPitch());
+    abbot::balancer::controller::start(m_fusionService->getPitch());
   }
 }
 

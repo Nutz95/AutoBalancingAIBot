@@ -6,8 +6,9 @@
 namespace abbot {
 namespace serialcmds {
 
-AutotuneCommandHandler::AutotuneCommandHandler() {
-    m_menu = new SerialMenu("PID Autotune");
+AutotuneCommandHandler::AutotuneCommandHandler(IFusionService* fusionService)
+    : m_fusionService(fusionService) {
+    m_menu.reset(new SerialMenu("PID Autotune"));
     m_menu->addEntry(1, "AUTOTUNE START", [](const String &) {
       abbot::balancer::controller::startAutotune();
     });
@@ -24,11 +25,11 @@ AutotuneCommandHandler::AutotuneCommandHandler() {
       abbot::balancer::controller::applyAutotuneGains();
     });
     m_menu->addEntry(5, "AUTOTUNE RELAY <amp>",
-                  [](const String &p) { autotuneRelayHandler(p); });
+                  [this](const String &p) { this->autotuneRelayHandler(p); });
     m_menu->addEntry(6, "AUTOTUNE DEADBAND <deg>",
-                  [](const String &p) { autotuneDeadbandHandler(p); });
+                  [this](const String &p) { this->autotuneDeadbandHandler(p); });
     m_menu->addEntry(7, "AUTOTUNE MAXANGLE <deg>",
-                  [](const String &p) { autotuneMaxAngleHandler(p); });
+                  [this](const String &p) { this->autotuneMaxAngleHandler(p); });
 }
 
 bool AutotuneCommandHandler::handleCommand(const String& line, const String& up) {
@@ -78,7 +79,7 @@ bool AutotuneCommandHandler::handleCommand(const String& line, const String& up)
 }
 
 SerialMenu* AutotuneCommandHandler::buildMenu() {
-    return m_menu;
+    return m_menu.get();
 }
 
 void AutotuneCommandHandler::autotuneRelayHandler(const String &p) {

@@ -37,13 +37,13 @@ static void startTuningCapture(uint32_t samples, bool csv, bool statsOnly = fals
 }
 
 TuningCommandHandler::TuningCommandHandler() {
-    m_menu = new SerialMenu("Madgwick tuning");
-    m_menu->addEntry(1, "TUNING START (stream)", [](const String &p) { tuningStreamStartHandler(p); });
-    m_menu->addEntry(2, "TUNING STOP", [](const String &p) { tuningStreamStopHandler(p); });
+    m_menu.reset(new SerialMenu("Madgwick tuning"));
+    m_menu->addEntry(1, "TUNING START (stream)", [this](const String &p) { this->tuningStreamStartHandler(p); });
+    m_menu->addEntry(2, "TUNING STOP", [this](const String &p) { this->tuningStreamStopHandler(p); });
     m_menu->addEntry(3, "TUNING CAPTURE 1000", [](const String &) { startTuningCapture(1000, true); });
     m_menu->addEntry(4, "TUNING CAPTURE 2000", [](const String &) { startTuningCapture(2000, true); });
     m_menu->addEntry(5, "TUNING CAPTURE 5000", [](const String &) { startTuningCapture(5000, true); });
-    m_menu->addEntry(6, "TUNING CAPTURE CUSTOM", [](const String &p) { tuningCustomHandler(p); });
+    m_menu->addEntry(6, "TUNING CAPTURE CUSTOM", [this](const String &p) { this->tuningCustomHandler(p); });
 }
 
 bool TuningCommandHandler::handleCommand(const String& line, const String& up) {
@@ -54,7 +54,11 @@ bool TuningCommandHandler::handleCommand(const String& line, const String& up) {
 }
 
 SerialMenu* TuningCommandHandler::buildMenu() {
-    return m_menu;
+    return m_menu.get();
+}
+
+SerialMenu* TuningCommandHandler::getMenu() {
+    return m_menu.get();
 }
 
 bool TuningCommandHandler::handleTuning(const String& line, const String& up) {

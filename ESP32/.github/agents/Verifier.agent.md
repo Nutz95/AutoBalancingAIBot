@@ -1,7 +1,7 @@
 ---
 name: Verifier
 description: Checks C++ code for SOLID compliance, style, docs update and produces a verification report.
-model: GPT-5 mini (copilot)
+model: Gemini 3 Flash (Preview) (copilot)
 argument-hint: Provide the coder output JSON or patch to verify.
 tools: ['agent','read','search','todo','web','vscode/extensions','vscode/getProjectSetupInfo','vscode/runCommand','vscode/openSimpleBrowser','vscode/vscodeAPI', 'search/changes']
 handoffs:

@@ -7,6 +7,94 @@
 namespace abbot {
 namespace serialcmds {
 
+WifiCommandHandler::WifiCommandHandler() {
+    m_menu.reset(new SerialMenu("WiFi Configuration"));
+    
+    m_menu->addEntry(1, "WIFI SHOW", [](const String&) {
+        Preferences p;
+        if (p.begin("abbot", true)) {
+            String ssid = p.getString("wifi_ssid", "");
+            char out[128];
+            snprintf(out, sizeof(out), "WIFI: stored_ssid=%s",
+                     ssid.length() ? ssid.c_str() : "(none)");
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+            p.end();
+        }
+    });
+
+    m_menu->addEntry(2, "WIFI SET SSID <ssid>", [](const String& p) {
+        String s = p;
+        s.trim();
+        if (s.length() == 0) {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: WIFI SET SSID <ssid>");
+            return;
+        }
+        Preferences pref;
+        if (pref.begin("abbot", false)) {
+            pref.putString("wifi_ssid", s);
+            pref.end();
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: SSID saved");
+        }
+    });
+
+    m_menu->addEntry(3, "WIFI SET PASS <pwd>", [](const String& p) {
+        String s = p;
+        s.trim();
+        if (s.length() == 0) {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: WIFI SET PASS <password>");
+            return;
+        }
+        Preferences pref;
+        if (pref.begin("abbot", false)) {
+            pref.putString("wifi_pass", s);
+            pref.end();
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: password saved (hidden)");
+        }
+    });
+
+    m_menu->addEntry(4, "WIFI CONNECT NOW", [](const String&) {
+        abbot::wifi_console::connectNow();
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: connect requested");
+    });
+
+    m_menu->addEntry(5, "WIFI DISCONNECT", [](const String&) {
+        abbot::wifi_console::disconnectNow();
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: disconnect requested");
+    });
+
+    m_menu->addEntry(6, "WIFI RESET", [](const String&) {
+        Preferences pref;
+        if (pref.begin("abbot", false)) {
+            pref.remove("wifi_ssid");
+            pref.remove("wifi_pass");
+            pref.end();
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: cleared stored credentials");
+        }
+    });
+
+    m_menu->addEntry(7, "WIFI STATUS", [](const String&) {
+        if (WiFi.status() == WL_CONNECTED) {
+            IPAddress ip = WiFi.localIP();
+            char buf[128];
+            char ipbuf[32];
+            ip.toString().toCharArray(ipbuf, sizeof(ipbuf));
+            snprintf(buf, sizeof(buf), "WIFI: connected ssid=%s ip=%s",
+                     WiFi.SSID().c_str(), ipbuf);
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+        } else {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: not connected");
+        }
+    });
+
+    m_menu->addEntry(8, "WIFI DIAG", [](const String&) {
+        char d[256];
+        abbot::wifi_console::getDiagnostics(d, sizeof(d));
+        char out[300];
+        snprintf(out, sizeof(out), "WIFI-DIAG: %s", d);
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
+    });
+}
+
 bool WifiCommandHandler::handleCommand(const String& line, const String& lineUpper) {
     if (!lineUpper.startsWith("WIFI")) {
         return false;
@@ -147,93 +235,7 @@ bool WifiCommandHandler::handleCommand(const String& line, const String& lineUpp
 }
 
 SerialMenu* WifiCommandHandler::buildMenu() {
-    SerialMenu* m = new SerialMenu("WiFi Configuration");
-    
-    m->addEntry(1, "WIFI SHOW", [](const String&) {
-        Preferences p;
-        if (p.begin("abbot", true)) {
-            String ssid = p.getString("wifi_ssid", "");
-            char out[128];
-            snprintf(out, sizeof(out), "WIFI: stored_ssid=%s",
-                     ssid.length() ? ssid.c_str() : "(none)");
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
-            p.end();
-        }
-    });
-
-    m->addEntry(2, "WIFI SET SSID <ssid>", [](const String& p) {
-        String s = p;
-        s.trim();
-        if (s.length() == 0) {
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: WIFI SET SSID <ssid>");
-            return;
-        }
-        Preferences pref;
-        if (pref.begin("abbot", false)) {
-            pref.putString("wifi_ssid", s);
-            pref.end();
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: SSID saved");
-        }
-    });
-
-    m->addEntry(3, "WIFI SET PASS <pwd>", [](const String& p) {
-        String s = p;
-        s.trim();
-        if (s.length() == 0) {
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: WIFI SET PASS <password>");
-            return;
-        }
-        Preferences pref;
-        if (pref.begin("abbot", false)) {
-            pref.putString("wifi_pass", s);
-            pref.end();
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: password saved (hidden)");
-        }
-    });
-
-    m->addEntry(4, "WIFI CONNECT NOW", [](const String&) {
-        abbot::wifi_console::connectNow();
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: connect requested");
-    });
-
-    m->addEntry(5, "WIFI DISCONNECT", [](const String&) {
-        abbot::wifi_console::disconnectNow();
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: disconnect requested");
-    });
-
-    m->addEntry(6, "WIFI RESET", [](const String&) {
-        Preferences pref;
-        if (pref.begin("abbot", false)) {
-            pref.remove("wifi_ssid");
-            pref.remove("wifi_pass");
-            pref.end();
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: cleared stored credentials");
-        }
-    });
-
-    m->addEntry(7, "WIFI STATUS", [](const String&) {
-        if (WiFi.status() == WL_CONNECTED) {
-            IPAddress ip = WiFi.localIP();
-            char buf[128];
-            char ipbuf[32];
-            ip.toString().toCharArray(ipbuf, sizeof(ipbuf));
-            snprintf(buf, sizeof(buf), "WIFI: connected ssid=%s ip=%s",
-                     WiFi.SSID().c_str(), ipbuf);
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
-        } else {
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "WIFI: not connected");
-        }
-    });
-
-    m->addEntry(8, "WIFI DIAG", [](const String&) {
-        char d[256];
-        abbot::wifi_console::getDiagnostics(d, sizeof(d));
-        char out[300];
-        snprintf(out, sizeof(out), "WIFI-DIAG: %s", d);
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, out);
-    });
-
-    return m;
+    return m_menu.get();
 }
 
 } // namespace serialcmds

@@ -6,7 +6,7 @@ namespace abbot {
 namespace serialcmds {
 
 LogCommandHandler::LogCommandHandler() {
-    m_menu = new SerialMenu("Log channels");
+    m_menu.reset(new SerialMenu("Log channels"));
     m_menu->setOnEnter([this]() { logMenuOnEnter(); });
 }
 
@@ -18,7 +18,7 @@ bool LogCommandHandler::handleCommand(const String& line, const String& up) {
 }
 
 SerialMenu* LogCommandHandler::buildMenu() {
-    return m_menu;
+    return m_menu.get();
 }
 
 bool LogCommandHandler::handleLog(const String& line, const String& up) {

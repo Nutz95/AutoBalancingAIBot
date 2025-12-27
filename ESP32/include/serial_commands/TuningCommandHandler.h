@@ -15,24 +15,50 @@ namespace serialcmds {
  */
 class TuningCommandHandler : public ICommandHandler {
 public:
+    /**
+     * @brief Construct a new Tuning Command Handler object.
+     */
     TuningCommandHandler();
     virtual ~TuningCommandHandler() = default;
 
+    /**
+     * @brief Get the command prefix ("TUNING").
+     * 
+     * @return const char* The prefix string.
+     */
     const char* getPrefix() const override { return "TUNING"; }
+
+    /**
+     * @brief Handle tuning-specific commands.
+     * 
+     * @param line The original command line.
+     * @param up The command line in uppercase.
+     * @return true if the command was handled, false otherwise.
+     */
     bool handleCommand(const String& line, const String& up) override;
+
+    /**
+     * @brief Build and return the tuning configuration menu.
+     * 
+     * @return SerialMenu* Pointer to the built menu (owned by this handler).
+     */
     SerialMenu* buildMenu() override;
 
+    /**
+     * @brief Get the menu object.
+     * 
+     * @return SerialMenu* Pointer to the menu.
+     */
     SerialMenu* getMenu();
 
 private:
+    std::unique_ptr<SerialMenu> m_menu;
     bool handleTuning(const String& line, const String& up);
-    
-    // Menu handlers
-    static void tuningCustomHandler(const String &p);
-    static void tuningStreamStartHandler(const String &p);
-    static void tuningStreamStopHandler(const String &p);
 
-    SerialMenu* m_menu;
+    // Menu handlers
+    void tuningStreamStartHandler(const String &p);
+    void tuningStreamStopHandler(const String &p);
+    void tuningCustomHandler(const String &p);
 };
 
 } // namespace serialcmds

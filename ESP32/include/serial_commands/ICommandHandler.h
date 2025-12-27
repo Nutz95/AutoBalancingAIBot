@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Arduino.h>
+#include <memory>
 #include "serial_menu.h"
 
 namespace abbot {
@@ -11,6 +12,10 @@ namespace serialcmds {
  * 
  * Each module (Motor, WiFi, etc.) should implement this interface to handle
  * its own textual commands and provide its interactive menu.
+ * 
+ * Ownership:
+ * - Handlers are typically owned by a CommandRegistry via std::unique_ptr.
+ * - Handlers are responsible for the lifecycle of any SerialMenu they create.
  */
 class ICommandHandler {
 public:
@@ -34,12 +39,12 @@ public:
     virtual bool handleCommand(const String& line, const String& lineUpper) = 0;
 
     /**
-     * @brief Builds and returns the interactive menu for this module.
+     * @brief Returns the interactive menu for this module.
      * 
      * The handler retains ownership of the SerialMenu object. The caller
      * should not delete the returned pointer.
      * 
-     * @return SerialMenu* The menu object, or nullptr if no menu is provided.
+     * @return SerialMenu* A non-owning pointer to the menu object, or nullptr if no menu is provided.
      */
     virtual SerialMenu* buildMenu() = 0;
 };

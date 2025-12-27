@@ -1,33 +1,33 @@
 #pragma once
 
 #include "serial_commands/ICommandHandler.h"
+#include <memory>
 
 namespace abbot {
 namespace serialcmds {
 
 /**
- * @brief Handler for WiFi configuration and status.
+ * @brief Handler for system-level commands.
  * 
- * Manages commands starting with "WIFI" and provides a menu for
- * connecting to access points, checking status, and configuring the web console.
+ * Manages commands like REBOOT, HEAP, and TASKS.
  */
-class WifiCommandHandler : public ICommandHandler {
+class SystemCommandHandler : public ICommandHandler {
 public:
     /**
-     * @brief Construct a new Wifi Command Handler object.
+     * @brief Construct a new System Command Handler object.
      */
-    WifiCommandHandler();
-    virtual ~WifiCommandHandler() = default;
+    SystemCommandHandler() = default;
+    virtual ~SystemCommandHandler() = default;
 
     /**
-     * @brief Get the command prefix ("WIFI").
+     * @brief Get the command prefix ("SYS").
      * 
      * @return const char* The prefix string.
      */
-    const char* getPrefix() const override { return "WIFI"; }
+    const char* getPrefix() const override { return "SYS"; }
 
     /**
-     * @brief Handle WiFi-specific commands.
+     * @brief Handle system-specific commands.
      * 
      * @param line The original command line.
      * @param lineUpper The command line in uppercase.
@@ -36,7 +36,7 @@ public:
     bool handleCommand(const String& line, const String& lineUpper) override;
 
     /**
-     * @brief Build and return the WiFi configuration menu.
+     * @brief Build and return the system commands menu.
      * 
      * @return SerialMenu* Pointer to the built menu (owned by this handler).
      */

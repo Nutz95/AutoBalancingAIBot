@@ -16,16 +16,40 @@ namespace serialcmds {
  */
 class BalancerCommandHandler : public ICommandHandler {
 public:
-    BalancerCommandHandler(IFusionService* fusion);
+    /**
+     * @brief Construct a new Balancer Command Handler object.
+     * 
+     * @param fusionService Pointer to the fusion service implementation.
+     */
+    BalancerCommandHandler(IFusionService* fusionService);
     virtual ~BalancerCommandHandler() = default;
 
+    /**
+     * @brief Get the command prefix ("BALANCE").
+     * 
+     * @return const char* The prefix string.
+     */
     const char* getPrefix() const override { return "BALANCE"; }
+
+    /**
+     * @brief Handle balancer-specific commands.
+     * 
+     * @param line The original command line.
+     * @param up The command line in uppercase.
+     * @return true if the command was handled, false otherwise.
+     */
     bool handleCommand(const String& line, const String& up) override;
+
+    /**
+     * @brief Build and return the balancer configuration menu.
+     * 
+     * @return SerialMenu* Pointer to the built menu (owned by this handler).
+     */
     SerialMenu* buildMenu() override;
 
 private:
-    SerialMenu* m_menu;
-    IFusionService* m_fusion;
+    std::unique_ptr<SerialMenu> m_menu;
+    IFusionService* m_fusionService;
     bool handleBalance(const String& line, const String& up);
     
     // Menu handlers

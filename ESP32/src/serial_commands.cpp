@@ -7,10 +7,13 @@
 #include "serial_commands/AutotuneCommandHandler.h"
 #include "serial_commands/CalibrationCommandHandler.h"
 #include "FusionService.h"
+#include "MotorService.h"
+#include "FilterService.h"
 #include "serial_commands/FilterCommandHandler.h"
 #include "serial_commands/TuningCommandHandler.h"
 #include "serial_commands/LogCommandHandler.h"
 #include "serial_commands/FusionCommandHandler.h"
+#include "serial_commands/SystemCommandHandler.h"
 #include "motor_drivers/driver_manager.h"
 #include "BMI088Driver.h"
 #include "logging.h"
@@ -25,20 +28,22 @@ namespace abbot {
 namespace serialcmds {
 
 // Module-local copy of the driver pointer
-static abbot::BMI088Driver *g_serial_task_driver = nullptr;
+static BMI088Driver *g_serial_task_driver = nullptr;
 
 // Globals for interactive menu state
-static SerialMenu *g_rootMenu = nullptr;
-static SerialMenu *g_currentMenu = nullptr;
+static std::unique_ptr<SerialMenu> g_rootMenu;
+static SerialMenu *g_currentMenu = nullptr; // Non-owning pointer to active menu
 static bool g_menuActive = false;
 static bool g_building_menu = false;
 static portMUX_TYPE g_menu_mux = portMUX_INITIALIZER_UNLOCKED;
 
 // Command Registry
-static abbot::serialcmds::CommandRegistry g_registry;
+static CommandRegistry g_registry;
 
 // Fusion Service instance
-static abbot::FusionService g_fusionService;
+static FusionService g_fusionService;
+static MotorService g_motorService;
+static FilterService g_filterService;
 
 static void onCaptureCompleteRefreshMenu() {
   if (g_menuActive && g_currentMenu) {
@@ -46,24 +51,25 @@ static void onCaptureCompleteRefreshMenu() {
   }
 }
 
-static void ensureMenus(abbot::BMI088Driver *driver) {
+static void ensureMenus(BMI088Driver *driver) {
   if (g_rootMenu || g_building_menu)
     return;
   g_building_menu = true;
 
   // 1. Register all handlers first (registry takes ownership)
   g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new WifiCommandHandler()));
-  g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new MotorCommandHandler()));
+  g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new MotorCommandHandler(&g_motorService)));
   g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new BalancerCommandHandler(&g_fusionService)));
-  g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new AutotuneCommandHandler()));
+  g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new AutotuneCommandHandler(&g_fusionService)));
   g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new CalibrationCommandHandler(driver)));
-  g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new FilterCommandHandler()));
+  g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new FilterCommandHandler(&g_filterService)));
   g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new TuningCommandHandler()));
   g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new LogCommandHandler()));
   g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new FusionCommandHandler(&g_fusionService)));
+  g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new SystemCommandHandler()));
 
   // 2. Build root menu from registered handlers
-  SerialMenu *root = new SerialMenu("Main Menu");
+  std::unique_ptr<SerialMenu> root(new SerialMenu("Main Menu"));
   int menuId = 1;
 
   for (auto& handler : g_registry.getHandlers()) {
@@ -74,14 +80,14 @@ static void ensureMenus(abbot::BMI088Driver *driver) {
   }
 
   portENTER_CRITICAL(&g_menu_mux);
-  g_rootMenu = root;
+  g_rootMenu = std::move(root);
   g_building_menu = false;
   portEXIT_CRITICAL(&g_menu_mux);
 
   abbot::tuning::setOnCaptureComplete(onCaptureCompleteRefreshMenu);
 }
 
-void startInteractiveMenu(abbot::BMI088Driver *driver) {
+void startInteractiveMenu(BMI088Driver *driver) {
   ensureMenus(driver);
   int attempts = 0;
   while (!g_rootMenu && g_building_menu && attempts < 20) {
@@ -90,13 +96,13 @@ void startInteractiveMenu(abbot::BMI088Driver *driver) {
   }
   ensureMenus(driver);
   g_menuActive = true;
-  g_currentMenu = g_rootMenu;
+  g_currentMenu = g_rootMenu.get();
   if (g_currentMenu) {
     g_currentMenu->enter();
   }
 }
 
-void processSerialLine(abbot::BMI088Driver *driver, const String &line) {
+void processSerialLine(BMI088Driver *driver, const String &line) {
   String sline = line;
   sline.trim();
   if (sline.length() == 0) return;
@@ -128,7 +134,7 @@ void processSerialLine(abbot::BMI088Driver *driver, const String &line) {
   if (up == "HELP" || up == "?" || up.startsWith("HELP ")) {
     ensureMenus(driver);
     g_menuActive = true;
-    g_currentMenu = g_rootMenu;
+    g_currentMenu = g_rootMenu.get();
     if (g_currentMenu) g_currentMenu->enter();
     return;
   }
@@ -147,7 +153,7 @@ void processSerialLine(abbot::BMI088Driver *driver, const String &line) {
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, sline);
 }
 
-void processSerialOnce(abbot::BMI088Driver *driver) {
+void processSerialOnce(BMI088Driver *driver) {
   if (!driver) return;
   ensureMenus(driver);
   if (!Serial || Serial.available() == 0) return;
@@ -160,7 +166,7 @@ void receiveRemoteLine(const String &line) {
 }
 
 void serialTaskEntry(void *pvParameters) {
-  abbot::BMI088Driver *driver = reinterpret_cast<abbot::BMI088Driver *>(pvParameters);
+  BMI088Driver *driver = reinterpret_cast<BMI088Driver *>(pvParameters);
   g_serial_task_driver = driver;
   for (;;) {
     processSerialOnce(driver);

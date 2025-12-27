@@ -464,7 +464,7 @@ static float computePidWithDriveSetpoint(float fused_pitch_deg,
   // Rate-limited debug logging to avoid spamming serial
   static uint32_t last_dbg_ms = 0;
   uint32_t now_ms = millis();
-  /*if (now_ms - last_dbg_ms > 20) {
+  if (now_ms - last_dbg_ms > 20) {
     LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
                "DRIVE DBG t=%lums tgtV=%.3f filtV=%.3f pitch_sp=%.3fdeg "
                "pitch_sp_rate=%.3fdeg/s pid_in=%.3fdeg pid_rate=%.3fdeg/s "
@@ -474,7 +474,7 @@ static float computePidWithDriveSetpoint(float fused_pitch_deg,
                (double)pitch_sp_rate_deg_s, (double)pid_in_deg,
                (double)pid_rate_deg_s, (double)pid_out);
     last_dbg_ms = now_ms;
-  }*/
+  }
 
   return pid_out;
 }

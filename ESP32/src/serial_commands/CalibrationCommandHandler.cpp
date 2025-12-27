@@ -8,7 +8,7 @@ namespace serialcmds {
 
 CalibrationCommandHandler::CalibrationCommandHandler(abbot::BMI088Driver* driver)
     : m_driver(driver) {
-    m_menu = new SerialMenu("Calibration Commands");
+    m_menu.reset(new SerialMenu("Calibration Commands"));
     m_menu->addEntry(1, "CALIB START GYRO [N]",
                 [driver](const String &p) { calibStartGyro(driver, p); });
     m_menu->addEntry(2, "CALIB START ACCEL [N]",
@@ -49,7 +49,7 @@ bool CalibrationCommandHandler::handleCommand(const String& line, const String& 
 }
 
 SerialMenu* CalibrationCommandHandler::buildMenu() {
-    return m_menu;
+    return m_menu.get();
 }
 
 void CalibrationCommandHandler::calibStartGyro(abbot::BMI088Driver *driver, const String &p) {

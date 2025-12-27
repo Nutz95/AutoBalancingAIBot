@@ -16,15 +16,39 @@ namespace serialcmds {
  */
 class CalibrationCommandHandler : public ICommandHandler {
 public:
+    /**
+     * @brief Construct a new Calibration Command Handler object.
+     * 
+     * @param driver Pointer to the BMI088 driver instance.
+     */
     CalibrationCommandHandler(abbot::BMI088Driver* driver);
     virtual ~CalibrationCommandHandler() = default;
 
+    /**
+     * @brief Get the command prefix ("CALIB").
+     * 
+     * @return const char* The prefix string.
+     */
     const char* getPrefix() const override { return "CALIB"; }
+
+    /**
+     * @brief Handle calibration-specific commands.
+     * 
+     * @param line The original command line.
+     * @param up The command line in uppercase.
+     * @return true if the command was handled, false otherwise.
+     */
     bool handleCommand(const String& line, const String& up) override;
+
+    /**
+     * @brief Build and return the calibration menu.
+     * 
+     * @return SerialMenu* Pointer to the built menu (owned by this handler).
+     */
     SerialMenu* buildMenu() override;
 
 private:
-    SerialMenu* m_menu;
+    std::unique_ptr<SerialMenu> m_menu;
     bool handleCalib(const String& line, const String& up);
     
     // Menu handlers
