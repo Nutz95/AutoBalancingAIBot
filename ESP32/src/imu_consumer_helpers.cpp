@@ -86,6 +86,7 @@ void finalizeWarmupIfDone(ConsumerState &state, abbot::IMUFilter &filter,
 void updateBiasEmaAndPersistIfNeeded(ConsumerState &state,
                                      const IMUSample &sample,
                                      const float gyro_robot[3]) {
+#if IMU_AUTO_GYRO_BIAS_UPDATE
   if (!state.gyro_bias_initialized)
     return;
   float a_norm = sqrtf(sample.ax * sample.ax + sample.ay * sample.ay +
@@ -138,7 +139,7 @@ void updateBiasEmaAndPersistIfNeeded(ConsumerState &state,
       }
     }
 
-    /*if ((int32_t)(now - state.last_persist_ms) >=
+    if ((int32_t)(now - state.last_persist_ms) >=
     (int32_t)state.persist_interval_ms) { if (state.prefs &&
     state.prefs_started) { float stored_x = state.prefs->getFloat("gbx", 0.0f);
         float stored_y = state.prefs->getFloat("gby", 0.0f);
@@ -150,12 +151,14 @@ void updateBiasEmaAndPersistIfNeeded(ConsumerState &state,
           state.prefs->putFloat("gby", state.gyro_bias[1]);
           state.prefs->putFloat("gbz", state.gyro_bias[2]);
           state.last_persist_ms = now;
-          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: persisted updated
-    gyro bias to NVS"); } else { state.last_persist_ms = now;
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: persisted updated gyro bias to NVS");
+        } else {
+          state.last_persist_ms = now;
         }
       }
-    }*/
+    }
   }
+#endif
 }
 
 void publishFusedOutputsUnderMutex(ConsumerState &state,

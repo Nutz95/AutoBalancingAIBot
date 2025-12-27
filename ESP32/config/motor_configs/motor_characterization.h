@@ -85,7 +85,7 @@
   // Deadzone command threshold (command units, normalized 0..1)
   // Open interval ]-0.08, 0.08[ - conservative value based on sweep measurements
 #ifndef MOTOR_CHAR_DEADZONE_CMD
-#define MOTOR_CHAR_DEADZONE_CMD 0.01f
+#define MOTOR_CHAR_DEADZONE_CMD 0.08f
 #endif
 
   // Invert motor command sign if required (0 = normal, 1 = invert)
