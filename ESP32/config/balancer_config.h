@@ -1,32 +1,33 @@
 // balancer_config.h
 // Default configuration for the balancer PID controller.
-// Minimum command applied when outside deadband (feedforward to overcome static friction)
 #pragma once
+
+#include "drive_config.h"
+
+// Minimum command applied when outside deadband (feedforward to overcome static friction)
 #ifndef BALANCER_MIN_CMD
-#define BALANCER_MIN_CMD 0.09f
+#define BALANCER_MIN_CMD 0.18f
 #endif
 
-// Default PID gains (units: pitch in radians)
+// Default PID gains (units: pitch in degrees)
 // NOTE: These defaults are tuned for DIRECT VELOCITY control mode.
 // Adjusted for CG @ 6.5cm above wheel axis, mass 1.3kg, wheel diameter 67mm
-// Kp=2.1 means 1 degree error (0.017 rad) -> 0.036 command (3.6% speed)
-// Saturation (100% speed) occurs at ~27.4 degrees error.
+// Kp=0.18 means 1 degree error -> 0.18 command (matches MIN_CMD)
 #ifndef BALANCER_DEFAULT_KP
-#define BALANCER_DEFAULT_KP 9.8f
+#define BALANCER_DEFAULT_KP 0.18f
 #endif
-// Ki=0 by default to avoid integral windup causing direction reversal
-// Add small Ki (0.01-0.05) only after Kp/Kd are tuned
+
 #ifndef BALANCER_DEFAULT_KI
-#define BALANCER_DEFAULT_KI 3.2f
+#define BALANCER_DEFAULT_KI 0.80f
 #endif
 
 #ifndef BALANCER_DEFAULT_KD
-#define BALANCER_DEFAULT_KD 0.43f
+#define BALANCER_DEFAULT_KD 0.0040f
 #endif
 
 // Integrator anti-windup clamp (absolute limit applied to integrator state)
 #ifndef BALANCER_INTEGRATOR_LIMIT
-#define BALANCER_INTEGRATOR_LIMIT 0.5f
+#define BALANCER_INTEGRATOR_LIMIT 0.4f
 #endif
 
 // Whether to enable the balancer by default on startup (false recommended)
@@ -35,10 +36,9 @@
 #endif
 
 // Minimum absolute normalized motor output to overcome motor deadband/holding
-// Value from motor characterization (measured deadzone ~0.11-0.15, conservative 0.20)
-// This is the physical threshold below which motors don't move.
+// Value from motor characterization (measured deadzone ~0.11-0.15, conservative 0.15)
 #ifndef BALANCER_MOTOR_MIN_OUTPUT
-#define BALANCER_MOTOR_MIN_OUTPUT 0.20f
+#define BALANCER_MOTOR_MIN_OUTPUT 0.15f
 #endif
 
 // Command slew limit (normalized units per second).
@@ -96,19 +96,6 @@
 #define BALANCER_DEBUG_LOG_INTERVAL_MS 1000
 #endif
 
-// Drive interface configuration
-// How quickly the normalized forward command (v) may change (units/sec).
-// Higher = more responsive. Safe default = 2.0f (full step ~0.5s).
-#ifndef DRIVE_V_SLEW
-#define DRIVE_V_SLEW 1.5f
-#endif
-
-// Maximum pitch (degrees) the drive command will request from the balancer.
-// This limits how far the robot will lean to accelerate/decelerate. Default 6°.
-#ifndef DRIVE_MAX_PITCH_DEG
-#define DRIVE_MAX_PITCH_DEG 3.0f
-#endif
-
 // Motor command gain scaling factors (to compensate for asymmetric motor response)
 // Initialized from motor characterization ratios if available, else 1.0
 // Use 1.0 for both if motors are matched. Adjust to balance robot behavior:
@@ -132,6 +119,6 @@
   (2.0f * MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD / \
    (MOTOR_CHAR_LEFT_GAIN_COUNTS_PER_CMD + MOTOR_CHAR_RIGHT_GAIN_COUNTS_PER_CMD))
 #else
-#define BALANCER_RIGHT_MOTOR_GAIN 1.18f
+#define BALANCER_RIGHT_MOTOR_GAIN 1.0f
 #endif
 #endif

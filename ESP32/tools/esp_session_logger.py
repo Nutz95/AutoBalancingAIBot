@@ -61,7 +61,7 @@ class ESPLogger:
         # regex patterns (common ones from firmware logs)
         self.re_start = re.compile(r"BALANCER: started")
         self.re_stop = re.compile(r"BALANCER: stopped|BALANCER: auto-stopped")
-        self.re_drive_dbg = re.compile(r"DRIVE DBG .*pitch_sp=([\-\d\.]+)deg .*pid_in=([\-\d\.]+)deg .*pid_out=([\-\d\.]+)")
+        self.re_drive_dbg = re.compile(r"DRIVE DBG .*pitch_setpoint=([\-\d\.]+)deg .*pid_in=([\-\d\.]+)deg .*pid_out=([\-\d\.]+)")
         # Newer firmware adds BALANCER_DBG with pid/command info (rate-limited)
         self.re_balancer_dbg = re.compile(r"BALANCER_DBG pitch=([\-\d\.]+)deg pitch_rate=([\-\d\.]+)deg/s pid_in=([\-\d\.]+) pid_out=([\-\d\.]+) cmd_pre_slew=([\-\d\.]+) cmd_after_slew=([\-\d\.]+) last_cmd=([\-\d\.]+)")
         self.re_motor_left = re.compile(r"MOTOR DBG LEFT ([\-\d\.]+)")
@@ -123,10 +123,10 @@ class ESPLogger:
         # parse patterns
         m = self.re_drive_dbg.search(line)
         if m:
-            pitch_sp = float(m.group(1))
+            pitch_setpoint = float(m.group(1))
             pid_in = float(m.group(2))
             pid_out = float(m.group(3))
-            self.series['pitch_sp'].append((t, pitch_sp))
+            self.series['pitch_setpoint'].append((t, pitch_setpoint))
             self.series['pid_in'].append((t, pid_in))
             self.series['pid_out'].append((t, pid_out))
         m = self.re_motor_left.search(line)

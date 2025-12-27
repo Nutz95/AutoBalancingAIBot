@@ -11,10 +11,14 @@ public:
   PIDController();
   void begin(float kp, float ki, float kd, float i_limit = 1.0f);
   void reset();
-  // Compute control output given error (setpoint - measurement) and dt
+  void resetIntegrator();
+  // Compute control output given error (measurement - setpoint) and dt
   // (seconds)
   float update(float error, float error_dot, float dt);
   void setGains(float kp, float ki, float kd);
+  void setILimit(float limit);
+
+  float getIntegrator() const { return m_integrator; }
 
 private:
   float m_kp;

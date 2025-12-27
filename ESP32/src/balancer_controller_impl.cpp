@@ -64,8 +64,9 @@ static EncoderVelocityState g_encoder_velocity_state;
 static float g_drive_target_v = 0.0f; // desired normalized forward [-1..1]
 static float g_drive_target_w = 0.0f; // desired normalized turn [-1..1]
 static float g_drive_v_filtered = 0.0f;
-static float g_drive_last_pitch_sp_deg = 0.0f; // last pitch setpoint in degrees
-// Configuration for drive->pitch mapping (from balancer_config.h)
+static float g_drive_last_pitch_setpoint_deg = 0.0f; // last pitch setpoint in degrees
+static int g_last_cmd_sign = 0; // for direction change detection
+// Configuration for drive->pitch mapping (from drive_config.h)
 static float g_drive_max_pitch_rad =
     degToRad(DRIVE_MAX_PITCH_DEG); // configured max pitch (deg)
 static const float g_drive_v_slew =
@@ -155,6 +156,14 @@ void init() {
 }
 
 void setDriveSetpoints(float v_norm, float w_norm) {
+  // Apply joystick deadzone to avoid drift when stick is released
+  if (fabsf(v_norm) < DRIVE_JOYSTICK_DEADZONE) {
+    v_norm = 0.0f;
+  }
+  if (fabsf(w_norm) < DRIVE_JOYSTICK_DEADZONE) {
+    w_norm = 0.0f;
+  }
+
   // clamp inputs to [-1,1]
   if (v_norm > 1.0f) {
     v_norm = 1.0f;
@@ -170,9 +179,15 @@ void setDriveSetpoints(float v_norm, float w_norm) {
   }
   g_drive_target_v = v_norm;
   g_drive_target_w = w_norm;
+
+  // If joystick is released, reset integrator to prevent "unwinding" drift
+  if (v_norm == 0.0f && w_norm == 0.0f) {
+    g_pid.resetIntegrator();
+  }
+
   // Log the requested setpoints for debugging
-  LOG_PRINTF(abbot::log::CHANNEL_BALANCER, "SETDRIVE: v_req=%.3f w_req=%.3f\n",
-             (double)g_drive_target_v, (double)g_drive_target_w);
+  LOG_PRINTF(abbot::log::CHANNEL_BALANCER, "SETDRIVE: t=%lums v_req=%.3f w_req=%.3f\n",
+             (unsigned long)millis(), (double)g_drive_target_v, (double)g_drive_target_w);
 }
 
 void start(float fused_pitch_rad) {
@@ -237,7 +252,8 @@ void start(float fused_pitch_rad) {
   g_drive_target_v = 0.0f;
   g_drive_target_w = 0.0f;
   g_drive_v_filtered = 0.0f;
-  g_drive_last_pitch_sp_deg = 0.0f;
+  g_drive_last_pitch_setpoint_deg = 0.0f;
+  g_last_cmd_sign = 0;
   char buf[128];
   {
     bool men = false;
@@ -270,7 +286,8 @@ void stop() {
   g_drive_target_v = 0.0f;
   g_drive_target_w = 0.0f;
   g_drive_v_filtered = 0.0f;
-  g_drive_last_pitch_sp_deg = 0.0f;
+  g_drive_last_pitch_setpoint_deg = 0.0f;
+  g_last_cmd_sign = 0;
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
               "BALANCER: stopped - motors DISABLED");
 }
@@ -459,28 +476,43 @@ static float computePidWithDriveSetpoint(float fused_pitch_deg,
     g_drive_v_filtered += dv;
   }
   // pitch setpoint from filtered velocity command (convert to degrees)
-  float pitch_sp_rad = g_drive_v_filtered * g_drive_max_pitch_rad;
+  float pitch_setpoint_rad = g_drive_v_filtered * g_drive_max_pitch_rad;
   // clamp pitch setpoint (in radians before conversion)
-  if (pitch_sp_rad > g_drive_max_pitch_rad) {
-    pitch_sp_rad = g_drive_max_pitch_rad;
+  if (pitch_setpoint_rad > g_drive_max_pitch_rad) {
+    pitch_setpoint_rad = g_drive_max_pitch_rad;
   }
-  if (pitch_sp_rad < -g_drive_max_pitch_rad) {
-    pitch_sp_rad = -g_drive_max_pitch_rad;
+  if (pitch_setpoint_rad < -g_drive_max_pitch_rad) {
+    pitch_setpoint_rad = -g_drive_max_pitch_rad;
   }
   
-  float pitch_sp_deg = radToDeg(pitch_sp_rad);
+  float pitch_setpoint_deg = radToDeg(pitch_setpoint_rad);
   
-  // estimate pitch_sp rate (in deg/s)
-  float pitch_sp_rate_deg_s = 0.0f;
+  // --- Safety: Setpoint Attenuation ---
+  // If the robot is far from vertical (large error), reduce the drive setpoint
+  // to prioritize stabilization. This prevents the "fighting" feeling where
+  // a large drive setpoint consumes all motor authority.
+  float current_error_deg = fused_pitch_deg - 0.0f; // error relative to vertical
+  if (fabsf(current_error_deg) > DRIVE_SAFETY_ATTENUATION_START_DEG) {
+    // Gradually reduce setpoint as error grows from start to end degrees
+    float range = DRIVE_SAFETY_ATTENUATION_END_DEG - DRIVE_SAFETY_ATTENUATION_START_DEG;
+    float attenuation = 1.0f - (fabsf(current_error_deg) - DRIVE_SAFETY_ATTENUATION_START_DEG) / range;
+    if (attenuation < 0.0f) {
+      attenuation = 0.0f;
+    }
+    pitch_setpoint_deg *= attenuation;
+  }
+
+  // estimate pitch_setpoint rate (in deg/s)
+  float pitch_setpoint_rate_deg_s = 0.0f;
   if (dt > 0.0f) {
-    pitch_sp_rate_deg_s = (pitch_sp_deg - g_drive_last_pitch_sp_deg) / dt;
+    pitch_setpoint_rate_deg_s = (pitch_setpoint_deg - g_drive_last_pitch_setpoint_deg) / dt;
   }
-  g_drive_last_pitch_sp_deg = pitch_sp_deg;
+  g_drive_last_pitch_setpoint_deg = pitch_setpoint_deg;
 
   // PID input: error = measurement - setpoint (so positive error commands forward)
   // When robot leans forward (positive pitch), error is positive → command forward to correct
-  float pid_in_deg = fused_pitch_deg - pitch_sp_deg;
-  float pid_rate_deg_s = fused_pitch_rate_deg_s - pitch_sp_rate_deg_s;
+  float pid_in_deg = fused_pitch_deg - pitch_setpoint_deg;
+  float pid_rate_deg_s = fused_pitch_rate_deg_s - pitch_setpoint_rate_deg_s;
   float pid_out = g_pid.update(pid_in_deg, pid_rate_deg_s, dt);
 
   // Rate-limited debug logging to avoid spamming serial
@@ -488,12 +520,12 @@ static float computePidWithDriveSetpoint(float fused_pitch_deg,
   uint32_t now_ms = millis();
   if (now_ms - last_dbg_ms > 20) {
     LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
-               "DRIVE DBG t=%lums tgtV=%.3f filtV=%.3f pitch_sp=%.3fdeg "
-               "pitch_sp_rate=%.3fdeg/s pid_in=%.3fdeg pid_rate=%.3fdeg/s "
+               "DRIVE DBG t=%lums tgtV=%.3f filtV=%.3f pitch_setpoint=%.3fdeg "
+               "pitch_setpoint_rate=%.3fdeg/s pid_in=%.3fdeg pid_rate=%.3fdeg/s "
                "pid_out=%.3f\n",
                (unsigned long)now_ms, (double)g_drive_target_v,
-               (double)g_drive_v_filtered, (double)pitch_sp_deg,
-               (double)pitch_sp_rate_deg_s, (double)pid_in_deg,
+               (double)g_drive_v_filtered, (double)pitch_setpoint_deg,
+               (double)pitch_setpoint_rate_deg_s, (double)pid_in_deg,
                (double)pid_rate_deg_s, (double)pid_out);
     last_dbg_ms = now_ms;
   }
@@ -688,9 +720,9 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
       computePidWithDriveSetpoint(pitch_for_control_deg, pitch_rate_deg_s, dt);
   
   // Compute pid_in here (pitch error in degrees) for logging
-  // NOTE: error = setpoint - measurement (same sign as in computePidWithDriveSetpoint)
-  float pitch_sp_deg = radToDeg(g_drive_v_filtered * g_drive_max_pitch_rad);
-  float pid_in_deg = pitch_sp_deg - pitch_for_control_deg;
+  // NOTE: error = measurement - setpoint (consistent with computePidWithDriveSetpoint)
+  float pitch_setpoint_deg = radToDeg(g_drive_v_filtered * g_drive_max_pitch_rad);
+  float pid_in_deg = pitch_for_control_deg - pitch_setpoint_deg;
   
   float cmd = pid_out; // No negation - same sign as pitch for catching behavior
   // clamp (pre-slew). Keep a copy for logging to inspect clamp vs slew behavior
@@ -718,6 +750,27 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
     delta = -max_delta;
   }
   cmd = g_last_cmd + delta;
+
+  // --- Fluidity Enhancements ---
+  // 1. Direction change "Kick": help overcome static friction when reversing
+  int current_sign = (cmd > DRIVE_KICK_NOISE_FLOOR) ? 1 : ((cmd < -DRIVE_KICK_NOISE_FLOOR) ? -1 : 0);
+  if (current_sign != 0 && g_last_cmd_sign != 0 && current_sign != g_last_cmd_sign) {
+    // Apply a brief boost to break friction on direction change
+    cmd *= DRIVE_KICK_BOOST;
+  }
+  g_last_cmd_sign = current_sign;
+
+  // 2. Deceleration Boost: help the robot return to vertical when joystick is released
+  if (g_drive_target_v == 0.0f && fabsf(g_drive_v_filtered) > DRIVE_BRAKE_NOISE_FLOOR) {
+    // Add a small authority boost during the braking phase
+    cmd *= DRIVE_BRAKE_BOOST;
+  }
+
+  // 3. Safety Reset: if error is huge, clear integrator to avoid violent recovery
+  if (fabsf(pid_in_deg) > DRIVE_SAFETY_INTEGRATOR_RESET_DEG) {
+    g_pid.resetIntegrator();
+  }
+
   // Rate-limited debug logging for PID vs final commanded value
   // Interval controlled by BALANCER_DEBUG_LOG_INTERVAL_MS (configurable for characterization)
   static uint32_t last_cmd_dbg_ms = 0;
@@ -746,7 +799,7 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   // Nouvelle logique : si |cmd| < deadband, appliquer min_cmd (signe correct),
   // mais si |cmd| est très petit, alors cmd = 0
   if (fabsf(cmd) < g_deadband) {
-    if (fabsf(cmd) < 1e-4f) {
+    if (fabsf(cmd) < 0.01f) {
       cmd = 0.0f;
     } else {
       float sign = (cmd > 0.0f) ? 1.0f : -1.0f;

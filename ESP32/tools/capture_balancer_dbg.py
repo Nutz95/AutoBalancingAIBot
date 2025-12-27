@@ -21,7 +21,8 @@ import numpy as np
 import pandas as pd
 
 
-DRIVE_RE = re.compile(r"DRIVE DBG t=(?P<t>\d+)ms .*?tgtV=(?P<tgtV>[-0-9.eE]+) .*?filtV=(?P<filtV>[-0-9.eE]+) .*?pitch_sp=(?P<pitch_sp>[-0-9.eE]+)deg .*?pitch_sp_rate=(?P<pitch_sp_rate>[-0-9.eE]+)deg/s .*?pid_in=(?P<pid_in>[-0-9.eE]+)deg .*?pid_rate=(?P<pid_rate>[-0-9.eE]+)deg/s .*?pid_out=(?P<pid_out>[-0-9.eE]+)")
+DRIVE_RE = re.compile(r"DRIVE DBG t=(?P<t>\d+)ms .*?tgtV=(?P<tgtV>[-0-9.eE]+) .*?filtV=(?P<filtV>[-0-9.eE]+) .*?pitch_setpoint=(?P<pitch_setpoint>[-0-9.eE]+)deg .*?pitch_setpoint_rate=(?P<pitch_setpoint_rate>[-0-9.eE]+)deg/s .*?pid_in=(?P<pid_in>[-0-9.eE]+)deg .*?pid_rate=(?P<pid_rate>[-0-9.eE]+)deg/s .*?pid_out=(?P<pid_out>[-0-9.eE]+)")
+SETDRIVE_RE = re.compile(r"SETDRIVE: t=(?P<t>\d+)ms v_req=(?P<v_req>[-0-9.eE]+) w_req=(?P<w_req>[-0-9.eE]+)")
 BAL_RE = re.compile(
     r"BALANCER_DBG t=(?P<t>\d+)ms .*?pitch=(?P<pitch>[-0-9.eE]+)deg "
     r"pitch_rate=(?P<pitch_rate>[-0-9.eE]+)deg/s .*?pid_in=(?P<pid_in>[-0-9.eE]+)deg "
@@ -38,6 +39,12 @@ def parse_line(line, rows):
         d = {k: float(v) for k, v in m.groupdict().items()}
         t = int(float(d.pop('t')))
         rows['drive'][t].update(d)
+        return
+    m = SETDRIVE_RE.search(line)
+    if m:
+        d = {k: float(v) for k, v in m.groupdict().items()}
+        t = int(float(d.pop('t')))
+        rows['setdrive'][t].update(d)
         return
     m = BAL_RE.search(line)
     if m:
@@ -80,7 +87,7 @@ def main():
     args = p.parse_args()
 
     # If user supplied --read-csv, skip live capture and only plot/analyze existing CSV.
-    rows = {'drive': defaultdict(dict), 'bal': defaultdict(dict), 'imu': dict()}
+    rows = {'drive': defaultdict(dict), 'bal': defaultdict(dict), 'setdrive': defaultdict(dict), 'imu': dict()}
     if args.read_csv:
         print('reading CSV for plotting:', args.read_csv)
         df = pd.read_csv(args.read_csv)
@@ -90,7 +97,7 @@ def main():
             for line in fh:
                 parse_line(line.rstrip('\n'), rows)
         # build dataframe
-        keys = set(rows['drive'].keys()) | set(rows['bal'].keys()) | set(rows['imu'].keys())
+        keys = set(rows['drive'].keys()) | set(rows['bal'].keys()) | set(rows['setdrive'].keys()) | set(rows['imu'].keys())
         if not keys:
             print('no parsed records found in log')
             return
@@ -101,6 +108,7 @@ def main():
             r.update(rows['imu'].get(t, {}))
             r.update(rows['drive'].get(t, {}))
             r.update(rows['bal'].get(t, {}))
+            r.update(rows['setdrive'].get(t, {}))
             recs.append(r)
         df = pd.DataFrame(recs).sort_values('time_ms')
         df.to_csv(args.csv, index=False)
@@ -109,15 +117,17 @@ def main():
         if not args.host:
             print('error: --host required for live capture (or use --read-csv)')
             return
+        
+        print(f'Connecting to {args.host}:{args.port}...')
         sock = socket.create_connection((args.host, args.port), timeout=args.timeout)
+        sock.settimeout(None) # Wait indefinitely for logs once connected
         f = sock.makefile('r', encoding='utf8', errors='ignore')
-        print('connected to', args.host, args.port)
+        print(f'Connected. Waiting for balancer to start (trigger it from your controller)...')
 
         # wait for balancer started
         start_re = re.compile(r'BALANCER: started.*motors ENABLED', re.IGNORECASE)
         stop_re = re.compile(r'BALANCER: stopped.*motors DISABLED', re.IGNORECASE)
         started = False
-        start_time = time.time()
         with open(args.out, 'w', encoding='utf8') as outfh:
             try:
                 while True:
@@ -146,6 +156,8 @@ def main():
             keys.add(k)
         for k in rows['bal'].keys():
             keys.add(k)
+        for k in rows['setdrive'].keys():
+            keys.add(k)
         for k in rows['imu'].keys():
             keys.add(k)
         if not keys:
@@ -158,6 +170,7 @@ def main():
             r.update(rows['imu'].get(t, {}))
             r.update(rows['drive'].get(t, {}))
             r.update(rows['bal'].get(t, {}))
+            r.update(rows['setdrive'].get(t, {}))
             recs.append(r)
         df = pd.DataFrame(recs)
         df = df.sort_values('time_ms')
@@ -172,6 +185,8 @@ def main():
             keys.add(k)
         for k in rows['bal'].keys():
             keys.add(k)
+        for k in rows['setdrive'].keys():
+            keys.add(k)
         for k in rows['imu'].keys():
             keys.add(k)
         if not keys:
@@ -184,6 +199,7 @@ def main():
             r.update(rows['imu'].get(t, {}))
             r.update(rows['drive'].get(t, {}))
             r.update(rows['bal'].get(t, {}))
+            r.update(rows['setdrive'].get(t, {}))
             recs.append(r)
         df = pd.DataFrame(recs)
         df = df.sort_values('time_ms')
@@ -195,7 +211,7 @@ def main():
         import matplotlib.pyplot as plt
 
         # ensure expected columns exist
-        expected = ['pitch', 'pitch_sp', 'ax', 'ay', 'az', 'gx', 'gy', 'gz', 'pid_out', 'cmd_pre_slew', 'cmd_after_slew', 'last_cmd', 'tgtV']
+        expected = ['pitch', 'pitch_setpoint', 'ax', 'ay', 'az', 'gx', 'gy', 'gz', 'pid_out', 'cmd_pre_slew', 'cmd_after_slew', 'last_cmd', 'tgtV', 'v_req', 'w_req']
         for c in expected:
             if c not in df.columns:
                 df[c] = np.nan
@@ -234,7 +250,7 @@ def main():
         t = (df['time_ms'].to_numpy().astype(float) - df['time_ms'].iloc[0]) / 1000.0
         plt.figure(figsize=(10, 8))
         ax1 = plt.subplot(3, 1, 1)
-        ax1.plot(t, df['pitch_sp'], label='pitch_sp', alpha=0.6)
+        ax1.plot(t, df['pitch_setpoint'], label='pitch_setpoint', alpha=0.6)
         ax1.plot(t, df['pitch'], label='pitch (filtered)', alpha=0.9)
         ax1.set_ylabel('pitch (deg)')
         ax1.legend()
@@ -258,11 +274,12 @@ def main():
         ax2.legend()
 
         ax3 = plt.subplot(3, 1, 3, sharex=ax1)
-        ax3.plot(t, df['pid_out'], label='pid_out')
+        ax3.plot(t, df['pid_out'], label='pid_out', alpha=0.7)
         # plot commands — show sparse points with markers for readability
-        ax3.plot(t, df['tgtV'], label='tgtV')
-        ax3.plot(t, df['cmd_after_slew'], marker='o', linestyle='None', label='cmd_after_slew')
-        ax3.plot(t, df['last_cmd'], marker='x', linestyle='None', label='last_cmd')
+        ax3.plot(t, df['tgtV'], label='tgtV (drive)', alpha=0.8)
+        ax3.plot(t, df['v_req'], label='v_req (raw)', linestyle='--', alpha=0.5)
+        ax3.plot(t, df['cmd_after_slew'], marker='o', markersize=3, linestyle='None', label='cmd_after_slew')
+        ax3.plot(t, df['last_cmd'], marker='x', markersize=3, linestyle='None', label='last_cmd')
         ax3.set_ylabel('commands')
         ax3.legend()
 

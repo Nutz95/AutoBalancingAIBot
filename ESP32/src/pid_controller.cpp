@@ -21,24 +21,42 @@ void PIDController::reset() {
   m_last_error = 0.0f;
 }
 
+void PIDController::resetIntegrator() {
+  m_integrator = 0.0f;
+}
+
 void PIDController::setGains(float kp, float ki, float kd) {
   m_kp = kp;
   m_ki = ki;
   m_kd = kd;
 }
 
+void PIDController::setILimit(float limit) {
+  m_i_limit = limit;
+}
+
 float PIDController::update(float error, float error_dot, float dt) {
-  if (dt <= 0.0f)
+  if (dt <= 0.0f) {
     return 0.0f;
+  }
+
+  // Integral Reset on Zero Crossing: prevent overshoot by clearing 
+  // accumulated error when we pass the setpoint.
+  if ((error > 0.0f && m_last_error < 0.0f) || (error < 0.0f && m_last_error > 0.0f)) {
+    m_integrator = 0.0f;
+  }
+
   // Proportional
   float p = m_kp * error;
   // Integral (trapezoidal)
   m_integrator += 0.5f * (error + m_last_error) * dt;
   // anti-windup clamp
-  if (m_integrator > m_i_limit)
+  if (m_integrator > m_i_limit) {
     m_integrator = m_i_limit;
-  if (m_integrator < -m_i_limit)
+  }
+  if (m_integrator < -m_i_limit) {
     m_integrator = -m_i_limit;
+  }
   float i = m_ki * m_integrator;
   // Derivative: use provided error_dot if available (e.g., from gyro fusion)
   float d = m_kd * error_dot;
