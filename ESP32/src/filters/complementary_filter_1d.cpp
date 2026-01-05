@@ -25,7 +25,11 @@ public:
     return IMU_FILTER_WARMUP_MS_COMPLEMENTARY1D;
   }
   void update(float gx, float gy, float gz, float ax, float ay, float az,
-              float dt) override {
+              float dt, float fused_pitch = 0.0f,
+              float fused_roll = 0.0f, float fused_yaw = 0.0f) override {
+    (void)fused_pitch;
+    (void)fused_roll;
+    (void)fused_yaw;
     // Compute accel pitch (approx): assuming robot x axis forward
     // Compute pitch using robot-frame X axis (positive when tilting forward)
     float accel_pitch = atan2f(ax, sqrtf(ay * ay + az * az));

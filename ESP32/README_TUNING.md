@@ -12,7 +12,7 @@ How to enable
 
 CSV format
 - Header (example):
-  - `timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd`
+  - `timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temperatureCelsius,left_cmd,right_cmd`
 - Rows: one CSV row per IMU cycle (sample rate derived from BMI088 sampling).
 
 

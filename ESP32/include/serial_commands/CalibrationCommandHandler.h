@@ -3,7 +3,7 @@
 
 #include "ICommandHandler.h"
 #include "../serial_menu.h"
-#include "../BMI088Driver.h"
+#include "../imu_drivers/IIMUDriver.h"
 
 namespace abbot {
 namespace serialcmds {
@@ -19,9 +19,9 @@ public:
     /**
      * @brief Construct a new Calibration Command Handler object.
      * 
-     * @param driver Pointer to the BMI088 driver instance.
+     * @param driver Pointer to the IMU driver instance.
      */
-    CalibrationCommandHandler(abbot::BMI088Driver* driver);
+    CalibrationCommandHandler(abbot::IIMUDriver* driver);
     virtual ~CalibrationCommandHandler() = default;
 
     /**
@@ -52,13 +52,13 @@ private:
     bool handleCalib(const String& line, const String& up);
     
     // Menu handlers
-    static void calibStartGyro(abbot::BMI088Driver *driver, const String &p);
-    static void calibStartAccel(abbot::BMI088Driver *driver, const String &p);
-    static void calibShow(abbot::BMI088Driver *driver);
-    static void calibReset(abbot::BMI088Driver *driver);
-    static void calibSave(abbot::BMI088Driver *driver);
+    static void calibStartGyro(abbot::IIMUDriver *driver, const String &p);
+    static void calibStartAccel(abbot::IIMUDriver *driver, const String &p);
+    static void calibShow(abbot::IIMUDriver *driver);
+    static void calibReset(abbot::IIMUDriver *driver);
+    static void calibSave(abbot::IIMUDriver *driver);
 
-    abbot::BMI088Driver* m_driver;
+    abbot::IIMUDriver* m_driver;
 };
 
 } // namespace serialcmds

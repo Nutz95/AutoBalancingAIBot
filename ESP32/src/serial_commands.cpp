@@ -15,7 +15,8 @@
 #include "serial_commands/FusionCommandHandler.h"
 #include "serial_commands/SystemCommandHandler.h"
 #include "motor_drivers/driver_manager.h"
-#include "BMI088Driver.h"
+#include "imu_drivers/IIMUDriver.h"
+#include "imu_drivers/imu_manager.h"
 #include "logging.h"
 #include "serial_menu.h"
 #include "tuning_capture.h"
@@ -28,7 +29,7 @@ namespace abbot {
 namespace serialcmds {
 
 // Module-local copy of the driver pointer
-static BMI088Driver *g_serial_task_driver = nullptr;
+static IIMUDriver *g_serial_task_driver = nullptr;
 
 // Globals for interactive menu state
 static std::unique_ptr<SerialMenu> g_rootMenu;
@@ -51,7 +52,7 @@ static void onCaptureCompleteRefreshMenu() {
   }
 }
 
-static void ensureMenus(BMI088Driver *driver) {
+static void ensureMenus(IIMUDriver *driver) {
   if (g_rootMenu || g_building_menu)
     return;
   g_building_menu = true;
@@ -87,7 +88,7 @@ static void ensureMenus(BMI088Driver *driver) {
   abbot::tuning::setOnCaptureComplete(onCaptureCompleteRefreshMenu);
 }
 
-void startInteractiveMenu(BMI088Driver *driver) {
+void startInteractiveMenu(IIMUDriver *driver) {
   ensureMenus(driver);
   int attempts = 0;
   while (!g_rootMenu && g_building_menu && attempts < 20) {
@@ -102,10 +103,12 @@ void startInteractiveMenu(BMI088Driver *driver) {
   }
 }
 
-void processSerialLine(BMI088Driver *driver, const String &line) {
+void processSerialLine(IIMUDriver *driver, const String &line) {
   String sline = line;
   sline.trim();
-  if (sline.length() == 0) return;
+  if (sline.length() == 0) {
+    return;
+  }
 
   String up = sline;
   up.toUpperCase();
@@ -153,10 +156,14 @@ void processSerialLine(BMI088Driver *driver, const String &line) {
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, sline);
 }
 
-void processSerialOnce(BMI088Driver *driver) {
-  if (!driver) return;
+void processSerialOnce(IIMUDriver *driver) {
+  if (!driver) {
+    return;
+  }
   ensureMenus(driver);
-  if (!Serial || Serial.available() == 0) return;
+  if (!Serial || Serial.available() == 0) {
+    return;
+  }
   String line = Serial.readStringUntil('\n');
   processSerialLine(driver, line);
 }
@@ -166,7 +173,7 @@ void receiveRemoteLine(const String &line) {
 }
 
 void serialTaskEntry(void *pvParameters) {
-  BMI088Driver *driver = reinterpret_cast<BMI088Driver *>(pvParameters);
+  IIMUDriver *driver = reinterpret_cast<IIMUDriver *>(pvParameters);
   g_serial_task_driver = driver;
   for (;;) {
     processSerialOnce(driver);

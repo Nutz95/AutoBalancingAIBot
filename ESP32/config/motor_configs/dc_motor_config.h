@@ -153,7 +153,7 @@
 #define DC_LEFT_MOTOR_INVERT 1
 #endif
 #ifndef DC_RIGHT_MOTOR_INVERT
-#define DC_RIGHT_MOTOR_INVERT 1
+#define DC_RIGHT_MOTOR_INVERT 0
 #endif
 
 // If a motor characterization header exists, import per-side measured values

@@ -91,9 +91,26 @@ Notes:
 - Configure `upload_port` in `platformio.ini` or pass upload options to the upload script if your board is on a non-standard port.
 
 
+## IMU Selection & Configuration
+
+The project supports multiple IMU sensors via a modular driver system. You can select the active IMU in `src/main.cpp` using the `IMU_USE_BNO055` macro.
+
+### Supported Sensors
+- **BMI088** (SPI): High-performance industrial IMU.
+- **BNO055** (I2C): Absolute orientation sensor with internal fusion.
+
+### BNO055 Wiring (I2C)
+Connect the BNO055 to the ESP32-S3 using the following pins:
+- **VIN**: 3.3V
+- **GND**: GND
+- **SDA**: GPIO 8
+- **SCL**: GPIO 9
+
+The I2C address and pins can be customized in `config/imu_configs/BNO055Config.h`.
+
 ## Calibration (IMU)
 
-This project includes a simple IMU calibration utility to capture and persist gyroscope bias and a single-position accelerometer offset. Use the serial monitor at `921600` (or the project default) to run the commands below.
+This project includes a simple IMU calibration utility to capture and persist gyroscope bias and a single-position accelerometer offset. For the **BNO055**, the sensor performs internal calibration automatically, but you can still use these commands to apply additional software offsets if needed.
 
 Commands (sent as plain text lines):
 

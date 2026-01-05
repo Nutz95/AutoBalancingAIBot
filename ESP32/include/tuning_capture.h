@@ -24,7 +24,7 @@ void stopCapture();
 void submitSample(uint32_t ts_ms, float pitch_deg, float pitch_rad,
                   float pitch_rate_deg, float pitch_rate_rad, float ax,
                   float ay, float az, float gx, float gy, float gz,
-                  float temp_C, float left_cmd, float right_cmd);
+                  float temperatureCelsius, float left_cmd, float right_cmd);
 
 // Query whether a capture is active
 bool isCapturing();

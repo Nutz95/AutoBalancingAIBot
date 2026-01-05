@@ -12,9 +12,11 @@ public:
   virtual void begin(const fusion::FusionConfig &cfg) = 0;
   // Reset filter state (quaternion/angles) to identity/upright orientation
   virtual void reset() = 0;
-  // Update filter with gyro (rad/s) and accel (m/s^2) in robot axes
+  // Update filter with gyro (rad/s) and accel (m/s^2) in robot axes.
+  // Optional fused data (rad) can be provided by sensors with internal fusion.
   virtual void update(float gx, float gy, float gz, float ax, float ay,
-                      float az, float dt) = 0;
+                      float az, float dt, float fused_pitch = 0.0f,
+                      float fused_roll = 0.0f, float fused_yaw = 0.0f) = 0;
   // Optional: seed orientation from accel averages
   virtual void setFromAccel(float ax, float ay, float az) {
     (void)ax;
@@ -24,9 +26,17 @@ public:
   // Query angle/rate
   virtual float getPitch() = 0;
   virtual float getPitchRate() = 0;
+  virtual float getYaw() {
+    return 0.0f;
+  }
+  virtual float getRoll() {
+    return 0.0f;
+  }
   // How long (ms) should a warmup be requested after switching to this filter.
   // Default 0 = no special warmup requested.
-  virtual unsigned long getWarmupDurationMs() const { return 0; }
+  virtual unsigned long getWarmupDurationMs() const {
+    return 0;
+  }
   // Optional: return quaternion if available
   virtual void getQuaternion(float &w, float &x, float &y, float &z) {
     w = x = y = z = 0.0f;

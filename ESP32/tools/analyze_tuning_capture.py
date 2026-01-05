@@ -27,7 +27,7 @@ except Exception as e:
     print("Missing Python packages for analysis. Install with: pip install numpy matplotlib scipy")
     raise
 
-CSV_HEADER_REGEX = re.compile(r"^timestamp_ms,\s*pitch_deg,\s*pitch_rad,\s*pitch_rate_deg,\s*pitch_rate_rad,\s*ax,\s*ay,\s*az,\s*gx,\s*gy,\s*gz,\s*temp_C", re.I)
+CSV_HEADER_REGEX = re.compile(r"^timestamp_ms,\s*pitch_deg,\s*pitch_rad,\s*pitch_rate_deg,\s*pitch_rate_rad,\s*ax,\s*ay,\s*az,\s*gx,\s*gy,\s*gz,\s*temperatureCelsius", re.I)
 ROW_REGEX = re.compile(r"^\s*\d+,")
 
 
@@ -83,9 +83,9 @@ def parse_capture(path):
                     # Derived/Default values
                     pitch_rad = pitch_deg * np.pi / 180.0
                     pr_rad = pr_deg * np.pi / 180.0
-                    ax = ay = az = gx = gy = gz = temp_C = 0.0
+                    ax = ay = az = gx = gy = gz = temperatureCelsius = 0.0
                     
-                    rows.append((ts, pitch_deg, pitch_rad, pr_deg, pr_rad, ax, ay, az, gx, gy, gz, temp_C))
+                    rows.append((ts, pitch_deg, pitch_rad, pr_deg, pr_rad, ax, ay, az, gx, gy, gz, temperatureCelsius))
                 except Exception:
                     continue
             # Handle full format
@@ -102,9 +102,9 @@ def parse_capture(path):
                     gx = float(parts[8])
                     gy = float(parts[9])
                     gz = float(parts[10])
-                    temp_C = float(parts[11])
+                    temperatureCelsius = float(parts[11])
                     # keep core values plus raw and temp for possible later analysis
-                    rows.append((ts, pitch_deg, pitch_rad, pr_deg, pr_rad, ax, ay, az, gx, gy, gz, temp_C))
+                    rows.append((ts, pitch_deg, pitch_rad, pr_deg, pr_rad, ax, ay, az, gx, gy, gz, temperatureCelsius))
                 except Exception:
                     continue
     if not rows:
@@ -395,7 +395,7 @@ def analyze_and_plot(path, outdir=None):
             fh.write(f'{k}: {v}\n')
         if fs is not None:
             fh.write(f'estimated_sample_rate_Hz: {fs}\n')
-            fh.write('\nColumns: timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd\n')
+            fh.write('\nColumns: timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temperatureCelsius,left_cmd,right_cmd\n')
 
     # append extended metrics (correlations, Allan)
     with open(rpt, 'a') as fh:

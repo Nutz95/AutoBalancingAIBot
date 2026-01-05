@@ -6,7 +6,8 @@
 #include "../config/motor_configs/servo_motor_config.h"
 #include "../include/balancer_controller.h"
 #include "../include/esp_wifi_console.h"
-#include "BMI088Driver.h"
+#include "imu_drivers/IIMUDriver.h"
+#include "imu_drivers/imu_manager.h"
 #include "SystemTasks.h"
 #include "filter_manager.h"
 #include "imu_calibration.h"
@@ -31,7 +32,7 @@
 namespace abbot {
 
 static QueueHandle_t imuQueue = nullptr;
-static BMI088Driver *g_driver = nullptr;
+static IIMUDriver *g_driver = nullptr;
 // Optional calibration queue (single-slot). When non-null the producer will
 // also write each new sample into this queue (xQueueOverwrite) so a calibration
 // routine can block-read exact samples without talking to the driver directly.
@@ -116,13 +117,13 @@ static void applyComplementaryParamsFromPrefs(Preferences &prefs,
 }
 
 static void imuProducerTask(void *pvParameters) {
-  BMI088Driver *driver = reinterpret_cast<BMI088Driver *>(pvParameters);
+  IIMUDriver *driver = reinterpret_cast<IIMUDriver *>(pvParameters);
   IMUSample sample;
   static uint32_t drop_count = 0;
   static uint32_t last_drop_log = 0;
 
   for (;;) {
-    // Attempt to read; BMI088Driver::read will enforce sampling interval
+    // Attempt to read; driver->read will enforce sampling interval
     if (driver->read(sample)) {
       // Push to queue (non-blocking). If full, we drop the sample (better than blocking).
       // With size 10, this handles jitter.
@@ -216,7 +217,8 @@ static void imuConsumerTask(void *pvParameters) {
       auto active = abbot::filter::getActiveFilter();
       if (active) {
         active->update(gyro_robot[0], gyro_robot[1], gyro_robot[2],
-                       accel_robot[0], accel_robot[1], accel_robot[2], dt);
+                       accel_robot[0], accel_robot[1], accel_robot[2], dt,
+                       sample.fused_pitch, sample.fused_roll, sample.fused_yaw);
       }
     }
 
@@ -278,7 +280,7 @@ static void imuConsumerTask(void *pvParameters) {
   }
 }
 
-bool startIMUTasks(BMI088Driver *driver) {
+bool startIMUTasks(IIMUDriver *driver) {
   if (!driver) {
     return false;
   }
@@ -290,34 +292,25 @@ bool startIMUTasks(BMI088Driver *driver) {
     }
   }
 
-  // Try to initialize BMI088 (gyro + accel)
-  bool rc = driver->begin();
-  if (!rc) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                "BMI088 init failed, blinking LED red.");
-    statusLedBlinkErrorLoop();
-    return false;
-  }
-
   // track whether we've requested a filter-specific warmup during init
   bool warmup_requested = false;
 
   // Initialize fusion mutex and default config
   if (!g_fusion_mutex) {
     g_fusion_mutex = xSemaphoreCreateMutex();
-    fusion::FusionConfig cfg;
+    fusion::FusionConfig fusion_config;
     // beta is configured in FusionConfig.h - do not override here
-    // Use the BMI088 driver's configured sampling rate if available
+    // Use the driver's configured sampling rate if available
     if (driver) {
-      cfg.sample_rate = (float)driver->getSamplingHz();
+      fusion_config.sample_rate = (float)driver->getSamplingHz();
     } else {
-      cfg.sample_rate = 200.0f;
+      fusion_config.sample_rate = 200.0f;
     }
-    g_filter_sample_rate_hz = cfg.sample_rate;
+    g_filter_sample_rate_hz = fusion_config.sample_rate;
     // store fusion configuration (including axis mapping) for runtime use
-    g_fusion_cfg = cfg;
+    g_fusion_cfg = fusion_config;
     // initialize filter manager which will create the default active filter
-    abbot::filter::init(cfg);
+    abbot::filter::init(fusion_config);
   }
 
   // Initialize balancer controller (owns PID, deadband, persisted gains)
@@ -341,23 +334,23 @@ bool startIMUTasks(BMI088Driver *driver) {
                                                                 g_prefs);
     // If a filter preference was stored, apply it now (overrides the default)
     if (g_prefs.isKey("filter")) {
-      String fn = g_prefs.getString("filter", "COMPLEMENTARY1D");
-      if (fn.length() > 0) {
-        abbot::filter::setCurrentFilterByName(fn.c_str());
+      String filter_name = g_prefs.getString("filter", "COMPLEMENTARY1D");
+      if (filter_name.length() > 0) {
+        abbot::filter::setCurrentFilterByName(filter_name.c_str());
         // Request filter-specific warmup if provided
-        auto a = abbot::filter::getActiveFilter();
-        applyComplementaryParamsFromPrefs(g_prefs, a);
-        if (a) {
-          unsigned long ms = a->getWarmupDurationMs();
-          if (ms > 0) {
-            float s = ((float)ms) / 1000.0f;
-            requestTuningWarmupSeconds(s);
+        auto active_filter = abbot::filter::getActiveFilter();
+        applyComplementaryParamsFromPrefs(g_prefs, active_filter);
+        if (active_filter) {
+          unsigned long warmup_ms = active_filter->getWarmupDurationMs();
+          if (warmup_ms > 0) {
+            float warmup_seconds = ((float)warmup_ms) / 1000.0f;
+            requestTuningWarmupSeconds(warmup_seconds);
             warmup_requested = true;
-            char tbuf[128];
-            snprintf(tbuf, sizeof(tbuf),
+            char temp_buffer[128];
+            snprintf(temp_buffer, sizeof(temp_buffer),
                      "FUSION: requested startup warmup %.3f s for %s",
-                     (double)s, fn.c_str());
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, tbuf);
+                     (double)warmup_seconds, filter_name.c_str());
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, temp_buffer);
           }
         }
       }

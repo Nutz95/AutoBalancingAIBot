@@ -19,7 +19,9 @@ public:
     R_measure = 0.03f;
     rate_ = 0.0f;
   }
-  void begin(const fusion::FusionConfig &cfg) override { (void)cfg; }
+  void begin(const fusion::FusionConfig &cfg) override {
+    (void)cfg;
+  }
   void reset() override {
     angle_ = 0.0f;
     bias_ = 0.0f;
@@ -33,7 +35,11 @@ public:
     return IMU_FILTER_WARMUP_MS_KALMAN1D;
   }
   void update(float gx, float gy, float gz, float ax, float ay, float az,
-              float dt) override {
+              float dt, float fused_pitch = 0.0f,
+              float fused_roll = 0.0f, float fused_yaw = 0.0f) override {
+    (void)fused_pitch;
+    (void)fused_roll;
+    (void)fused_yaw;
     // Predict
     float gyro_rate = gx - bias_;
     angle_ += gyro_rate * dt;
@@ -64,8 +70,12 @@ public:
 
     rate_ = gyro_rate + bias_; // approximate
   }
-  float getPitch() override { return angle_; }
-  float getPitchRate() override { return rate_; }
+  float getPitch() override {
+    return angle_;
+  }
+  float getPitchRate() override {
+    return rate_;
+  }
 
 private:
   float angle_, bias_, rate_;
@@ -73,6 +83,8 @@ private:
   float Q_angle, Q_bias, R_measure;
 };
 
-IMUFilter *createKalmanFilter1D() { return new KalmanFilter1D(); }
+IMUFilter *createKalmanFilter1D() {
+  return new KalmanFilter1D();
+}
 
 } // namespace abbot

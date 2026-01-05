@@ -37,17 +37,17 @@ public:
             return;
         }
 
-        auto f = getActiveFilter();
-        const char *fname = getCurrentFilterName();
-        if (!f || !fname) {
+        auto active_filter = getActiveFilter();
+        const char *filter_name = getCurrentFilterName();
+        if (!active_filter || !filter_name) {
             pref.end();
             return;
         }
 
-        if (strcmp(fname, "COMPLEMENTARY1D") == 0) {
-            applyComplementary(pref, f);
-        } else if (strcmp(fname, "MADGWICK") == 0) {
-            applyMadgwick(pref, f);
+        if (strcmp(filter_name, "COMPLEMENTARY1D") == 0) {
+            applyComplementary(pref, active_filter);
+        } else if (strcmp(filter_name, "MADGWICK") == 0) {
+            applyMadgwick(pref, active_filter);
         }
 
         pref.end();

@@ -1,7 +1,7 @@
 // imu_calibration.h
 #pragma once
 
-#include "BMI088Driver.h"
+#include "imu_drivers/IIMUDriver.h"
 #include <stdint.h>
 
 namespace abbot {
@@ -28,9 +28,9 @@ void applyCalibrationToSample(struct abbot::IMUSample &s);
 
 // Blocking calibration routines (they will sample the sensor N times)
 // Return true on success and save the calibration to NVS.
-bool startGyroCalibration(class abbot::BMI088Driver &driver,
+bool startGyroCalibration(class abbot::IIMUDriver &driver,
                           int nSamples = 2000);
-bool startAccelCalibration(class abbot::BMI088Driver &driver,
+bool startAccelCalibration(class abbot::IIMUDriver &driver,
                            int nSamples = 2000);
 
 // Dump / reset

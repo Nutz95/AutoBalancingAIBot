@@ -50,8 +50,9 @@ void applyCalibrationToSample(struct abbot::IMUSample &s) {
   // CRITICAL: Do not apply calibration while calibration is in progress!
   // Otherwise the calibration routine receives already-calibrated samples
   // from the queue, causing incorrect offset calculation (e.g., -19.57 on Z).
-  if (!g_cal.valid || g_is_calibrating)
+  if (!g_cal.valid || g_is_calibrating) {
     return;
+  }
   // NOTE: gyro bias is applied at runtime by the balancer task (abbot
   // namespace) to support warm-up estimation and EMA refinement. Do NOT
   // subtract `g_cal.gyro_bias[]` here to avoid double-application when the
@@ -73,7 +74,7 @@ static void computeMeanStd(const float *samples, int n, double &mean,
   std = (n > 1) ? sqrt(s / (n - 1)) : 0.0;
 }
 
-bool startGyroCalibration(class abbot::BMI088Driver &driver, int nSamples) {
+bool startGyroCalibration(class abbot::IIMUDriver &driver, int nSamples) {
   if (nSamples <= 0)
     return false;
   g_is_calibrating = true;
@@ -183,7 +184,7 @@ bool startGyroCalibration(class abbot::BMI088Driver &driver, int nSamples) {
   return saved;
 }
 
-bool startAccelCalibration(class abbot::BMI088Driver &driver, int nSamples) {
+bool startAccelCalibration(class abbot::IIMUDriver &driver, int nSamples) {
   if (nSamples <= 0)
     return false;
   g_is_calibrating = true;

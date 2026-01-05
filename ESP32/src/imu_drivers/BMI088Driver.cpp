@@ -1,7 +1,7 @@
 // BMI088Driver.cpp
-#include "BMI088Driver.h"
-#include "imu_calibration.h"
-#include "logging.h"
+#include "../../include/imu_drivers/BMI088Driver.h"
+#include "../../include/imu_calibration.h"
+#include "../../include/logging.h"
 
 namespace abbot {
 
@@ -79,11 +79,19 @@ bool BMI088Driver::readRaw(IMUSample &out) {
   out.gx = cfg_.gyro_sign_x * imu_.getGyroX_rads();
   out.gy = cfg_.gyro_sign_y * imu_.getGyroY_rads();
   out.gz = cfg_.gyro_sign_z * imu_.getGyroZ_rads();
-  out.temp_C = imu_.getTemperature_C();
+  out.temperatureCelsius = imu_.getTemperature_C();
   out.time_ps = imu_.getTime_ps();
   out.ts_ms = millis();
   out.ts_us = micros();
   return true;
+}
+
+uint16_t BMI088Driver::getSamplingHz() const {
+  return cfg_.sampling_hz;
+}
+
+const char* BMI088Driver::getDriverName() const {
+  return "BMI088";
 }
 
 } // namespace abbot

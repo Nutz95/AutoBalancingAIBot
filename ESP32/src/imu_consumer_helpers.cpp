@@ -229,15 +229,16 @@ void emitTuningOrStream(const ConsumerState &state, const IMUSample &sample,
     abbot::tuning::submitSample(
         sample.ts_ms, pitch_deg, pitch_rad, pitch_rate_dps, pitch_rate_rads,
         accel_robot[0], accel_robot[1], accel_robot[2], gyro_robot[0],
-        gyro_robot[1], gyro_robot[2], sample.temp_C, left_cmd, right_cmd);
+        gyro_robot[1], gyro_robot[2], sample.temperatureCelsius, left_cmd,
+        right_cmd);
   } else if (abbot::log::isChannelEnabled(abbot::log::CHANNEL_TUNING)) {
     LOG_PRINTF(abbot::log::CHANNEL_TUNING,
                "%lu,%.4f,%.6f,%.4f,%.6f,%.4f,%.4f,%.4f,%.6f,%.6f,%.6f,%.3f,%."
                "4f,%.4f\n",
                sample.ts_ms, pitch_deg, pitch_rad, pitch_rate_dps,
                pitch_rate_rads, accel_robot[0], accel_robot[1], accel_robot[2],
-               gyro_robot[0], gyro_robot[1], gyro_robot[2], sample.temp_C,
-               left_cmd, right_cmd);
+               gyro_robot[0], gyro_robot[1], gyro_robot[2],
+               sample.temperatureCelsius, left_cmd, right_cmd);
   }
 }
 

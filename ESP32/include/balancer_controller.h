@@ -56,6 +56,11 @@ void setAutotuneMaxAngle(float max_pitch_deg);
 void setMotorGains(float left_gain, float right_gain);
 void getMotorGains(float &left_gain, float &right_gain);
 
+// Adaptive start threshold management
+void calibrateStartThresholds();
+void setAdaptiveStart(bool enabled);
+bool getAdaptiveStart();
+
 // Calibrated trim management: allows storing a fixed reference trim
 // (captured when robot is on a support at true vertical) instead of
 // dynamically capturing at each START.

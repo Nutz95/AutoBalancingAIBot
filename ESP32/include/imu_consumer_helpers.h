@@ -1,5 +1,5 @@
 #pragma once
-#include "BMI088Driver.h"
+#include "imu_drivers/IIMUDriver.h"
 #include "imu_calibration.h"
 #include "imu_filter.h"
 #include "imu_fusion.h"

@@ -1,7 +1,7 @@
 // SystemTasks.h
 #pragma once
 
-#include "BMI088Driver.h"
+#include "imu_drivers/IIMUDriver.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 
@@ -11,11 +11,11 @@
 namespace abbot {
 
 // Initialize and start system FreeRTOS tasks (IMU producer/consumer, serial,
-// etc.) The producer polls the BMI088Driver and writes the latest sample to a
+// etc.) The producer polls the IIMUDriver and writes the latest sample to a
 // single-slot queue. The consumer reads from the queue and prints or forwards
 // samples.
 
-bool startIMUTasks(BMI088Driver *driver);
+bool startIMUTasks(IIMUDriver *driver);
 
 // Allow calibration code to attach a temporary single-slot queue that the IMU
 // producer will push samples into. Attach before starting calibration and

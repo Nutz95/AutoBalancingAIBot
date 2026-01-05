@@ -19,6 +19,7 @@
 #include "../config/motor_configs/servo_motor_config.h"
 #include <cstdio>
 #include <algorithm>
+#include <cmath>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
@@ -43,6 +44,10 @@ static AutotuneController::Config g_autocfg; // configurable autotune params
 // Motor gain scaling (for asymmetric motor compensation)
 static float g_left_motor_gain = BALANCER_LEFT_MOTOR_GAIN;
 static float g_right_motor_gain = BALANCER_RIGHT_MOTOR_GAIN;
+// Adaptive start thresholds
+static bool g_adaptive_start_enabled = false;
+static float g_start_threshold_left = 0.0f;
+static float g_start_threshold_right = 0.0f;
 // Latest IMU sample (robot frame)
 static float g_last_accel[3] = {0.0f, 0.0f, 0.0f};
 static float g_last_gyro[3] = {0.0f, 0.0f, 0.0f}; // rad/s
@@ -129,11 +134,20 @@ void init() {
     // Load calibrated pitch trim from NVS (absolute 0° reference)
     g_calibrated_trim_rad = g_prefs.getFloat("trim_cal", 0.0f);
     g_has_calibrated_trim = g_prefs.getBool("trim_ok", false);
+    // Load adaptive start settings
+    g_adaptive_start_enabled = g_prefs.getBool("adaptive_st", false);
+    g_start_threshold_left = g_prefs.getFloat("st_L", 0.0f);
+    g_start_threshold_right = g_prefs.getFloat("st_R", 0.0f);
+    // Load motor gains
+    g_left_motor_gain = g_prefs.getFloat("mg_L", BALANCER_LEFT_MOTOR_GAIN);
+    g_right_motor_gain = g_prefs.getFloat("mg_R", BALANCER_RIGHT_MOTOR_GAIN);
+
     char buf[128];
     snprintf(buf, sizeof(buf),
          "BALANCER: controller initialized (Kp=%.4f Ki=%.4f Kd=%.4f "
-         "deadband=%.4f min_cmd=%.4f)",
-         (double)bp, (double)bi, (double)bd, (double)g_deadband, (double)g_min_cmd);
+         "deadband=%.4f min_cmd=%.4f adaptive=%s gains=%.2f/%.2f)",
+         (double)bp, (double)bi, (double)bd, (double)g_deadband, (double)g_min_cmd,
+         g_adaptive_start_enabled ? "ON" : "OFF", (double)g_left_motor_gain, (double)g_right_motor_gain);
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
     if (g_has_calibrated_trim) {
       LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
@@ -442,6 +456,108 @@ void setMinCmd(float min_cmd) {
 
 float getMinCmd() {
   return g_min_cmd;
+}
+
+void setAdaptiveStart(bool enabled) {
+  g_adaptive_start_enabled = enabled;
+  if (g_prefs_started) {
+    g_prefs.putBool("adaptive_st", g_adaptive_start_enabled);
+  }
+  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: adaptive start %s\n",
+             g_adaptive_start_enabled ? "ENABLED" : "DISABLED");
+}
+
+bool getAdaptiveStart() {
+  return g_adaptive_start_enabled;
+}
+
+void calibrateStartThresholds() {
+  bool was_active = g_active;
+  g_active = false; // Disable PID
+
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+              "BALANCER: Starting start threshold calibration...");
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+              "BALANCER: Ensure robot is on a support where wheels can spin "
+              "freely.");
+
+  float thresholds_L[2] = {0.0f, 0.0f}; // Fwd, Rev
+  float thresholds_R[2] = {0.0f, 0.0f}; // Fwd, Rev
+
+  auto calibrateSide = [](abbot::motor::IMotorDriver::MotorSide side, float &fwd_st,
+                          float &rev_st) {
+    const float step = 0.005f;
+    const uint32_t step_ms = 300; 
+    const int32_t tick_threshold = 50; // ~7.3 degrees, clearly visible
+
+    const char* side_name = (side == abbot::motor::IMotorDriver::MotorSide::LEFT) ? "LEFT" : "RIGHT";
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: Calibrating %s side...\n", side_name);
+
+    // Forward
+    fwd_st = 0.5f;
+    int32_t start_enc = abbot::motor::readEncoderBySide(side);
+    for (float cmd = 0.0f; cmd <= 0.5f; cmd += step) {
+      abbot::motor::setMotorCommandBySide(side, cmd);
+      vTaskDelay(pdMS_TO_TICKS(step_ms));
+      int32_t current_enc = abbot::motor::readEncoderBySide(side);
+      int32_t diff = abs(current_enc - start_enc);
+      
+      if (cmd > 0.01f && ((int)(cmd * 1000) % 20 == 0)) { // Log every 0.02 step to show progress
+          LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  %s Fwd: cmd=%.3f, ticks=%ld\n", side_name, (double)cmd, (long)diff);
+      }
+
+      if (diff >= tick_threshold) {
+        fwd_st = cmd;
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  => %s Fwd Detected: %.4f (at %ld ticks)\n", 
+                   side_name, (double)fwd_st, (long)diff);
+        break;
+      }
+    }
+    abbot::motor::setMotorCommandBySide(side, 0.0f);
+    vTaskDelay(pdMS_TO_TICKS(500));
+
+    // Reverse
+    rev_st = 0.5f;
+    start_enc = abbot::motor::readEncoderBySide(side);
+    for (float cmd = 0.0f; cmd >= -0.5f; cmd -= step) {
+      abbot::motor::setMotorCommandBySide(side, cmd);
+      vTaskDelay(pdMS_TO_TICKS(step_ms));
+      int32_t current_enc = abbot::motor::readEncoderBySide(side);
+      int32_t diff = abs(current_enc - start_enc);
+
+      if (fabsf(cmd) > 0.01f && ((int)(fabsf(cmd) * 1000) % 20 == 0)) {
+          LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  %s Rev: cmd=%.3f, ticks=%ld\n", side_name, (double)cmd, (long)diff);
+      }
+
+      if (diff >= tick_threshold) {
+        rev_st = fabsf(cmd);
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  => %s Rev Detected: %.4f (at %ld ticks)\n", 
+                   side_name, (double)rev_st, (long)diff);
+        break;
+      }
+    }
+    abbot::motor::setMotorCommandBySide(side, 0.0f);
+    vTaskDelay(pdMS_TO_TICKS(500));
+  };
+
+  calibrateSide(abbot::motor::IMotorDriver::MotorSide::LEFT, thresholds_L[0],
+                thresholds_L[1]);
+  calibrateSide(abbot::motor::IMotorDriver::MotorSide::RIGHT, thresholds_R[0],
+                thresholds_R[1]);
+
+  g_start_threshold_left = (thresholds_L[0] + thresholds_L[1]) / 2.0f;
+  g_start_threshold_right = (thresholds_R[0] + thresholds_R[1]) / 2.0f;
+
+  if (g_prefs_started) {
+    g_prefs.putFloat("st_L", g_start_threshold_left);
+    g_prefs.putFloat("st_R", g_start_threshold_right);
+  }
+
+  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+             "BALANCER: Calibration done. L=%.4f, R=%.4f\n",
+             (double)g_start_threshold_left, (double)g_start_threshold_right);
+
+  g_active = was_active;
 }
 
 void setLatestImuSample(const float accel_robot[3], const float gyro_robot[3]) {
@@ -796,14 +912,21 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   // deadband: if command is small but non-zero, push to the edge instead of
   // zeroing so motors overcome static friction. Skip if last_cmd was zero to
   // avoid jolts at startup.
-  // Nouvelle logique : si |cmd| < deadband, appliquer min_cmd (signe correct),
+  // Nouvelle logique : si |cmd| < deadband, appliquer min_cmd (signe correct),
   // mais si |cmd| est très petit, alors cmd = 0
+  float effective_min_cmd = g_min_cmd;
+  if (g_adaptive_start_enabled) {
+    effective_min_cmd =
+        (g_start_threshold_left + g_start_threshold_right) / 2.0f;
+  }
+
   if (fabsf(cmd) < g_deadband) {
     if (fabsf(cmd) < 0.01f) {
       cmd = 0.0f;
     } else {
       float sign = (cmd > 0.0f) ? 1.0f : -1.0f;
-      cmd = sign * ((fabsf(cmd) > g_min_cmd) ? fabsf(cmd) : g_min_cmd);
+      cmd = sign *
+            ((fabsf(cmd) > effective_min_cmd) ? fabsf(cmd) : effective_min_cmd);
     }
   }
   // Charger min_cmd depuis les préférences au démarrage
@@ -1010,9 +1133,15 @@ void setMotorGains(float left_gain, float right_gain) {
   }
   g_left_motor_gain = left_gain;
   g_right_motor_gain = right_gain;
+
+  if (g_prefs_started) {
+    g_prefs.putFloat("mg_L", g_left_motor_gain);
+    g_prefs.putFloat("mg_R", g_right_motor_gain);
+  }
+
   char buf[128];
-  snprintf(buf, sizeof(buf), "BALANCER: motor gains set L=%.3f R=%.3f",
-           (double)left_gain, (double)right_gain);
+  snprintf(buf, sizeof(buf), "BALANCER: motor gains set L=%.3f R=%.3f (persisted=%s)",
+           (double)left_gain, (double)right_gain, g_prefs_started ? "yes" : "no");
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
 }
 

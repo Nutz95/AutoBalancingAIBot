@@ -6,7 +6,7 @@
 namespace abbot {
 namespace serialcmds {
 
-CalibrationCommandHandler::CalibrationCommandHandler(abbot::BMI088Driver* driver)
+CalibrationCommandHandler::CalibrationCommandHandler(abbot::IIMUDriver* driver)
     : m_driver(driver) {
     m_menu.reset(new SerialMenu("Calibration Commands"));
     m_menu->addEntry(1, "CALIB START GYRO [N]",
@@ -52,12 +52,13 @@ SerialMenu* CalibrationCommandHandler::buildMenu() {
     return m_menu.get();
 }
 
-void CalibrationCommandHandler::calibStartGyro(abbot::BMI088Driver *driver, const String &p) {
+void CalibrationCommandHandler::calibStartGyro(abbot::IIMUDriver *driver, const String &p) {
   int n = 4000;
   String s = p;
   s.trim();
-  if (s.length())
+  if (s.length()) {
     n = s.toInt();
+  }
   if (!abbot::imu_cal::isCalibrating()) {
     abbot::log::pushChannelMask(
         static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) |
@@ -67,12 +68,13 @@ void CalibrationCommandHandler::calibStartGyro(abbot::BMI088Driver *driver, cons
   }
 }
 
-void CalibrationCommandHandler::calibStartAccel(abbot::BMI088Driver *driver, const String &p) {
+void CalibrationCommandHandler::calibStartAccel(abbot::IIMUDriver *driver, const String &p) {
   int n = 4000;
   String s = p;
   s.trim();
-  if (s.length())
+  if (s.length()) {
     n = s.toInt();
+  }
   if (!abbot::imu_cal::isCalibrating()) {
     abbot::log::pushChannelMask(
         static_cast<uint32_t>(abbot::log::CHANNEL_DEFAULT) |

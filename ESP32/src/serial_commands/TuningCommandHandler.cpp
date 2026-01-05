@@ -17,7 +17,7 @@ static void startTuningStream() {
   abbot::log::enableChannel(abbot::log::CHANNEL_TUNING);
   LOG_PRINTLN(abbot::log::CHANNEL_TUNING,
               "timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,"
-              "ax,ay,az,gx,gy,gz,temp_C,left_cmd,right_cmd");
+              "ax,ay,az,gx,gy,gz,temperatureCelsius,left_cmd,right_cmd");
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "TUNING: started");
 }
 

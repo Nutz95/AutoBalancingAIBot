@@ -116,12 +116,12 @@ void Madgwick::setQuaternion(float w, float x, float y, float z) {
   q2_ = y;
   q3_ = z;
   // normalize
-  float n = sqrtf(q0_ * q0_ + q1_ * q1_ + q2_ * q2_ + q3_ * q3_);
-  if (n > 1e-9f) {
-    q0_ /= n;
-    q1_ /= n;
-    q2_ /= n;
-    q3_ /= n;
+  float norm = sqrtf(q0_ * q0_ + q1_ * q1_ + q2_ * q2_ + q3_ * q3_);
+  if (norm > 1e-9f) {
+    q0_ /= norm;
+    q1_ /= norm;
+    q2_ /= norm;
+    q3_ /= norm;
   }
   // reset derivative history
   last_pitch_ = getPitch();

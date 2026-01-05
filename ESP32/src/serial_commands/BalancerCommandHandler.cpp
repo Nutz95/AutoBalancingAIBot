@@ -72,6 +72,11 @@ BalancerCommandHandler::BalancerCommandHandler(IFusionService* fusionService)
     m_menu->addEntry(20, "BALANCE TRIM RESET", [](const String &) {
       abbot::balancer::controller::resetTrim();
     });
+    // Group: adaptive start
+    m_menu->addEntry(23, "BALANCE ADAPTIVE <ON|OFF>",
+                  [](const String &p) { balancerAdaptiveSetHandler(p); });
+    m_menu->addEntry(24, "BALANCE CALIBRATE_START",
+                  [](const String &p) { balancerCalibrateStartHandler(p); });
 }
 
 bool BalancerCommandHandler::handleCommand(const String& line, const String& up) {
@@ -96,7 +101,7 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
     if (s == "BALANCE") {
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
             "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> "
-            "<ki> <kd>] | BALANCE RESET | BALANCE GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE | BALANCE MIN_CMD GET|SET");
+            "<ki> <kd>] | BALANCE RESET | BALANCE GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE | BALANCE MIN_CMD GET|SET | BALANCE ADAPTIVE ON|OFF | BALANCE CALIBRATE_START");
         return true;
     }
 
@@ -280,6 +285,24 @@ void BalancerCommandHandler::balancerMotorGainsSetHandler(const String &p) {
     return;
   }
   abbot::balancer::controller::setMotorGains(left, right);
+}
+
+void BalancerCommandHandler::balancerAdaptiveSetHandler(const String &p) {
+  String s = p;
+  s.trim();
+  s.toUpperCase();
+  if (s == "ON") {
+    abbot::balancer::controller::setAdaptiveStart(true);
+  } else if (s == "OFF") {
+    abbot::balancer::controller::setAdaptiveStart(false);
+  } else {
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE ADAPTIVE ON|OFF");
+  }
+}
+
+void BalancerCommandHandler::balancerCalibrateStartHandler(const String &p) {
+  (void)p;
+  abbot::balancer::controller::calibrateStartThresholds();
 }
 
 } // namespace serialcmds

@@ -58,6 +58,8 @@ private:
     static void balancerDeadbandSetHandler(const String& p);
     static void balancerMinCmdSetHandler(const String& p);
     static void balancerMotorGainsSetHandler(const String& p);
+    static void balancerAdaptiveSetHandler(const String& p);
+    static void balancerCalibrateStartHandler(const String& p);
 };
 
 } // namespace serialcmds
