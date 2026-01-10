@@ -9,10 +9,15 @@
 
 // Select which motor driver to install at startup.
 // Options:
-//   0  -> legacy servo adapter (installDefaultServoAdapter())
-//   1  -> DC mirror driver    (installDefaultDCMirrorDriver())
-// Default: 0
+//   0  -> legacy servo adapter    (installDefaultServoAdapter())
+//   1  -> DC mirror driver        (installDefaultDCMirrorDriver())
+//   2  -> MKS Servo serial driver (installDefaultMksServoDriver())
+// Default: 1
 #ifndef MOTOR_USE_DC_DRIVER
-#define MOTOR_USE_DC_DRIVER 1
+#define MOTOR_USE_DC_DRIVER 0
+#endif
+
+#ifndef MOTOR_USE_MKS_SERVO
+#define MOTOR_USE_MKS_SERVO 1
 #endif
 

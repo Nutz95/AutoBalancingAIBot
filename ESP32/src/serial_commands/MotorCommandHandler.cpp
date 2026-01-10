@@ -139,6 +139,20 @@ MotorCommandHandler::MotorCommandHandler(IMotorService* motorService)
     m_menu->addEntry(14, "MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)", [this](const String &p) {
         this->handleMotorTelemetry("MOTOR TELEMETRY " + p, "MOTOR TELEMETRY " + p);
     });
+    m_menu->addEntry(15, "MOTOR SCAN", [this](const String &) {
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->processSerialCommand("SCAN");
+        } else {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+        }
+    });
+    m_menu->addEntry(16, "MOTOR READ ALL", [this](const String &) {
+        if (auto driver = m_motorService->getActiveDriver()) {
+            driver->processSerialCommand("READ ALL");
+        } else {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+        }
+    });
 }
 
 bool MotorCommandHandler::handleCommand(const String& line, const String& lineUpper) {

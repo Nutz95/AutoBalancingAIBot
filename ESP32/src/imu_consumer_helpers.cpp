@@ -416,9 +416,10 @@ void emitImuDebugLogsIfEnabled(const IMUSample &sample, uint32_t &last_print_ms,
     last_print_ms = now;
     LOG_PRINTF(
         abbot::log::CHANNEL_IMU,
-        "IMU ts_ms=%lu ax=%.6f ay=%.6f az=%.6f gx=%.6f gy=%.6f gz=%.6f\n",
+        "IMU ts_ms=%lu ax=%.4f ay=%.4f az=%.4f gx=%.4f gy=%.4f gz=%.4f fp=%.2f fr=%.2f fy=%.2f\n",
         sample.ts_ms, sample.ax, sample.ay, sample.az, sample.gx, sample.gy,
-        sample.gz);
+        sample.gz, sample.fused_pitch * 57.2957795f, sample.fused_roll * 57.2957795f,
+        sample.fused_yaw * 57.2957795f);
   }
 #else
   (void)sample;

@@ -61,6 +61,10 @@ public:
     return roll_;
   }
 
+  unsigned long getWarmupDurationMs() const override {
+    return 2000;
+  }
+
 private:
   float pitch_;
   float roll_;

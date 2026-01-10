@@ -124,6 +124,14 @@ bool BNO055Driver::isCalibrated() const {
   system = gyro = accel = mag = 0;
   // const_cast because getCalibration is not marked const in the library
   const_cast<Adafruit_BNO055&>(bno_).getCalibration(&system, &gyro, &accel, &mag);
+  
+  // Log calibration status periodically if not fully calibrated
+  static uint32_t last_cal_log = 0;
+  if (millis() - last_cal_log > 5000) {
+    LOG_PRINTF(abbot::log::CHANNEL_IMU, "BNO055 Calib: Sys=%d G=%d A=%d M=%d\n", system, gyro, accel, mag);
+    last_cal_log = millis();
+  }
+
   // Consider "calibrated" if gyro and accel are at least level 2
   return (gyro >= 2 && accel >= 2);
 }

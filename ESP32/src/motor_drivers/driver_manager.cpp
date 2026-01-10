@@ -6,6 +6,9 @@
 #if MOTOR_USE_DC_DRIVER
 #include "../include/motor_drivers/dc_mirror_driver.h"
 #endif
+#if MOTOR_USE_MKS_SERVO
+#include "../include/motor_drivers/MksServoMotorDriver.h"
+#endif
 #include <cstdlib>
 #include <cctype>
 #include <cstring>
@@ -51,6 +54,11 @@ IMotorDriver *getActiveMotorDriver() {
 
 // installDefaultServoAdapter is implemented in servo_adapter.cpp
 void installDefaultServoAdapter();
+
+#if MOTOR_USE_MKS_SERVO
+static MksServoMotorDriver g_mksServoDriver;
+void installDefaultMksServoDriver() { setActiveMotorDriver(&g_mksServoDriver); }
+#endif
 
 // No free-function forwards implemented here. Callers should query
 // `getActiveMotorDriver()` and invoke methods on the returned driver.
@@ -104,7 +112,9 @@ const char *getActiveDriverName(const char *fallback) {
 
 // Install the default motor driver according to compile-time config.
 void installDefaultMotorDriver() {
-#if MOTOR_USE_DC_DRIVER
+#if MOTOR_USE_MKS_SERVO
+  installDefaultMksServoDriver();
+#elif MOTOR_USE_DC_DRIVER
   installDefaultDCMirrorDriver();
 #else
   installDefaultServoAdapter();
