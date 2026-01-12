@@ -10,19 +10,25 @@ BNO055Driver::BNO055Driver(const BNO055Config &cfg)
 }
 
 bool BNO055Driver::begin() {
-  // Enable internal pull-ups as a fallback (though external 4.7k-10k are better)
-  pinMode(cfg_.sda_pin, INPUT_PULLUP);
-  pinMode(cfg_.scl_pin, INPUT_PULLUP);
-  delay(10);
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BNO055: starting initialization...");
 
-  // Initialize I2C with configured pins and 100kHz for better stability
-  if (!Wire.begin(cfg_.sda_pin, cfg_.scl_pin, 100000)) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BNO055: Wire.begin() failed");
-    return false;
+  // 1. Hard I2C Bus Recovery
+  // If a slave (BNO055) is stuck mid-transmission, it might be holding SDA low.
+  // We toggle SCL 9 times to force the slave to release the SDA line.
+  pinMode(cfg_.scl_pin, OUTPUT);
+  pinMode(cfg_.sda_pin, INPUT_PULLUP);
+  for (int i = 0; i < 9; i++) {
+    digitalWrite(cfg_.scl_pin, LOW);
+    delayMicroseconds(10);
+    digitalWrite(cfg_.scl_pin, HIGH);
+    delayMicroseconds(10);
   }
 
-  // Increase timeout to handle BNO055 clock stretching
-  Wire.setTimeOut(25); 
+  // 2. Initialize Wire with timeout
+  Wire.end(); 
+  Wire.begin(cfg_.sda_pin, cfg_.scl_pin);
+  Wire.setClock(400000); // 400kHz
+  Wire.setTimeOut(25);   // 25ms timeout for all I2C operations
 
   // Give the sensor time to wake up
   delay(100);
@@ -93,14 +99,39 @@ bool BNO055Driver::readRaw(IMUSample &out) {
   out.gy = cfg_.gyro_sign_y * gyro.y() * DEGREES_TO_RADIANS;
   out.gz = cfg_.gyro_sign_z * gyro.z() * DEGREES_TO_RADIANS;
 
-  // Read internal fusion data (Euler angles in degrees)
-  imu::Vector<3> euler = bno_.getVector(Adafruit_BNO055::VECTOR_EULER);
-  // BNO055 Euler: X=Heading, Y=Roll, Z=Pitch (depending on orientation)
-  // For our balancer, we typically care about Pitch.
-  // Note: BNO055 internal fusion uses its own coordinate system.
-  out.fused_pitch = cfg_.gyro_sign_x * euler.z() * DEGREES_TO_RADIANS;
-  out.fused_roll = cfg_.gyro_sign_y * euler.y() * DEGREES_TO_RADIANS;
-  out.fused_yaw = euler.x() * DEGREES_TO_RADIANS;
+  // Use Quaternion for more robust orientation extraction
+  // Euler angles from BNO055 are prone to gimbal lock and depend on mounting.
+  imu::Quaternion quat = bno_.getQuat();
+  
+  // Extract Pitch from quaternion (Rotation around Robot-Y axis)
+  // formula: pitch = asin(2 * (qw*qy - qx*qz))
+  double qw = quat.w();
+  double qx = quat.x();
+  double qy = quat.y();
+  double qz = quat.z();
+  
+  float sinp = 2.0f * (float)(qw * qy - qx * qz);
+  float pitch_rad;
+  if (fabsf(sinp) >= 1) {
+    pitch_rad = copysignf(M_PI / 2.0f, sinp); // use 90 degrees if out of range
+  } else {
+    pitch_rad = asinf(sinp);
+  }
+
+  // Offset if mounted upside down (Z pointing down instead of up)
+  // If az is positive when vertical, the sensor is likely upside down.
+  const float PI_VAL = 3.1415926535f;
+  float final_pitch_rad = pitch_rad;
+
+  // Normalisation
+  while (final_pitch_rad > PI_VAL) final_pitch_rad -= 2.0f * PI_VAL;
+  while (final_pitch_rad < -PI_VAL) final_pitch_rad += 2.0f * PI_VAL;
+
+  out.fused_pitch = final_pitch_rad;
+  
+  // Basic Euler extraction for Roll/Yaw (not used for control)
+  out.fused_roll = atan2(2.0f * (qw * qx + qy * qz), 1.0f - 2.0f * (qx * qx + qy * qy));
+  out.fused_yaw = atan2(2.0f * (qw * qz + qx * qy), 1.0f - 2.0f * (qy * qy + qz * qz));
 
   // Basic sanity check: if all values are exactly zero, it's likely an I2C read error
   if (out.ax == 0.0f && out.ay == 0.0f && out.az == 0.0f && 

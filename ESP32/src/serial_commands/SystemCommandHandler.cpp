@@ -1,4 +1,5 @@
 #include "serial_commands/SystemCommandHandler.h"
+#include "imu_drivers/imu_manager.h"
 #include "logging.h"
 #include <Arduino.h>
 
@@ -10,6 +11,20 @@ bool SystemCommandHandler::handleCommand(const String& line, const String& lineU
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Rebooting...");
         delay(100);
         ESP.restart();
+        return true;
+    }
+    if (lineUpper == "IMU REINIT") {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "SYSTEM: Re-initializing IMU...");
+        auto drv = abbot::imu::getActiveIMUDriver();
+        if (drv) {
+            if (drv->begin()) {
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "SYSTEM: IMU re-initialized successfully");
+            } else {
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "SYSTEM: IMU re-initialization FAILED");
+            }
+        } else {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "SYSTEM: No active IMU driver found");
+        }
         return true;
     }
     if (lineUpper == "HEAP") {
@@ -38,6 +53,15 @@ SerialMenu* SystemCommandHandler::buildMenu() {
         m_menu.reset(new SerialMenu("System Commands"));
         int id = 1;
         m_menu->addEntry(id++, "Reboot", [](const String&) { ESP.restart(); });
+        m_menu->addEntry(id++, "IMU Reinit", [](const String&) {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "SYSTEM: Re-initializing IMU...");
+            auto drv = abbot::imu::getActiveIMUDriver();
+            if (drv && drv->begin()) {
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "SYSTEM: IMU re-initialized successfully");
+            } else {
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "SYSTEM: IMU re-initialization FAILED");
+            }
+        });
         m_menu->addEntry(id++, "Show Heap", [](const String&) {
             LOG_PRINT(abbot::log::CHANNEL_DEFAULT, "Free heap: ");
             LOG_PRINT(abbot::log::CHANNEL_DEFAULT, String(ESP.getFreeHeap()));

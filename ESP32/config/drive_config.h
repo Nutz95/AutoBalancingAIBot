@@ -31,7 +31,7 @@
 #endif
 // Multiplier applied to the command during a direction change.
 #ifndef DRIVE_KICK_BOOST
-#define DRIVE_KICK_BOOST 1.15f
+#define DRIVE_KICK_BOOST 1.0f
 #endif
 
 // Deceleration Boost: help the robot return to vertical when joystick is released.
@@ -41,7 +41,7 @@
 #endif
 // Multiplier applied to the command during the braking phase.
 #ifndef DRIVE_BRAKE_BOOST
-#define DRIVE_BRAKE_BOOST 1.15f
+#define DRIVE_BRAKE_BOOST 1.0f
 #endif
 
 

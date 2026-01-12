@@ -20,8 +20,8 @@ struct BNO055Config {
   // BNO055 has internal axis remap, but we can also apply signs here.
   int8_t accel_sign_x = 1;
   int8_t accel_sign_y = 1;
-  int8_t accel_sign_z = 1;
-  int8_t gyro_sign_x = 1;
+  int8_t accel_sign_z = -1; // Invert Z for standard gravity orientation
+  int8_t gyro_sign_x = 1;   // Correct for mounting orientation
   int8_t gyro_sign_y = 1;
   int8_t gyro_sign_z = 1;
 

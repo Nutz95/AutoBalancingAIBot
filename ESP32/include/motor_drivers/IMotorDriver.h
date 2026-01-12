@@ -103,6 +103,19 @@ public:
   virtual float getVelocityTargetIncrementScale() const = 0;
   virtual float getVelocityPositionKp() const = 0;
 
+  /**
+   * @brief Return the last measured bus/hardware communication latency.
+   *
+   * For serial bus motors (RS485/CAN), this returns the time in microseconds
+   * taken for the last command-response cycle. For local hardware (PWM),
+   * this might be 0 or a very small value.
+   *
+   * @return uint32_t Latency in microseconds.
+   */
+  virtual uint32_t getLastBusLatencyUs() const {
+    return 0;
+  }
+
   // Human-readable driver name (e.g. "servo", "dc_mirror", ...)
   virtual const char *getDriverName() const = 0;
 };

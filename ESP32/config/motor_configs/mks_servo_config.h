@@ -100,7 +100,7 @@ enum class MksServoHoldCurrent : uint8_t {
 
 // Holding current percentage
 #ifndef MKS_SERVO_HOLD_PCT
-#define MKS_SERVO_HOLD_PCT abbot::motor::MksServoHoldCurrent::PCT_20
+#define MKS_SERVO_HOLD_PCT abbot::motor::MksServoHoldCurrent::PCT_40
 #endif
 
 // Direction inversion (Physical motor orientation)
@@ -118,7 +118,7 @@ enum class MksServoHoldCurrent : uint8_t {
 
 // Max speed in RPM (MKS protocol uses 12-bit value 0-3000)
 #ifndef VELOCITY_MAX_SPEED
-#define VELOCITY_MAX_SPEED 3000
+#define VELOCITY_MAX_SPEED 300
 #endif
 
 // Default acceleration for speed commands (0-255)
@@ -127,6 +127,36 @@ enum class MksServoHoldCurrent : uint8_t {
 #endif
 
 // Read encoder interval (ms) - Throttled to keep bus clear for commands
+// Minimum time between encoder reads (milliseconds) to avoid bus saturation.
+// Increased to 100ms to maximize bandwidth for balancing at 100Hz.
 #ifndef MKS_SERVO_ENCODER_READ_MS
-#define MKS_SERVO_ENCODER_READ_MS 20
+#define MKS_SERVO_ENCODER_READ_MS 100
+#endif
+
+// =============================================================================
+// COMMUNICATION TIMING (Calculated based on MKS_SERVO_BAUD)
+// =============================================================================
+// Formula: (bits / baud) * 1,000,000 + margin
+// For 256000 bps, 1 bit = 3.9us. 
+// A 10-byte transaction (100 bits) takes ~390us raw wire time.
+// Motor response delay (internal processing) is typically 200-500us.
+
+// Critical command timeout (e.g. speed command)
+#ifndef MKS_SERVO_TIMEOUT_CONTROL_US
+#define MKS_SERVO_TIMEOUT_CONTROL_US 1500
+#endif
+
+// Telemetry/Data timeout (e.g. reading position)
+#ifndef MKS_SERVO_TIMEOUT_DATA_US
+#define MKS_SERVO_TIMEOUT_DATA_US 3000
+#endif
+
+// Heavy request timeout (e.g. scanning or register dump)
+#ifndef MKS_SERVO_TIMEOUT_HEAVY_US
+#define MKS_SERVO_TIMEOUT_HEAVY_US 5000
+#endif
+
+// Bus quiet time between consecutive reads/writes to different IDs
+#ifndef MKS_SERVO_BUS_QUIET_US
+#define MKS_SERVO_BUS_QUIET_US 50
 #endif

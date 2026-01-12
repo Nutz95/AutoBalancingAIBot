@@ -3,6 +3,7 @@
 
 #include "AbstractMotorDriver.h"
 #include "../../config/motor_configs/mks_servo_config.h"
+#include "speed_estimator.h"
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 
@@ -39,6 +40,7 @@ public:
     float getVelocityTargetIncrementScale() const override;
     float getVelocityPositionKp() const override;
     const char *getDriverName() const override { return "mks_servo"; }
+    uint32_t getLastBusLatencyUs() const override { return last_bus_latency_us_; }
 
     // Serial command interface
     bool processSerialCommand(const String &line) override;
@@ -56,7 +58,9 @@ private:
         uint64_t last_command_time_us;
         uint32_t last_encoder_read_ms;
         uint32_t last_speed_log_ms;
+        uint32_t last_ack_log_ms;
         bool enabled;
+        SpeedEstimator speedEstimator;
     };
 
     MotorState m_left;
@@ -74,9 +78,12 @@ private:
     void setEnable(uint8_t id, bool enable);
     bool verifyConfig(uint8_t id, uint8_t function_code, uint8_t expected_value, const char* label);
     
+    // Telemetry
+    uint32_t last_bus_latency_us_ = 0;
+
     uint8_t calculateChecksum(const uint8_t* data, size_t length);
     void writeFrame(const uint8_t* frame, size_t length);
-    bool readResponse(uint8_t id, uint8_t function_code, uint8_t* out_data, size_t expected_length);
+    bool readResponse(uint8_t id, uint8_t function_code, uint8_t* out_data, size_t expected_length, uint32_t timeout_us = 2000);
     void dumpMotorRegisters(uint8_t id);
 };
 

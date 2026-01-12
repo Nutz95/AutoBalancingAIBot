@@ -92,6 +92,7 @@ static const float g_trim_max_rad = degToRad(BALANCER_TRIM_MAX_DEG);
 void init() {
   g_pid.begin(BALANCER_DEFAULT_KP, BALANCER_DEFAULT_KI, BALANCER_DEFAULT_KD,
               BALANCER_INTEGRATOR_LIMIT);
+  g_pid.setLeakCoeff(BALANCER_INTEGRATOR_LEAK_COEFF);
   g_last_cmd = 0.0f;
   if (g_prefs.begin("abbot", false)) {
     g_prefs_started = true;
@@ -634,7 +635,7 @@ static float computePidWithDriveSetpoint(float fused_pitch_deg,
   // Rate-limited debug logging to avoid spamming serial
   static uint32_t last_dbg_ms = 0;
   uint32_t now_ms = millis();
-  if (now_ms - last_dbg_ms > 20) {
+  if (now_ms - last_dbg_ms > 200) {
     LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
                "DRIVE DBG t=%lums tgtV=%.3f filtV=%.3f pitch_setpoint=%.3fdeg "
                "pitch_setpoint_rate=%.3fdeg/s pid_in=%.3fdeg pid_rate=%.3fdeg/s "
@@ -868,17 +869,14 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   cmd = g_last_cmd + delta;
 
   // --- Fluidity Enhancements ---
-  // 1. Direction change "Kick": help overcome static friction when reversing
+  // Note: Boosts disabled (set to 1.0 in config) for FOC linearity.
   int current_sign = (cmd > DRIVE_KICK_NOISE_FLOOR) ? 1 : ((cmd < -DRIVE_KICK_NOISE_FLOOR) ? -1 : 0);
   if (current_sign != 0 && g_last_cmd_sign != 0 && current_sign != g_last_cmd_sign) {
-    // Apply a brief boost to break friction on direction change
     cmd *= DRIVE_KICK_BOOST;
   }
   g_last_cmd_sign = current_sign;
 
-  // 2. Deceleration Boost: help the robot return to vertical when joystick is released
   if (g_drive_target_v == 0.0f && fabsf(g_drive_v_filtered) > DRIVE_BRAKE_NOISE_FLOOR) {
-    // Add a small authority boost during the braking phase
     cmd *= DRIVE_BRAKE_BOOST;
   }
 
@@ -893,20 +891,19 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   uint32_t now_cmd_dbg_ms = millis();
   uint32_t log_interval = BALANCER_DEBUG_LOG_INTERVAL_MS;
   if (log_interval == 0 || (now_cmd_dbg_ms - last_cmd_dbg_ms >= log_interval)) {
+    uint32_t bus_latency_us = 0;
+    if (auto drv = abbot::motor::getActiveMotorDriver()) {
+      bus_latency_us = drv->getLastBusLatencyUs();
+    }
     float gx_dps = radToDeg(g_last_gyro[0]);
     float gy_dps = radToDeg(g_last_gyro[1]);
     float gz_dps = radToDeg(g_last_gyro[2]);
     LOG_PRINTF(
       abbot::log::CHANNEL_BALANCER,
-      "BALANCER_DBG t=%lums pitch=%.2fdeg pitch_rate=%.2fdeg/s pid_in=%.3fdeg "
-      "pid_out=%.3f cmd_pre_slew=%.3f cmd_after_slew=%.3f last_cmd=%.3f "
-      "ax=%.3f ay=%.3f az=%.3f gx=%.3fdeg/s gy=%.3fdeg/s gz=%.3fdeg/s\n",
+      "BALANCER_DBG t=%lums pitch=%.2fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.4f cmd=%.3f lat=%luus\n",
       (unsigned long)now_cmd_dbg_ms, (double)radToDeg(fused_pitch),
-      (double)radToDeg(fused_pitch_rate), (double)pid_in_deg,
-      (double)pid_out, (double)cmd_pre_slew, (double)cmd,
-      (double)g_last_cmd, (double)g_last_accel[0], (double)g_last_accel[1],
-      (double)g_last_accel[2], (double)gx_dps, (double)gy_dps,
-      (double)gz_dps);
+      (double)pid_in_deg, (double)pid_out, (double)(g_pid.getKi() * g_pid.getIntegrator()), (double)cmd,
+      (unsigned long)bus_latency_us);
     last_cmd_dbg_ms = now_cmd_dbg_ms;
   }
   // deadband: if command is small but non-zero, push to the edge instead of
@@ -921,7 +918,7 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   }
 
   if (fabsf(cmd) < g_deadband) {
-    if (fabsf(cmd) < 0.01f) {
+    if (fabsf(cmd) < 0.001f) { // Hard floor reduced for FOC motors
       cmd = 0.0f;
     } else {
       float sign = (cmd > 0.0f) ? 1.0f : -1.0f;

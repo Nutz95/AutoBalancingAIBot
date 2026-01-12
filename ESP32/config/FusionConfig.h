@@ -10,7 +10,7 @@ struct FusionConfig {
     // Higher value (0.1-0.3) = trust accel more, corrects drift but noisier
     // For balancing robot with motor vibrations, use 0.033 (standard Madgwick)
     float beta = 0.021909f;
-    float sample_rate = 400.0f; // Hz (target sample rate, synchronized with BMI088Config)
+    float sample_rate = 100.0f; // Hz (Aligned with BNO055 100Hz fusion rate)
     // Axis mapping: allow remapping/inversion of sensor axes into the robot
     // coordinate frame used by the fusion/filter. This makes it easy to
     // accommodate different sensor mountings without changing fusion code.
@@ -28,13 +28,13 @@ struct FusionConfig {
     // Sign adjustment: 
     // - Invert robot X (accel_sign[0]=-1): to get positive pitch for forward tilt (when sensor ax < 0)
     // - Robot Y normal (accel_sign[1]=1): sensor Y orientation matches
-    // - Invert robot Z (accel_sign[2]=-1): sensor Z reads negative when pointing up (stationary az < 0)
+    // - Robot Z normal (accel_sign[2]=1): standing az is positive (cfg already inverts it)
     int accel_map[3] = {0, 1, 2};
-    int accel_sign[3] = {-1, 1, -1};
+    int accel_sign[3] = {-1, 1, 1};
 
     // same for gyro (rad/s) - must match accel mapping for consistent fusion
     int gyro_map[3] = {0, 1, 2};
-    int gyro_sign[3] = {-1, 1, -1};
+    int gyro_sign[3] = {-1, 1, 1};
 };
 
 } // namespace fusion

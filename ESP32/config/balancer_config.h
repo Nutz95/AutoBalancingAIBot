@@ -5,29 +5,35 @@
 #include "drive_config.h"
 
 // Minimum command applied when outside deadband (feedforward to overcome static friction)
+// For NEMA FOC, try 0 first as the controller is very sensitive.
 #ifndef BALANCER_MIN_CMD
-#define BALANCER_MIN_CMD 0.18f
+#define BALANCER_MIN_CMD 0.0f
 #endif
 
 // Default PID gains (units: pitch in degrees)
-// NOTE: These defaults are tuned for DIRECT VELOCITY control mode.
-// Adjusted for CG @ 6.5cm above wheel axis, mass 1.3kg, wheel diameter 67mm
-// Kp=0.18 means 1 degree error -> 0.18 command (matches MIN_CMD)
+// Adjusted for NEMA FOC: lower gains to handle high motor bandwidth
 #ifndef BALANCER_DEFAULT_KP
-#define BALANCER_DEFAULT_KP 0.18f
+#define BALANCER_DEFAULT_KP 0.04f
 #endif
 
 #ifndef BALANCER_DEFAULT_KI
-#define BALANCER_DEFAULT_KI 0.80f
+#define BALANCER_DEFAULT_KI 0.08f
 #endif
 
 #ifndef BALANCER_DEFAULT_KD
-#define BALANCER_DEFAULT_KD 0.0040f
+#define BALANCER_DEFAULT_KD 0.006f
 #endif
 
 // Integrator anti-windup clamp (absolute limit applied to integrator state)
 #ifndef BALANCER_INTEGRATOR_LIMIT
-#define BALANCER_INTEGRATOR_LIMIT 0.4f
+#define BALANCER_INTEGRATOR_LIMIT 1.0f
+#endif
+
+// Coeff d'atténuation de l'intégrateur (Leaky Integrator)
+// 1.0 = pas d'atténuation. 0.9998 = ~8% de perte par seconde à 400Hz.
+// Aide à prévenir la dérive à long terme et les blocages de l'intégrateur.
+#ifndef BALANCER_INTEGRATOR_LEAK_COEFF
+#define BALANCER_INTEGRATOR_LEAK_COEFF 0.9998f
 #endif
 
 // Whether to enable the balancer by default on startup (false recommended)
@@ -36,9 +42,9 @@
 #endif
 
 // Minimum absolute normalized motor output to overcome motor deadband/holding
-// Value from motor characterization (measured deadzone ~0.11-0.15, conservative 0.15)
+// For FOC, start at 0.0 to avoid oscillations around center.
 #ifndef BALANCER_MOTOR_MIN_OUTPUT
-#define BALANCER_MOTOR_MIN_OUTPUT 0.15f
+#define BALANCER_MOTOR_MIN_OUTPUT 0.0f
 #endif
 
 // Command slew limit (normalized units per second).
@@ -93,7 +99,7 @@
 // Set to 0 to disable throttling, 1 for max rate (1000 Hz), 500 for 2 Hz
 // For motor characterization scripts, use 1-2ms (500-1000 Hz)
 #ifndef BALANCER_DEBUG_LOG_INTERVAL_MS
-#define BALANCER_DEBUG_LOG_INTERVAL_MS 1000
+#define BALANCER_DEBUG_LOG_INTERVAL_MS 20
 #endif
 
 // Motor command gain scaling factors (to compensate for asymmetric motor response)

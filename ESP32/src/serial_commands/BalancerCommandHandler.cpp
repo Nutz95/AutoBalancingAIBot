@@ -114,8 +114,16 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
     } else if (s == "BALANCE RESET") {
         abbot::balancer::controller::resetGainsToDefaults();
         return true;
-    } else if (s.startsWith("BALANCE GAINS")) {
-        String args = s.substring(13);
+    } else if (s.startsWith("BALANCE GAINS") || s.startsWith("BALANCE SET GAINS") || 
+               s.startsWith("BALANCE SET_GAINS") || s.startsWith("BALANCE SET ")) {
+        String args;
+        if (s.startsWith("BALANCE SET GAINS") || s.startsWith("BALANCE SET_GAINS")) {
+            args = s.substring(17);
+        } else if (s.startsWith("BALANCE SET ")) {
+            args = s.substring(12);
+        } else {
+            args = s.substring(13);
+        }
         args.trim();
         if (args.length() == 0) {
             float kp, ki, kd;

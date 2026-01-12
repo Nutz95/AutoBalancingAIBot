@@ -52,6 +52,7 @@ static float g_fused_pitch_rate_rads = 0.0f;
 static SemaphoreHandle_t g_fusion_mutex = nullptr;
 // Last mapped accelerometer values (robot frame) for filter reinitialization
 static float g_last_accel_robot[3] = {0.0f, 0.0f, 9.8f};
+static uint32_t g_last_sample_ms = 0;
 // Consumer mutable state (warmup, bias, persistence) moved into a dedicated
 // struct
 static abbot::imu_consumer::ConsumerState g_consumer;
@@ -121,10 +122,12 @@ static void imuProducerTask(void *pvParameters) {
   IMUSample sample;
   static uint32_t drop_count = 0;
   static uint32_t last_drop_log = 0;
+  static uint32_t consecutive_errors = 0;
 
   for (;;) {
     // Attempt to read; driver->read will enforce sampling interval
     if (driver->read(sample)) {
+      consecutive_errors = 0;
       // Push to queue (non-blocking). If full, we drop the sample (better than blocking).
       // With size 10, this handles jitter.
       if (imuQueue) {
@@ -137,10 +140,27 @@ static void imuProducerTask(void *pvParameters) {
       if (calibQueue) {
         xQueueOverwrite(calibQueue, &sample);
       }
+    } else {
+      // Small delay to prevent tight loop if read returns immediately (e.g. interval check)
+      vTaskDelay(1);
+    }
+
+    // Auto-recovery: If we have many consecutive failures or haven't seen a
+    // valid sample in a while, try to reinit the driver from WITHIN the
+    // producer task (safest for I2C locks).
+    static uint32_t last_success_ms = 0;
+    uint32_t now = millis();
+    if (consecutive_errors == 0) {
+      last_success_ms = now;
+    }
+
+    if (now - last_success_ms > 1000) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "IMU_PRODUCER: Data timeout, attempting reinit...");
+      driver->begin();
+      last_success_ms = now; // Reset timer to give it time to reinit
     }
 
     // Log drops periodically
-    uint32_t now = millis();
     if (drop_count > 0 && (now - last_drop_log > 5000)) {
       char buf[64];
       snprintf(buf, sizeof(buf), "IMU: dropped %lu samples (queue full)", (unsigned long)drop_count);
@@ -184,13 +204,24 @@ static void imuConsumerTask(void *pvParameters) {
   abbot::imu_consumer::ImuFrequencyMeasurement freq_measurement;
   
   for (;;) {
-    if (!imuQueue || xQueueReceive(imuQueue, &sample, portMAX_DELAY) != pdTRUE) {
+    // Wait for a sample with a timeout of 1s (proactive hang detection)
+    if (!imuQueue || xQueueReceive(imuQueue, &sample, pdMS_TO_TICKS(1000)) != pdTRUE) {
+      uint32_t now = millis();
+      if (g_last_sample_ms > 0 && (now - g_last_sample_ms >= 1000)) {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                   "IMU_CONSUMER: Data timeout! (%lu ms stale). Waiting for "
+                   "producer auto-recovery...\n",
+                   (unsigned long)(now - g_last_sample_ms));
+      }
       continue;
     }
     
     // Measure and log actual IMU frequency
     abbot::imu_consumer::measureAndLogImuFrequency(freq_measurement,
                                                    g_filter_sample_rate_hz);
+    
+    // Update global timestamp of last successful sample
+    g_last_sample_ms = millis();
     
     // Compute dt from sample timestamps
     float dt = abbot::imu_consumer::computeDt(g_consumer, sample,
@@ -449,6 +480,22 @@ float getFusedPitchRate() {
 }
 
 void reinitFilterFromAccel() {
+  // Check if data is stale (indicates IMU task/driver hang)
+  uint32_t now = millis();
+  if (g_last_sample_ms > 0 && (now - g_last_sample_ms > 500)) {
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "FILTER: WARNING - IMU data is STALE (%lu ms old). IMU "
+               "Producer should be auto-recovering soon...\n",
+               (unsigned long)(now - g_last_sample_ms));
+    
+    // We try a manual begin here only as a last resort, but risky if producer
+    // is mid-mutex. With Wire.setTimeOut it should be safer now.
+    auto drv = abbot::imu::getActiveIMUDriver();
+    if (drv) {
+      drv->begin();
+    }
+  }
+
   // Reinitialize the active filter's orientation from the last mapped
   // accelerometer reading. This is used when starting balance to ensure
   // the filter matches the current physical orientation, especially after

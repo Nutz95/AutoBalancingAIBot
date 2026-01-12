@@ -62,8 +62,11 @@ class MotorCharacterizer:
         self.telemetry_interval_ms = telemetry_interval_ms
         self.sock = None
         self.console_log = []
+        self.active_motor_id = None
+        self.buffer = ""
         
         os.makedirs(output_dir, exist_ok=True)
+        self.log_file = open(os.path.join(output_dir, "raw_console.log"), "w", buffering=1)
         
     def connect(self):
         """Connect to ESP32 WiFi console"""
@@ -87,18 +90,33 @@ class MotorCharacterizer:
         time.sleep(0.05)
         
     def recv_lines(self, timeout: float = 0.5) -> List[str]:
-        """Receive lines from console"""
+        """Receive lines from console with buffering"""
         self.sock.settimeout(timeout)
         lines = []
         try:
-            data = self.sock.recv(8192).decode('utf-8', errors='ignore')
-            for line in data.split('\n'):
-                line = line.strip()
-                if line:
-                    self.console_log.append(line)
-                    lines.append(line)
+            data = self.sock.recv(16384).decode('utf-8', errors='ignore')
+            if not data:
+                return []
+            
+            # Add to buffer and split by newlines
+            self.buffer += data
+            if '\n' in self.buffer:
+                parts = self.buffer.split('\n')
+                # All but the last part are complete lines
+                for line in parts[:-1]:
+                    l = line.strip()
+                    if l:
+                        self.console_log.append(l)
+                        lines.append(l)
+                        if hasattr(self, 'log_file'):
+                            self.log_file.write(l + "\n")
+                # Keep the last part in buffer
+                self.buffer = parts[-1]
         except socket.timeout:
             pass
+        except Exception as e:
+            print(f"Error receiving data: {e}")
+            
         return lines
         
     def parse_telemetry(self, line: str) -> Optional[TelemetrySample]:
@@ -112,9 +130,11 @@ class MotorCharacterizer:
             enc_match = re.search(r'enc=(-?\d+)', line)
             sp_match = re.search(r'sp=([+-]?\d+\.?\d*)', line)
             cmd_ts_match = re.search(r'cmd_ts_us=(\d+)', line)
-            id_match = re.search(r'id=(\d+)', line)
             
-            if not all([ts_match, enc_match, sp_match, cmd_ts_match, id_match]):
+            # Use flexible ID extraction
+            motor_id = self._extract_motor_id(line)
+            
+            if not all([ts_match, enc_match, sp_match, cmd_ts_match]) or motor_id is None:
                 return None
                 
             return TelemetrySample(
@@ -127,13 +147,38 @@ class MotorCharacterizer:
         except Exception as e:
             return None
             
+    def _extract_motor_id(self, line: str) -> Optional[int]:
+        """Extract motor ID from telemetry line (handles id=1 or L(id=1))"""
+        # Matches id=1 or id=01 or id=0x01
+        match = re.search(r'id=(0x[0-9a-fA-F]+|[0-9]+)', line)
+        if match:
+             val = match.group(1)
+             if val.startswith('0x'): 
+                 return int(val, 16)
+             return int(val)
+             
+        # Matches L(id=1)
+        match = re.search(r'\(id=(0x[0-9a-fA-F]+|[0-9]+)\)', line)
+        if match:
+             val = match.group(1)
+             if val.startswith('0x'): 
+                 return int(val, 16)
+             return int(val)
+        return None
+        
     def enable_telemetry(self, motor: str = None):
-        """Enable motor telemetry stream.
-
-        If `motor` is provided ('LEFT' or 'RIGHT') start telemetry only for that motor,
-        otherwise start for both sides.
-        """
+        """Enable motor telemetry stream."""
+        # Reset active ID and clear buffer to avoid stale data
+        self.active_motor_id = None
+        self.buffer = ""
+        
         print(f"Enabling telemetry stream ({self.telemetry_interval_ms}ms interval)...")
+        
+        # Stop any existing telemetry first
+        self.send_command("MOTOR TELEMETRY LEFT 0")
+        self.send_command("MOTOR TELEMETRY RIGHT 0")
+        time.sleep(0.2)
+        
         # Request WiFi console to forward motor channel
         self.send_command("LOG ENABLE MOTOR")
         time.sleep(0.3)
@@ -143,8 +188,8 @@ class MotorCharacterizer:
         for _ in range(5):
             lines = self.recv_lines(0.2)
             for line in lines:
-                if 'LOG: enabled' in line or 'LOG enabled' in line:
-                    print("Console confirmed motor logging enabled.")
+                if 'enabled' in line.lower() and ('log' in line.lower() or 'motor' in line.lower()):
+                    print(f"Console confirmed logging: {line}")
                     confirmed = True
                     break
             if confirmed:
@@ -186,10 +231,16 @@ class MotorCharacterizer:
         for _ in range(20):
             lines = self.recv_lines(0.2)
             for line in lines:
-                if 'MOTOR: telemetry' in line:
-                    print("Telemetry stream confirmed!")
-                    return
-        print("Warning: Telemetry stream not confirmed")
+                # Look for a line with ACTUAL telemetry data (contains ts_us=)
+                if 'MOTOR: telemetry' in line and 'ts_us=' in line:
+                    self.active_motor_id = self._extract_motor_id(line)
+                    if self.active_motor_id is not None:
+                        print(f"Telemetry stream confirmed! Found motor ID={self.active_motor_id}")
+                        return
+                    else:
+                        print(f"Telemetry stream confirmed (no ID found)! Line: {line[:50]}...")
+                        # Keep looking for a sample with an ID
+        print("Warning: Telemetry stream data not confirmed")
         
     def disable_telemetry(self, motor: str = None):
         """Disable telemetry and motors"""
@@ -238,15 +289,15 @@ class MotorCharacterizer:
         
     def run_step_test(self, motor: str, command: float, duration: float = 3.0) -> StepTestResult:
         """Run a step response test"""
-        motor_id = 0 if motor.upper() == 'LEFT' else 1
         direction = 'forward' if command > 0 else 'backward'
         
         print(f"\n{'='*60}")
-        print(f"Step test: {motor} motor, command={command:.2f} ({direction})")
+        print(f"Step test: {motor} motor, command={command:.4f} ({direction})")
         print(f"{'='*60}")
         
         # Enable telemetry for this specific motor
         self.enable_telemetry(motor)
+        motor_id = self.active_motor_id if self.active_motor_id is not None else (0 if motor.upper() == 'LEFT' else 1)
         
         # Ensure motor starts at zero
         self.send_command(f"MOTOR SET {motor} 0")
@@ -267,8 +318,12 @@ class MotorCharacterizer:
         print(f"  Baseline: enc={baseline_sample.encoder if baseline_sample else 'N/A'}")
         
         # Send step command
-        cmd_str = f"MOTOR SET {motor} {command:.2f}"
+        cmd_str = f"MOTOR SET {motor} {command:.4f}"
         print(f"  Sending: {cmd_str}")
+        
+        # Drain buffer again right before test to ensure timing is tight
+        self.buffer = ""
+        
         cmd_time = time.time()
         log_pos_before_cmd = len(self.console_log)  # Mark position before sending
         self.send_command(cmd_str)
@@ -378,19 +433,19 @@ class MotorCharacterizer:
         command_entry_us = None
         if log_pos is not None and motor is not None:
             new_lines = self.console_log[log_pos:]
+            # Support both DC mirror and MKS Servo driver logs
             motor_pattern = f'command entry {motor.upper()}'
             for line in new_lines:
                 if motor_pattern in line and 'us' in line:
-                    if 'raw=0)' not in line:
-                        match = re.search(r'at (\d+) us', line)
-                        if match:
-                            command_entry_us = int(match.group(1))
-                            break
+                    match = re.search(r'at (\d+) us', line)
+                    if match:
+                        command_entry_us = int(match.group(1))
+                        break
 
-        # Find ACTUAL start of movement (first sample with speed > 5% of steady)
-        # This handles deadzone delay where motor doesn't move immediately
+        # Find ACTUAL start of movement
         movement_start_us = None
-        movement_threshold = 0.05 * abs(steady)  # 5% of final speed
+        # Use a very low threshold for movement detection (1% of steady)
+        movement_threshold = 0.01 * abs(steady) 
         
         for sample in samples:
             # Skip samples before command entry if we have it
@@ -401,19 +456,27 @@ class MotorCharacterizer:
                 movement_start_us = sample.timestamp_us
                 break
         
-        if movement_start_us is None:
-            # No movement detected, use command entry or first sample as fallback
-            movement_start_us = command_entry_us if command_entry_us else samples[0].timestamp_us
+        # Tau calculation: 
+        # For control model, the time from command to 63% is the most useful "Effective Tau".
+        # If we have command_entry_us, use that as t=0.
+        start_time_us = command_entry_us if command_entry_us else movement_start_us
+        if not start_time_us:
+            start_time_us = samples[0].timestamp_us
 
-        # Now find tau from ACTUAL movement start (not command entry)
+        # Now find tau from start_time_us
         for sample in samples:
-            if sample.timestamp_us <= movement_start_us:
+            if sample.timestamp_us <= start_time_us:
                 continue
                 
             if abs(sample.speed) >= v_63:
-                tau_us = sample.timestamp_us - movement_start_us
+                tau_us = sample.timestamp_us - start_time_us
                 if tau_us <= 0:
                     return None
+                
+                # Check for sane values (Tau should not be instantly reached)
+                if tau_us < 5000: # < 5ms is likely noise or old telemetry
+                    continue
+                    
                 return tau_us / 1e6  # seconds
 
         return None
@@ -430,47 +493,44 @@ class MotorCharacterizer:
         
     def run_sweep_test(self, motor: str, commands: List[float]) -> SweepTestResult:
         """Run deadzone/saturation sweep test"""
-        motor_id = 0 if motor.upper() == 'LEFT' else 1
-        
         print(f"\n{'='*60}")
         print(f"Sweep test: {motor} motor, {len(commands)} steps")
         print(f"{'='*60}")
         
         # Ensure telemetry is enabled for this motor during the sweep
         self.enable_telemetry(motor)
+        motor_id = self.active_motor_id if self.active_motor_id is not None else (0 if motor.upper() == 'LEFT' else 1)
 
         measured_speeds = []
         
         for i, cmd in enumerate(commands):
-            print(f"  Step {i+1}/{len(commands)}: command={cmd:.2f}")
+            # Print every step for high resolution analysis
+            show_log = True
             
-            # Set command
-            self.send_command(f"MOTOR SET {motor} {cmd:.2f}")
+            # Set command - use high precision (4 decimals)
+            self.send_command(f"MOTOR SET {motor} {cmd:.4f}")
             
-            # Wait for settling - longer for first point to stabilize from zero
+            # Wait for settling - much faster for small increments
             if i == 0:
-                time.sleep(1.5)  # First point needs more time to reach steady state
+                time.sleep(1.0)
             else:
-                time.sleep(0.5)
+                time.sleep(0.05) # Even faster for 0.001 resolution
             
-            # Collect samples
+            # Collect and average speed from samples
             samples = []
-            for _ in range(15):  # Collect ~300ms of data
+            for _ in range(3):  # ~60ms of data
                 lines = self.recv_lines(0.02)
                 for line in lines:
                     sample = self.parse_telemetry(line)
                     if sample and self._extract_motor_id(line) == motor_id:
                         samples.append(sample)
-                time.sleep(0.02)
+                time.sleep(0.01)
                 
-            # Average speed from samples
-            if samples:
-                avg_speed = np.mean([s.speed for s in samples])
-                measured_speeds.append(avg_speed)
-                print(f"    Speed: {avg_speed:.1f} counts/s")
-            else:
-                measured_speeds.append(0.0)
-                print(f"    Speed: N/A (no samples)")
+            avg_speed = np.mean([s.speed for s in samples]) if samples else 0.0
+            measured_speeds.append(avg_speed)
+            
+            if show_log:
+                print(f"  Step {i+1}/{len(commands)}: cmd={cmd:.4f} -> speed={avg_speed:8.1f} counts/s")
                 
         # Stop motor
         self.send_command(f"MOTOR SET {motor} 0")
@@ -481,9 +541,9 @@ class MotorCharacterizer:
         # Analyze deadzone and saturation
         deadzone, linear, saturation, slope, intercept = self._analyze_sweep(commands, measured_speeds)
         
-        print(f"\n  Deadzone range: [{deadzone[0]:.2f}, {deadzone[1]:.2f}]")
-        print(f"  Linear range: [{linear[0]:.2f}, {linear[1]:.2f}]")
-        print(f"  Saturation starts: {saturation:.2f}")
+        print(f"\n  Deadzone range: [{deadzone[0]:.4f}, {deadzone[1]:.4f}]")
+        print(f"  Linear range: [{linear[0]:.4f}, {linear[1]:.4f}]")
+        print(f"  Saturation starts: {saturation:.4f}")
         if slope is not None and intercept is not None:
             print(f"  Linear fit: speed = {slope:.1f} * cmd + {intercept:.1f}")
         
@@ -504,58 +564,37 @@ class MotorCharacterizer:
         
         # Find saturation (where speed stops increasing significantly) - search from high speed end
         max_speed = max(abs_speeds)
-        saturation_thresh = 0.95 * max_speed
+        saturation_thresh = 0.98 * max_speed
         
-        # Find deadzone (where speed is negligible) - use percentage of max speed for robustness
-        # Deadzone is where motor doesn't respond linearly yet (typically < 5-10% of max speed)
-        deadzone_thresh = 0.05 * max_speed  # 5% of max speed
+        # Deadzone detection (where speed is negligible)
+        # For NEMA/FOC motors, deadzone is extremely small.
+        # Use 0.5% of max speed or 500 counts/s (whichever is lower).
+        deadzone_thresh = min(0.005 * max_speed, 500.0) 
         
-        if commands[0] >= 0 and commands[-1] < 0:
-            # Negative commands: 0.0 → -1.0
-            # Deadzone at start (zero speed, 0.0), saturation at end (high speed, -1.0)
-            deadzone_end_idx = 0
-            for i, spd in enumerate(abs_speeds):
-                if spd <= deadzone_thresh:
-                    deadzone_end_idx = i  # Last point still in deadzone
-                else:
-                    break  # Stop at first point clearly out of deadzone
-            deadzone_end_idx = max(0, deadzone_end_idx)
-            
-            saturation_idx = len(abs_speeds) - 1
-            for i in range(len(abs_speeds) - 1, -1, -1):
-                if abs_speeds[i] >= saturation_thresh:
-                    saturation_idx = i
-                    break
-            
-            # Linear range is between deadzone and saturation
-            linear_start_idx = min(deadzone_end_idx + 1, len(commands) - 1)
-            linear_end_idx = max(saturation_idx - 1, 0)
-            
-            saturation_start = commands[saturation_idx]
-            deadzone_range = (0.0, commands[deadzone_end_idx])
-            linear_range = (commands[linear_start_idx], commands[linear_end_idx])
-        else:
-            # Positive commands: 0.0 → 1.0
-            # Deadzone at start (zero speed, 0.0), saturation at end (high speed, 1.0)
-            deadzone_end_idx = 0
-            for i, spd in enumerate(abs_speeds):
-                if spd > deadzone_thresh:
-                    deadzone_end_idx = i
-                    break
-            
-            saturation_idx = len(abs_speeds) - 1
-            for i in range(len(abs_speeds) - 1, 0, -1):
-                if abs_speeds[i] >= saturation_thresh:
-                    saturation_idx = i
-                    break
-            
-            # Linear range is between deadzone and saturation
-            linear_start_idx = min(deadzone_end_idx + 1, len(commands) - 1)
-            linear_end_idx = max(saturation_idx - 1, 0)
-            
-            deadzone_range = (0.0, commands[deadzone_end_idx])
-            linear_range = (commands[linear_start_idx], commands[linear_end_idx])
-            saturation_start = commands[saturation_idx]
+        # Find index where motor starts moving
+        movement_start_idx = 0
+        for i, spd in enumerate(abs_speeds):
+            if spd > deadzone_thresh:
+                movement_start_idx = i
+                break
+        
+        # Deadzone end index is the point just before movement
+        deadzone_end_idx = max(0, movement_start_idx - 1)
+        
+        # Find saturation from the high end
+        saturation_idx = len(abs_speeds) - 1
+        for i in range(len(abs_speeds) - 1, -1, -1):
+            if abs_speeds[i] >= saturation_thresh:
+                saturation_idx = i
+                break
+
+        # Linear range is between deadzone end and saturation
+        linear_start_idx = movement_start_idx
+        linear_end_idx = max(saturation_idx - 1, linear_start_idx)
+        
+        deadzone_range = (0.0, commands[deadzone_end_idx])
+        linear_range = (commands[linear_start_idx], commands[linear_end_idx])
+        saturation_start = commands[saturation_idx]
         
         # Calculate linear regression on linear range
         slope, intercept = None, None
@@ -617,9 +656,9 @@ class MotorCharacterizer:
                 f.write(f"\n{result.motor}:")
                 direction = 'Backward' if result.commands[-1] < 0 else 'Forward'
                 f.write(f" ({direction})\n")
-                f.write(f"  Deadzone range: [{result.deadzone_range[0]:.2f}, {result.deadzone_range[1]:.2f}]\n")
-                f.write(f"  Linear range: [{result.linear_range[0]:.2f}, {result.linear_range[1]:.2f}]\n")
-                f.write(f"  Saturation starts: {result.saturation_start:.2f}\n")
+                f.write(f"  Deadzone range: [{result.deadzone_range[0]:.4f}, {result.deadzone_range[1]:.4f}]\n")
+                f.write(f"  Linear range: [{result.linear_range[0]:.4f}, {result.linear_range[1]:.4f}]\n")
+                f.write(f"  Saturation starts: {result.saturation_start:.4f}\n")
                 if result.linear_fit_slope is not None and result.linear_fit_intercept is not None:
                     f.write(f"  Linear fit: speed = {result.linear_fit_slope:.1f} * cmd + {result.linear_fit_intercept:.1f}\n")
                 
@@ -780,10 +819,15 @@ def main():
         # Sweep tests for deadzone and saturation
         sweep_results = []
         
-        # Generate sweep commands (negative then positive, rounded to 2 decimals)
+        # Generate sweep commands (negative then positive, high precision)
         # For negative: go from 0 to -1 (to avoid inertia affecting deadzone measurement)
-        neg_commands = [round(-i * args.sweep_step, 2) for i in range(int(1.0 / args.sweep_step) + 1)]
-        pos_commands = [round(i * args.sweep_step, 2) for i in range(int(1.0 / args.sweep_step) + 1)]
+        # Use precision that matches the sweep step
+        precision = 2
+        if args.sweep_step < 0.01:
+            precision = 4
+            
+        neg_commands = [round(-i * args.sweep_step, precision) for i in range(int(1.0 / args.sweep_step) + 1)]
+        pos_commands = [round(i * args.sweep_step, precision) for i in range(int(1.0 / args.sweep_step) + 1)]
         
         # LEFT sweep (negative then positive)
         sweep_results.append(char.run_sweep_test('LEFT', neg_commands))
