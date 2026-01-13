@@ -59,12 +59,22 @@ enum class MksServoHoldCurrent : uint8_t {
 // HARDWARE CONNECTION
 // =============================================================================
 
-#ifndef MKS_SERVO_TX_PIN
-#define MKS_SERVO_TX_PIN 17
+// Motor 1 (Left) - Serial Port 2
+#ifndef MKS_SERVO_P1_TX_PIN
+#define MKS_SERVO_P1_TX_PIN 15
 #endif
 
-#ifndef MKS_SERVO_RX_PIN
-#define MKS_SERVO_RX_PIN 18
+#ifndef MKS_SERVO_P1_RX_PIN
+#define MKS_SERVO_P1_RX_PIN 16
+#endif
+
+// Motor 2 (Right) - Serial Port 1
+#ifndef MKS_SERVO_P2_TX_PIN
+#define MKS_SERVO_P2_TX_PIN 17
+#endif
+
+#ifndef MKS_SERVO_P2_RX_PIN
+#define MKS_SERVO_P2_RX_PIN 18
 #endif
 
 #ifndef MKS_SERVO_BAUD
@@ -117,8 +127,9 @@ enum class MksServoHoldCurrent : uint8_t {
 // =============================================================================
 
 // Max speed in RPM (MKS protocol uses 12-bit value 0-3000)
+// Increased to 1200 for better recovery response to disturbances
 #ifndef VELOCITY_MAX_SPEED
-#define VELOCITY_MAX_SPEED 300
+#define VELOCITY_MAX_SPEED 1200
 #endif
 
 // Default acceleration for speed commands (0-255)
@@ -143,7 +154,7 @@ enum class MksServoHoldCurrent : uint8_t {
 
 // Critical command timeout (e.g. speed command)
 #ifndef MKS_SERVO_TIMEOUT_CONTROL_US
-#define MKS_SERVO_TIMEOUT_CONTROL_US 1500
+#define MKS_SERVO_TIMEOUT_CONTROL_US 2000
 #endif
 
 // Telemetry/Data timeout (e.g. reading position)
@@ -157,6 +168,17 @@ enum class MksServoHoldCurrent : uint8_t {
 #endif
 
 // Bus quiet time between consecutive reads/writes to different IDs
+// Increased to 200us to allow RS485 transceivers to switch directions and bus to settle
 #ifndef MKS_SERVO_BUS_QUIET_US
-#define MKS_SERVO_BUS_QUIET_US 50
+#define MKS_SERVO_BUS_QUIET_US 200
+#endif
+
+// Turnaround delay for RS485 auto-direction hardware (us)
+#ifndef MKS_SERVO_RS485_TURNAROUND_US
+#define MKS_SERVO_RS485_TURNAROUND_US 50
+#endif
+
+// How long to wait for bus availability (ms)
+#ifndef MKS_SERVO_BUS_MUTEX_TIMEOUT_MS
+#define MKS_SERVO_BUS_MUTEX_TIMEOUT_MS 20
 #endif

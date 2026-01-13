@@ -1,5 +1,6 @@
 // MksServoMotorDriver.cpp - Implementation for MKS SERVO42D/57D serial bus motors
 #include "../../include/motor_drivers/MksServoMotorDriver.h"
+#include "../../include/balancer_controller.h"
 #include <Arduino.h>
 
 namespace abbot {
@@ -12,13 +13,17 @@ MksServoMotorDriver::MksServoMotorDriver()
       m_busMutex(xSemaphoreCreateMutex()) {}
 
 void MksServoMotorDriver::initMotorDriver() {
-    // Initialize Serial1 at the configured baud rate
-    // Note: pins 17 (TX) and 18 (RX) are usually Serial1 defaults or assigned
-    Serial1.begin(MKS_SERVO_BAUD, SERIAL_8N1, MKS_SERVO_RX_PIN, MKS_SERVO_TX_PIN);
+    // Initialize both serial ports at the configured baud rate
+    // Motor 1 (Left) on Serial2
+    Serial2.begin(MKS_SERVO_BAUD, SERIAL_8N1, MKS_SERVO_P1_RX_PIN, MKS_SERVO_P1_TX_PIN);
+    // Motor 2 (Right) on Serial1
+    Serial1.begin(MKS_SERVO_BAUD, SERIAL_8N1, MKS_SERVO_P2_RX_PIN, MKS_SERVO_P2_TX_PIN);
     
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
-               "mks_servo: initialized at %d baud (TX:%d, RX:%d)\n",
-               MKS_SERVO_BAUD, MKS_SERVO_TX_PIN, MKS_SERVO_RX_PIN);
+               "mks_servo: initialized Serial2 (Left, ID:%d) TX:%d RX:%d, Serial1 (Right, ID:%d) TX:%d RX:%d at %d baud\n",
+               LEFT_MOTOR_ID, MKS_SERVO_P1_TX_PIN, MKS_SERVO_P1_RX_PIN,
+               RIGHT_MOTOR_ID, MKS_SERVO_P2_TX_PIN, MKS_SERVO_P2_RX_PIN,
+               MKS_SERVO_BAUD);
 
     // Give drivers time to boot
     delay(100);
@@ -112,8 +117,9 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
 
     // Only send the command if this specific motor is enabled
     if (state.enabled) {
-        // Wait a bit longer for mutex in critical control path (10ms)
-        if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+        // Wait for bus mutex. In the critical control path, we should wait long enough 
+        // to not drop frames just because of a telemetry read (up to 20ms).
+        if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(MKS_SERVO_BUS_MUTEX_TIMEOUT_MS)) == pdTRUE) {
             xSemaphoreGive(m_busMutex); // We just checked availability, sendSpeedCommand takes it internally
             sendSpeedCommand(state.id, command, state.invert);
             // Delay for bus recovery/motor processing
@@ -133,6 +139,13 @@ void MksServoMotorDriver::setMotorCommandRaw(MotorSide side, int16_t rawSpeed) {
 }
 
 int32_t MksServoMotorDriver::readEncoder(MotorSide side) {
+    // If the balancer is active, prioritize the bus 100% for control commands.
+    // Telemetry reads (which take ~3ms) cause latency spikes that can destabilize the PID.
+    if (abbot::balancer::controller::isActive()) {
+        MotorState& state = (side == MotorSide::LEFT) ? m_left : m_right;
+        return state.last_encoder;
+    }
+
     MotorState& state = (side == MotorSide::LEFT) ? m_left : m_right;
     uint32_t now = millis();
 
@@ -148,9 +161,11 @@ int32_t MksServoMotorDriver::readEncoder(MotorSide side) {
         return state.last_encoder;
     }
 
+    HardwareSerial& serial = getSerialForMotor(state.id);
+
     // Clear any leftover data in RX buffer
-    while (Serial1.available() > 0) {
-        Serial1.read();
+    while (serial.available() > 0) {
+        serial.read();
     }
 
     // Send read position request (0x31)
@@ -160,19 +175,19 @@ int32_t MksServoMotorDriver::readEncoder(MotorSide side) {
     frame[2] = 0x31;
     frame[3] = calculateChecksum(frame, 3);
     
-    writeFrame(frame, 4);
+    writeFrame(serial, frame, 4);
 
     // Response is 10 bytes: [0xFB] [Addr] [0x31] [Dir] [Pos3] [Pos2] [Pos1] [Pos0] [Status] [Checksum]
-    uint8_t response[10];
-    if (readResponse(state.id, 0x31, response, 10, MKS_SERVO_TIMEOUT_DATA_US)) {
+    uint8_t responseBuffer[10];
+    if (readResponse(serial, state.id, 0x31, responseBuffer, 10, MKS_SERVO_TIMEOUT_DATA_US)) {
         // Position is at indices 5, 6, 7, 8
-        int32_t pos = ((int32_t)response[5] << 24) |
-                      ((int32_t)response[6] << 16) |
-                      ((int32_t)response[7] << 8) |
-                      ((int32_t)response[8]);
+        int32_t pos = ((int32_t)responseBuffer[5] << 24) |
+                      ((int32_t)responseBuffer[6] << 16) |
+                      ((int32_t)responseBuffer[7] << 8) |
+                      ((int32_t)responseBuffer[8]);
         
         // Handle sign from status byte (bit 0) if provided by motor
-        if (response[3] & 0x01) {
+        if (responseBuffer[3] & 0x01) {
             pos = -pos;
         }
         
@@ -231,42 +246,50 @@ void MksServoMotorDriver::calibrateMotor(uint8_t id) {
 }
 
 void MksServoMotorDriver::scanBus() {
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: starting RS485 bus scan (IDs 1-15)...");
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: starting scan on both Serial1 and Serial2 (IDs 1-15)...");
 
     int found_count = 0;
-    for (uint8_t id = 1; id <= 15; ++id) {
-        if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
-            continue;
+    HardwareSerial* ports[] = {&Serial1, &Serial2};
+    const char* port_names[] = {"Serial1", "Serial2"};
+
+    for (int portIndex = 0; portIndex < 2; ++portIndex) {
+        HardwareSerial& serial = *ports[portIndex];
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "Scanning %s...\n", port_names[portIndex]);
+        
+        for (uint8_t id = 1; id <= 15; ++id) {
+            if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+                continue;
+            }
+
+            // Clear any leftover data in RX buffer
+            while (serial.available() > 0) {
+                serial.read();
+            }
+
+            // Send read position request (0x31) - it's a safe non-destructive read
+            uint8_t frame[4];
+            frame[0] = 0xFA;
+            frame[1] = id;
+            frame[2] = 0x31;
+            frame[3] = calculateChecksum(frame, 3);
+
+            writeFrame(serial, frame, 4);
+
+            // Response is 10 bytes for 0x31
+            uint8_t responseBuffer[10];
+            bool success = readResponse(serial, id, 0x31, responseBuffer, 10, MKS_SERVO_TIMEOUT_HEAVY_US);
+            xSemaphoreGive(m_busMutex);
+
+            if (success) {
+                LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: Found motor at ID 0x%02X on %s", id, port_names[portIndex]);
+                found_count++;
+            }
+            // Small delay to not overwhelm the bus
+            delay(5);
         }
-
-        // Clear any leftover data in RX buffer
-        while (Serial1.available() > 0) {
-            Serial1.read();
-        }
-
-        // Send read position request (0x31) - it's a safe non-destructive read
-        uint8_t frame[4];
-        frame[0] = 0xFA;
-        frame[1] = id;
-        frame[2] = 0x31;
-        frame[3] = calculateChecksum(frame, 3);
-
-        writeFrame(frame, 4);
-
-        // Response is 10 bytes for 0x31
-        uint8_t response[10];
-        bool success = readResponse(id, 0x31, response, 10, MKS_SERVO_TIMEOUT_HEAVY_US);
-        xSemaphoreGive(m_busMutex);
-
-        if (success) {
-            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: Found motor at ID 0x%02X", id);
-            found_count++;
-        }
-        // Small delay to not overwhelm the bus
-        delay(5);
     }
 
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: scan finished. Found %d motors.", found_count);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: scan finished. Found %d motors total.", found_count);
 }
 
 bool MksServoMotorDriver::processSerialCommand(const String &line) {
@@ -319,8 +342,8 @@ void MksServoMotorDriver::dumpMotorRegisters(uint8_t id) {
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "--- mks_servo: Dumping registers for motor ID 0x%02X ---\n", id);
     
     // Commands to read: Pos(0x31), Speed(0x32), TargetPos(0x33), Pulse(0x34), Error(0x35), IO(0x36)
-    struct Reg { uint8_t code; const char* name; size_t len; };
-    Reg regs[] = {
+    struct RegisterDefinition { uint8_t code; const char* name; size_t length; };
+    RegisterDefinition registerDefinitions[] = {
         {0x31, "Position ", 10},
         {0x32, "Read Speed", 6},
         {0x33, "Target Pos", 10},
@@ -329,34 +352,36 @@ void MksServoMotorDriver::dumpMotorRegisters(uint8_t id) {
         {0x36, "IO Status", 6}
     };
 
-    for (const auto& r : regs) {
+    for (const auto& reg : registerDefinitions) {
         if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
             continue;
         }
 
+        HardwareSerial& serial = getSerialForMotor(id);
+
         // Clear any leftover data in RX buffer
-        while (Serial1.available() > 0) {
-            Serial1.read();
+        while (serial.available() > 0) {
+            serial.read();
         }
 
         uint8_t frame[4];
         frame[0] = 0xFA;
         frame[1] = id;
-        frame[2] = r.code;
+        frame[2] = reg.code;
         frame[3] = calculateChecksum(frame, 3);
-        writeFrame(frame, 4);
+        writeFrame(serial, frame, 4);
         
-        uint8_t resp[16];
-        bool success = readResponse(id, r.code, resp, r.len, MKS_SERVO_TIMEOUT_HEAVY_US);
+        uint8_t responseBuffer[16];
+        bool success = readResponse(serial, id, reg.code, responseBuffer, reg.length, MKS_SERVO_TIMEOUT_HEAVY_US);
         xSemaphoreGive(m_busMutex);
 
         if (success) {
-            if (r.code == 0x31 || r.code == 0x33 || r.code == 0x35) {
+            if (reg.code == 0x31 || reg.code == 0x33 || reg.code == 0x35) {
                 // Parse for 0x31/0x33/0x35: [H1] [H0] [P3] [P2] [P1] [P0] (48-bit pos)
                 // We show the lower 32-bit as Pos and byte 3 as Status/H1
-                int32_t pos = ((int32_t)resp[5] << 24) | ((int32_t)resp[6] << 16) | 
-                              ((int32_t)resp[7] << 8) | (int32_t)resp[8];
-                uint8_t status = resp[3];
+                int32_t pos = ((int32_t)responseBuffer[5] << 24) | ((int32_t)responseBuffer[6] << 16) | 
+                              ((int32_t)responseBuffer[7] << 8) | (int32_t)responseBuffer[8];
+                uint8_t status = responseBuffer[3];
                 
                 // Handle sign from status byte (bit 0)
                 if (status & 0x01) {
@@ -364,18 +389,18 @@ void MksServoMotorDriver::dumpMotorRegisters(uint8_t id) {
                 }
 
                 LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [0x%02X] %s: Pos: %ld Status: 0x%02X\n", 
-                           r.code, r.name, (long)pos, status);
+                           reg.code, reg.name, (long)pos, status);
             } else {
-                String hex_data = "";
-                for (size_t i = 3; i < r.len - 1; ++i) {
+                String hexDataOutput = "";
+                for (size_t i = 3; i < reg.length - 1; ++i) {
                     char buf[4];
-                    sprintf(buf, "%02X ", resp[i]);
-                    hex_data += buf;
+                    sprintf(buf, "%02X ", responseBuffer[i]);
+                    hexDataOutput += buf;
                 }
-                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [0x%02X] %s: %s\n", r.code, r.name, hex_data.c_str());
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [0x%02X] %s: %s\n", reg.code, reg.name, hexDataOutput.c_str());
             }
         } else {
-            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [0x%02X] %s: TIMEOUT\n", r.code, r.name);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [0x%02X] %s: TIMEOUT\n", reg.code, reg.name);
         }
         delay(10);
     }
@@ -387,21 +412,21 @@ void MksServoMotorDriver::dumpMotorRegisters(uint8_t id) {
 void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, bool invert) {
     // normalized_speed is [-1.0, 1.0]
     // 1. Handle inversion and direction
-    float speed_val = normalized_speed;
+    float speedValue = normalized_speed;
     if (invert) {
-        speed_val = -speed_val;
+        speedValue = -speedValue;
     }
 
-    uint8_t dir = (speed_val >= 0) ? 0 : 1;
-    float abs_speed = (speed_val >= 0) ? speed_val : -speed_val;
+    uint8_t direction = (speedValue >= 0) ? 0 : 1;
+    float absoluteSpeed = (speedValue >= 0) ? speedValue : -speedValue;
 
     // 2. Map to 12-bit speed (0-3000 RPM)
     // Use 32-bit types for calculations before casting to 16-bit
-    uint32_t speed_calc = (uint32_t)(abs_speed * (float)VELOCITY_MAX_SPEED);
-    if (speed_calc > 3000) {
-        speed_calc = 3000;
+    uint32_t speedValueCalc = (uint32_t)(absoluteSpeed * (float)VELOCITY_MAX_SPEED);
+    if (speedValueCalc > 3000) {
+        speedValueCalc = 3000;
     }
-    uint16_t speed_uint = (uint16_t)speed_calc;
+    uint16_t speedValueUint = (uint16_t)speedValueCalc;
 
     // Throttled logging for transparency
     MotorState& state = (id == m_left.id) ? m_left : m_right;
@@ -418,22 +443,25 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
     frame[0] = 0xFA;
     frame[1] = id;
     frame[2] = 0xF6;
-    frame[3] = (dir << 7) | ((speed_uint >> 8) & 0x0F);
-    frame[4] = speed_uint & 0xFF;
+    frame[3] = (direction << 7) | ((speedValueUint >> 8) & 0x0F);
+    frame[4] = speedValueUint & 0xFF;
     frame[5] = MKS_SERVO_ACCEL;
     frame[6] = calculateChecksum(frame, 6);
 
+    HardwareSerial& serial = getSerialForMotor(id);
+
     // Clear any leftover data in RX buffer before sending
-    while (Serial1.available() > 0) {
-        Serial1.read();
+    while (serial.available() > 0) {
+        serial.read();
     }
 
-    writeFrame(frame, 7);
-
+    writeFrame(serial, frame, 7);
+    
     // Consume ACK: 0xFB [ID] 0xF6 [Status] [Checksum] (5 bytes)
-    uint8_t ack_buffer[5];
+    uint8_t ackBuffer[5];
     // Reduce timeout for critical speed command ACK.
-    bool ack_ok = readResponse(id, 0xF6, ack_buffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
+    // readResponse naturally skips the TX echo because it filters for header 0xFB.
+    bool ackOk = readResponse(serial, id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
     
     unsigned long duration_us = micros() - start_us;
     last_bus_latency_us_ = (uint32_t)duration_us;
@@ -466,11 +494,11 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
         bus_transaction_count = 0;
     }
 
-    if (ack_ok) {
+    if (ackOk) {
         // Only log if status is not success (0x01) and throttle to 1 second
-        if (ack_buffer[3] != 0x01 && (now_ms - state.last_ack_log_ms >= 1000)) {
+        if (ackBuffer[3] != 0x01 && (now_ms - state.last_ack_log_ms >= 1000)) {
             LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ID 0x%02X command status=0x%02X (speed=%.3f)\n", 
-                       id, ack_buffer[3], (double)normalized_speed);
+                       id, ackBuffer[3], (double)normalized_speed);
             state.last_ack_log_ms = now_ms;
         }
     } else {
@@ -535,18 +563,20 @@ void MksServoMotorDriver::sendFunctionCommand(uint8_t id, uint8_t function_code,
     size_t total_len = 3 + length + 1;
     frame[total_len - 1] = calculateChecksum(frame, total_len - 1);
     
+    HardwareSerial& serial = getSerialForMotor(id);
+
     // Clear any leftover data in RX buffer before sending
-    while (Serial1.available() > 0) {
-        Serial1.read();
+    while (serial.available() > 0) {
+        serial.read();
     }
 
-    writeFrame(frame, total_len);
+    writeFrame(serial, frame, total_len);
 
     // Consume ACK: 0xFB [ID] [Function] [Status] [Checksum] (5 bytes)
-    uint8_t ack_buffer[5];
-    if (readResponse(id, function_code, ack_buffer, 5, MKS_SERVO_TIMEOUT_DATA_US)) {
+    uint8_t ackBuffer[5];
+    if (readResponse(serial, id, function_code, ackBuffer, 5, MKS_SERVO_TIMEOUT_DATA_US)) {
         // Optional: you can log success here if needed
-        // LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ID 0x%02X FUNC 0x%02X ACK status=0x%02X\n", id, function_code, ack_buffer[3]);
+        // LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ID 0x%02X FUNC 0x%02X ACK status=0x%02X\n", id, function_code, ackBuffer[3]);
     } else {
         LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: WARN: No ACK for FUNC 0x%02X to ID 0x%02X\n", function_code, id);
     }
@@ -562,8 +592,19 @@ uint8_t MksServoMotorDriver::calculateChecksum(const uint8_t* data, size_t lengt
     return checksum;
 }
 
-void MksServoMotorDriver::writeFrame(const uint8_t* frame, size_t length) {
-    Serial1.write(frame, length);
+HardwareSerial& MksServoMotorDriver::getSerialForMotor(uint8_t id) {
+    if (id == LEFT_MOTOR_ID) {
+        return Serial2;
+    }
+    if (id == RIGHT_MOTOR_ID) {
+        return Serial1;
+    }
+    // Fallback/Default for unknown IDs
+    return Serial1;
+}
+
+void MksServoMotorDriver::writeFrame(HardwareSerial& serial, const uint8_t* frame, size_t length) {
+    serial.write(frame, length);
 }
 
 bool MksServoMotorDriver::verifyConfig(uint8_t id, uint8_t function_code, uint8_t expected_value, const char* label) {
@@ -571,9 +612,11 @@ bool MksServoMotorDriver::verifyConfig(uint8_t id, uint8_t function_code, uint8_
         return false;
     }
 
+    HardwareSerial& serial = getSerialForMotor(id);
+
     // Clear any leftover data in RX buffer
-    while (Serial1.available() > 0) {
-        Serial1.read();
+    while (serial.available() > 0) {
+        serial.read();
     }
 
     uint8_t frame[4];
@@ -581,20 +624,20 @@ bool MksServoMotorDriver::verifyConfig(uint8_t id, uint8_t function_code, uint8_
     frame[1] = id;
     frame[2] = function_code;
     frame[3] = calculateChecksum(frame, 3);
-    writeFrame(frame, 4);
+    writeFrame(serial, frame, 4);
 
-    uint8_t resp[16];
+    uint8_t responseBuffer[16];
     size_t expected_len = (function_code == 0x31 || function_code == 0x34 || function_code == 0x35) ? 10 : 5;
 
-    bool success = readResponse(id, function_code, resp, expected_len, MKS_SERVO_TIMEOUT_HEAVY_US);
+    bool success = readResponse(serial, id, function_code, responseBuffer, expected_len, MKS_SERVO_TIMEOUT_HEAVY_US);
     xSemaphoreGive(m_busMutex);
 
     if (success) {
-        if (resp[3] == expected_value) {
-            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: motor 0x%02X verified %s: 0x%02X\n", id, label, resp[3]);
+        if (responseBuffer[3] == expected_value) {
+            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: motor 0x%02X verified %s: 0x%02X\n", id, label, responseBuffer[3]);
             return true;
         } else {
-            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "mks_servo: motor 0x%02X %s mismatch! expected 0x%02X, got 0x%02X\n", id, label, expected_value, resp[3]);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "mks_servo: motor 0x%02X %s mismatch! expected 0x%02X, got 0x%02X\n", id, label, expected_value, responseBuffer[3]);
         }
     } else {
         LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "mks_servo: motor 0x%02X %s verification TIMEOUT\n", id, label);
@@ -602,32 +645,32 @@ bool MksServoMotorDriver::verifyConfig(uint8_t id, uint8_t function_code, uint8_
     return false;
 }
 
-bool MksServoMotorDriver::readResponse(uint8_t id, uint8_t function_code, uint8_t* out_data, size_t expected_length, uint32_t timeout_us) {
+bool MksServoMotorDriver::readResponse(HardwareSerial& serial, uint8_t id, uint8_t function_code, uint8_t* out_data, size_t expected_length, uint32_t timeout_us) {
     // Blocking read with precision timeout
     unsigned long start_us = micros();
     size_t received = 0;
     
     while (micros() - start_us < timeout_us) { 
-        if (Serial1.available()) {
-            uint8_t b = Serial1.read();
+        if (serial.available()) {
+            uint8_t byteRead = serial.read();
             
             // Look for header 0xFB
             if (received == 0) {
-                if (b == 0xFB) {
-                    out_data[0] = b;
+                if (byteRead == 0xFB) {
+                    out_data[0] = byteRead;
                     received = 1;
                 }
                 continue;
             }
             
-            out_data[received++] = b;
+            out_data[received++] = byteRead;
             
             // Validate ID and Cmd as soon as they are available (indices 1 and 2)
             if (received == 3) {
                 if (out_data[1] != id || out_data[2] != function_code) {
                     // Wrong frame. Reset and check if this current byte could be the start of a new frame.
                     received = 0;
-                    if (b == 0xFB) {
+                    if (byteRead == 0xFB) {
                         out_data[0] = 0xFB;
                         received = 1;
                     }
@@ -637,15 +680,15 @@ bool MksServoMotorDriver::readResponse(uint8_t id, uint8_t function_code, uint8_
             
             if (received == expected_length) {
                 // Verify checksum
-                uint8_t cs = calculateChecksum(out_data, expected_length - 1);
-                if (cs == out_data[expected_length - 1]) {
+                uint8_t calculatedChecksum = calculateChecksum(out_data, expected_length - 1);
+                if (calculatedChecksum == out_data[expected_length - 1]) {
                     return true;
                 }
                 
                 // Bad checksum - reset and look for next header
                 received = 0;
                 // Again, check if the last byte read (the checksum byte) was 0xFB
-                if (b == 0xFB) {
+                if (byteRead == 0xFB) {
                     out_data[0] = 0xFB;
                     received = 1;
                 }

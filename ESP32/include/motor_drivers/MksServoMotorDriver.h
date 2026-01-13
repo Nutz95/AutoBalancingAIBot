@@ -82,8 +82,16 @@ private:
     uint32_t last_bus_latency_us_ = 0;
 
     uint8_t calculateChecksum(const uint8_t* data, size_t length);
-    void writeFrame(const uint8_t* frame, size_t length);
-    bool readResponse(uint8_t id, uint8_t function_code, uint8_t* out_data, size_t expected_length, uint32_t timeout_us = 2000);
+    void writeFrame(HardwareSerial& serial, const uint8_t* frame, size_t length);
+    bool readResponse(HardwareSerial& serial, uint8_t id, uint8_t function_code, uint8_t* out_data, size_t expected_length, uint32_t timeout_us = 2000);
+    
+    /**
+     * @brief Maps a motor ID to its dedicated HardwareSerial port.
+     * @param id The motor ID.
+     * @return HardwareSerial& reference to Serial1 or Serial2.
+     */
+    HardwareSerial& getSerialForMotor(uint8_t id);
+    
     void dumpMotorRegisters(uint8_t id);
 };
 

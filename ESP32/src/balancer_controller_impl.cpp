@@ -693,9 +693,11 @@ static void updateEncoderVelocity(float dt_sec) {
 // (accel_sign/gyro_sign), so pitch arrives with correct sign: positive = tilted
 // forward.
 float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
-  // Update encoder velocity at PID loop rate (400Hz)
-  // This provides high-frequency velocity measurement for future use
+  // Update encoder velocity at PID loop rate if enabled
+  // By default, this is disabled to keep the RS485 bus clear for control commands
+#if BALANCER_ENABLE_ENCODER_UPDATES
   updateEncoderVelocity(dt);
+#endif
   
   // Check if autotuning is active
   if (g_autotune_active && g_autotune.isActive()) {

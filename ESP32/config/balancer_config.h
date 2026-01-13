@@ -102,6 +102,16 @@
 #define BALANCER_DEBUG_LOG_INTERVAL_MS 20
 #endif
 
+/**
+ * @brief Enable high-frequency encoder reading during balancing.
+ * If true, the controller reads motor encoders at the PID loop rate.
+ * Disabling this (default) prioritizes the RS485 bus for critical control commands
+ * and eliminates periodic communication latency spikes caused by position reads.
+ */
+#ifndef BALANCER_ENABLE_ENCODER_UPDATES
+#define BALANCER_ENABLE_ENCODER_UPDATES false
+#endif
+
 // Motor command gain scaling factors (to compensate for asymmetric motor response)
 // Initialized from motor characterization ratios if available, else 1.0
 // Use 1.0 for both if motors are matched. Adjust to balance robot behavior:
