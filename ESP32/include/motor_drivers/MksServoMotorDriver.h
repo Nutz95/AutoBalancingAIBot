@@ -4,8 +4,31 @@
 #include "AbstractMotorDriver.h"
 #include "../../config/motor_configs/mks_servo_config.h"
 #include "speed_estimator.h"
+
+#if !defined(UNIT_TEST_HOST)
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#else
+// Minimal stubs for host-native unit tests
+typedef void* SemaphoreHandle_t;
+class HardwareSerial {
+public:
+    void write(const uint8_t* buf, size_t len) {
+    }
+
+    int available() {
+        return 0;
+    }
+
+    int read() {
+        return -1;
+    }
+
+    size_t readBytes(uint8_t* buffer, size_t length) {
+        return 0;
+    }
+};
+#endif
 
 namespace abbot {
 namespace motor {
@@ -39,8 +62,14 @@ public:
     float getVelocityMaxSpeed() const override;
     float getVelocityTargetIncrementScale() const override;
     float getVelocityPositionKp() const override;
-    const char *getDriverName() const override { return "mks_servo"; }
-    uint32_t getLastBusLatencyUs() const override { return last_bus_latency_us_; }
+
+    const char *getDriverName() const override {
+        return "mks_servo";
+    }
+
+    uint32_t getLastBusLatencyUs() const override {
+        return last_bus_latency_us_;
+    }
 
     // Serial command interface
     bool processSerialCommand(const String &line) override;
@@ -66,7 +95,8 @@ private:
     MotorState m_left;
     MotorState m_right;
     bool m_enabled;
-    SemaphoreHandle_t m_busMutex;
+    SemaphoreHandle_t m_leftBusMutex;
+    SemaphoreHandle_t m_rightBusMutex;
 
     // Protocol helpers
     void sendSpeedCommand(uint8_t id, float normalized_speed, bool invert);
@@ -91,6 +121,13 @@ private:
      * @return HardwareSerial& reference to Serial1 or Serial2.
      */
     HardwareSerial& getSerialForMotor(uint8_t id);
+
+    /**
+     * @brief Gets the mutex associated with a specific motor's bus.
+     * @param id The motor ID.
+     * @return SemaphoreHandle_t for the specific motor.
+     */
+    SemaphoreHandle_t getMutexForMotor(uint8_t id);
     
     void dumpMotorRegisters(uint8_t id);
 };

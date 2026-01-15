@@ -850,7 +850,9 @@ static DCMirrorDriver g_dcMirrorDriver;
 
 // Using PCNT hardware counters; no software ISRs are used here.
 
-void installDefaultDCMirrorDriver() { setActiveMotorDriver(&g_dcMirrorDriver); }
+void installDefaultDCMirrorDriver() {
+  setActiveMotorDriver(&g_dcMirrorDriver);
+}
 
 } // namespace motor
 } // namespace abbot

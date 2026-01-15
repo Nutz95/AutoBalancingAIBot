@@ -16,7 +16,9 @@ namespace motor {
 // small and mirrors the existing top-level motor API so adapters are simple.
 class IMotorDriver {
 public:
-  virtual ~IMotorDriver() {}
+  virtual ~IMotorDriver() {
+  }
+
   // Motor side selector for per-motor queries
   enum class MotorSide { LEFT = 0, RIGHT = 1 };
   virtual void initMotorDriver() = 0;

@@ -110,6 +110,9 @@ The I2C address and pins can be customized in `config/imu_configs/BNO055Config.h
 
 ## Calibration (IMU)
 
+**Note (BMI160/SPI) :** Suite au passage à 500Hz et à l'inversion des axes (Forward = +Pitch), une recalibration est obligatoire.
+Placez le robot parfaitement vertical et immobile avant de lancer les commandes ci-dessous.
+
 This project includes a simple IMU calibration utility to capture and persist gyroscope bias and a single-position accelerometer offset. For the **BNO055**, the sensor performs internal calibration automatically, but you can still use these commands to apply additional software offsets if needed.
 
 Commands (sent as plain text lines):
@@ -416,5 +419,12 @@ Notes
 - The existing BLE HID code continues to work when the TCP console is active.
 - If you prefer not to enable Wi‑Fi, continue to use the USB serial connection
 	for logs and command input.
+
+## Tests Unitaires (Host-Native)
+Pour valider la logique de contrôle et le système de "Queue Draining" (latence zéro) directement sur votre PC sans l'ESP32 :
+1. Ouvrez un terminal MSYS2/MinGW64.
+2. Exécutez `./test/build_test.sh`.
+3. Ce script compile et lance les tests de Fusion IMU, PID, et la logique de file d'attente.
+
 
 

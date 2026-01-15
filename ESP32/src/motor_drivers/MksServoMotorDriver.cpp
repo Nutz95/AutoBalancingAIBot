@@ -10,7 +10,8 @@ MksServoMotorDriver::MksServoMotorDriver()
     : m_left{LEFT_MOTOR_ID, LEFT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(0.1f)},
       m_right{RIGHT_MOTOR_ID, RIGHT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(0.1f)},
       m_enabled(false),
-      m_busMutex(xSemaphoreCreateMutex()) {}
+      m_leftBusMutex(xSemaphoreCreateMutex()),
+      m_rightBusMutex(xSemaphoreCreateMutex()) {}
 
 void MksServoMotorDriver::initMotorDriver() {
     // Initialize both serial ports at the configured baud rate
@@ -96,8 +97,81 @@ void MksServoMotorDriver::dumpConfig() {
 }
 
 void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_command) {
-    setMotorCommand(MotorSide::LEFT, left_command);
-    setMotorCommand(MotorSide::RIGHT, right_command);
+    // If not enabled at all, just track commands and return
+    if (!m_enabled) {
+        m_left.last_command = left_command;
+        m_right.last_command = right_command;
+        return;
+    }
+
+    // Helper to prepare frame data for Speed Command (0xF6)
+    auto prepareSpeedFrame = [this](float command, MotorState& state, uint8_t* frame) {
+        float clamped = command;
+        if (clamped > 1.0f) clamped = 1.0f;
+        if (clamped < -1.0f) clamped = -1.0f;
+        
+        state.last_command = clamped;
+        state.last_command_time_us = micros();
+
+        float speedValue = clamped;
+        if (state.invert) {
+            speedValue = -speedValue;
+        }
+
+        uint8_t direction = (speedValue >= 0) ? 0 : 1;
+        float absoluteSpeed = (speedValue >= 0) ? speedValue : -speedValue;
+
+        uint32_t speedValueCalc = (uint32_t)(absoluteSpeed * (float)VELOCITY_MAX_SPEED);
+        if (speedValueCalc > 3000) {
+            speedValueCalc = 3000;
+        }
+        uint16_t speedValueUint = (uint16_t)speedValueCalc;
+
+        frame[0] = 0xFA;
+        frame[1] = state.id;
+        frame[2] = 0xF6;
+        frame[3] = (direction << 7) | ((speedValueUint >> 8) & 0x0F);
+        frame[4] = speedValueUint & 0xFF;
+        frame[5] = MKS_SERVO_ACCEL;
+        frame[6] = calculateChecksum(frame, 6);
+    };
+
+    uint8_t frameLeft[7], frameRight[7];
+    prepareSpeedFrame(left_command, m_left, frameLeft);
+    prepareSpeedFrame(right_command, m_right, frameRight);
+
+    unsigned long start_us = micros();
+
+    // Take both mutexes to ensure exclusive access to both buses
+    // We use a fixed order (Left then Right) to avoid circular wait/deadlocks.
+    if (xSemaphoreTake(m_leftBusMutex, pdMS_TO_TICKS(MKS_SERVO_BUS_MUTEX_TIMEOUT_MS)) == pdTRUE) {
+        if (xSemaphoreTake(m_rightBusMutex, pdMS_TO_TICKS(MKS_SERVO_BUS_MUTEX_TIMEOUT_MS)) == pdTRUE) {
+            
+            // 1. Dispatch Write frames to both UARTs (Non-blocking writes to buffers)
+            if (m_left.enabled) {
+                while (Serial2.available() > 0) Serial2.read(); // Clear RX
+                Serial2.write(frameLeft, 7);
+            }
+            if (m_right.enabled) {
+                while (Serial1.available() > 0) Serial1.read(); // Clear RX
+                Serial1.write(frameRight, 7);
+            }
+
+            // 2. Wait for ACKs sequentially. 
+            // While we wait for Serial2, Serial1 is already receiving data in background.
+            uint8_t ackBuffer[5];
+            if (m_left.enabled) {
+                readResponse(Serial2, m_left.id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
+            }
+            if (m_right.enabled) {
+                readResponse(Serial1, m_right.id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
+            }
+
+            last_bus_latency_us_ = (uint32_t)(micros() - start_us);
+            xSemaphoreGive(m_rightBusMutex);
+        }
+        xSemaphoreGive(m_leftBusMutex);
+    }
 }
 
 void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
@@ -119,8 +193,9 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
     if (state.enabled) {
         // Wait for bus mutex. In the critical control path, we should wait long enough 
         // to not drop frames just because of a telemetry read (up to 20ms).
-        if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(MKS_SERVO_BUS_MUTEX_TIMEOUT_MS)) == pdTRUE) {
-            xSemaphoreGive(m_busMutex); // We just checked availability, sendSpeedCommand takes it internally
+        SemaphoreHandle_t mutex = getMutexForMotor(state.id);
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(MKS_SERVO_BUS_MUTEX_TIMEOUT_MS)) == pdTRUE) {
+            xSemaphoreGive(mutex); // We just checked availability, sendSpeedCommand takes it internally
             sendSpeedCommand(state.id, command, state.invert);
             // Delay for bus recovery/motor processing
             delayMicroseconds(MKS_SERVO_BUS_QUIET_US);
@@ -157,7 +232,8 @@ int32_t MksServoMotorDriver::readEncoder(MotorSide side) {
     state.last_encoder_read_ms = now;
 
     // Telemetry should yield easily. If bus is busy (e.g. control loop), skip read.
-    if (xSemaphoreTake(m_busMutex, 0) != pdTRUE) {
+    SemaphoreHandle_t mutex = getMutexForMotor(state.id);
+    if (xSemaphoreTake(mutex, 0) != pdTRUE) {
         return state.last_encoder;
     }
 
@@ -195,7 +271,7 @@ int32_t MksServoMotorDriver::readEncoder(MotorSide side) {
         state.speedEstimator.update(state.last_encoder, micros());
     }
 
-    xSemaphoreGive(m_busMutex);
+    xSemaphoreGive(mutex);
     return state.last_encoder;
 }
 
@@ -217,15 +293,24 @@ void MksServoMotorDriver::resetPositionTracking() {
 }
 
 uint64_t MksServoMotorDriver::getLastCommandTimeUs(MotorSide side) const {
-    return (side == MotorSide::LEFT) ? m_left.last_command_time_us : m_right.last_command_time_us;
+    if (side == MotorSide::LEFT) {
+        return m_left.last_command_time_us;
+    }
+    return m_right.last_command_time_us;
 }
 
 int MksServoMotorDriver::getMotorId(MotorSide side) const {
-    return (side == MotorSide::LEFT) ? m_left.id : m_right.id;
+    if (side == MotorSide::LEFT) {
+        return m_left.id;
+    }
+    return m_right.id;
 }
 
 bool MksServoMotorDriver::isMotorInverted(MotorSide side) const {
-    return (side == MotorSide::LEFT) ? m_left.invert : m_right.invert;
+    if (side == MotorSide::LEFT) {
+        return m_left.invert;
+    }
+    return m_right.invert;
 }
 
 float MksServoMotorDriver::getVelocityMaxSpeed() const {
@@ -257,7 +342,8 @@ void MksServoMotorDriver::scanBus() {
         LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "Scanning %s...\n", port_names[portIndex]);
         
         for (uint8_t id = 1; id <= 15; ++id) {
-            if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(50)) != pdTRUE) {
+            SemaphoreHandle_t mutex = getMutexForMotor(id);
+            if (xSemaphoreTake(mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
                 continue;
             }
 
@@ -278,7 +364,7 @@ void MksServoMotorDriver::scanBus() {
             // Response is 10 bytes for 0x31
             uint8_t responseBuffer[10];
             bool success = readResponse(serial, id, 0x31, responseBuffer, 10, MKS_SERVO_TIMEOUT_HEAVY_US);
-            xSemaphoreGive(m_busMutex);
+            xSemaphoreGive(mutex);
 
             if (success) {
                 LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: Found motor at ID 0x%02X on %s", id, port_names[portIndex]);
@@ -353,7 +439,8 @@ void MksServoMotorDriver::dumpMotorRegisters(uint8_t id) {
     };
 
     for (const auto& reg : registerDefinitions) {
-        if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+        SemaphoreHandle_t mutex = getMutexForMotor(id);
+        if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
             continue;
         }
 
@@ -373,7 +460,7 @@ void MksServoMotorDriver::dumpMotorRegisters(uint8_t id) {
         
         uint8_t responseBuffer[16];
         bool success = readResponse(serial, id, reg.code, responseBuffer, reg.length, MKS_SERVO_TIMEOUT_HEAVY_US);
-        xSemaphoreGive(m_busMutex);
+        xSemaphoreGive(mutex);
 
         if (success) {
             if (reg.code == 0x31 || reg.code == 0x33 || reg.code == 0x35) {
@@ -433,7 +520,8 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
     uint32_t now_ms = millis();
     unsigned long start_us = micros();
 
-    if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    SemaphoreHandle_t mutex = getMutexForMotor(id);
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         return;
     }
 
@@ -508,7 +596,7 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
         }
     }
 
-    xSemaphoreGive(m_busMutex);
+    xSemaphoreGive(mutex);
 }
 
 void MksServoMotorDriver::setMode(uint8_t id, MksServoMode mode) {
@@ -546,7 +634,8 @@ void MksServoMotorDriver::setEnable(uint8_t id, bool enable) {
 }
 
 void MksServoMotorDriver::sendFunctionCommand(uint8_t id, uint8_t function_code, const uint8_t* data, size_t length) {
-    if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    SemaphoreHandle_t mutex = getMutexForMotor(id);
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         return;
     }
 
@@ -581,7 +670,7 @@ void MksServoMotorDriver::sendFunctionCommand(uint8_t id, uint8_t function_code,
         LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: WARN: No ACK for FUNC 0x%02X to ID 0x%02X\n", function_code, id);
     }
 
-    xSemaphoreGive(m_busMutex);
+    xSemaphoreGive(mutex);
 }
 
 uint8_t MksServoMotorDriver::calculateChecksum(const uint8_t* data, size_t length) {
@@ -603,12 +692,20 @@ HardwareSerial& MksServoMotorDriver::getSerialForMotor(uint8_t id) {
     return Serial1;
 }
 
+SemaphoreHandle_t MksServoMotorDriver::getMutexForMotor(uint8_t id) {
+    if (id == LEFT_MOTOR_ID) {
+        return m_leftBusMutex;
+    }
+    return m_rightBusMutex;
+}
+
 void MksServoMotorDriver::writeFrame(HardwareSerial& serial, const uint8_t* frame, size_t length) {
     serial.write(frame, length);
 }
 
 bool MksServoMotorDriver::verifyConfig(uint8_t id, uint8_t function_code, uint8_t expected_value, const char* label) {
-    if (xSemaphoreTake(m_busMutex, pdMS_TO_TICKS(100)) != pdTRUE) {
+    SemaphoreHandle_t mutex = getMutexForMotor(id);
+    if (xSemaphoreTake(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         return false;
     }
 
@@ -630,7 +727,7 @@ bool MksServoMotorDriver::verifyConfig(uint8_t id, uint8_t function_code, uint8_
     size_t expected_len = (function_code == 0x31 || function_code == 0x34 || function_code == 0x35) ? 10 : 5;
 
     bool success = readResponse(serial, id, function_code, responseBuffer, expected_len, MKS_SERVO_TIMEOUT_HEAVY_US);
-    xSemaphoreGive(m_busMutex);
+    xSemaphoreGive(mutex);
 
     if (success) {
         if (responseBuffer[3] == expected_value) {

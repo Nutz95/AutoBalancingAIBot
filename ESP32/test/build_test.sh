@@ -77,6 +77,20 @@ echo "Running ReadSpeed Estimator Test..."
 build/readspeed_tests.exe
 echo ""
 
+# 5. Queue Logic Test
+echo "----------------------------------------------------------------------"
+echo "5. Queue Logic Test"
+echo "----------------------------------------------------------------------"
+g++ -std=c++17 -O2 -I include \
+    test/queue_logic_tests.cpp \
+    -o build/queue_logic_tests.exe
+
+echo "✅ Compilation succeeded"
+echo ""
+echo "Running Queue Logic Test..."
+build/queue_logic_tests.exe
+echo ""
+
 echo "======================================================================"
 echo "✅ All tests completed successfully!"
 echo "======================================================================"

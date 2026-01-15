@@ -8,9 +8,8 @@ struct FusionConfig {
     // Madgwick gain: how much to trust accelerometer vs gyroscope
     // Lower value (0.01-0.05) = trust gyro more, smoother but may drift slowly
     // Higher value (0.1-0.3) = trust accel more, corrects drift but noisier
-    // For balancing robot with motor vibrations, use 0.033 (standard Madgwick)
-    float beta = 0.021909f;
-    float sample_rate = 100.0f; // Hz (Aligned with BNO055 100Hz fusion rate)
+    float beta = 0.05f; 
+    float sample_rate = 500.0f; // Hz (Matches BMI160 sampling rate)
     // Axis mapping: allow remapping/inversion of sensor axes into the robot
     // coordinate frame used by the fusion/filter. This makes it easy to
     // accommodate different sensor mountings without changing fusion code.

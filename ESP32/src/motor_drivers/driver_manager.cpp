@@ -3,10 +3,10 @@
 #include "../config/motor_configs/motor_common_config.h"
 #include "../include/motor_drivers/IMotorDriver.h"
 #include "logging.h"
-#if MOTOR_USE_DC_DRIVER
+#if MOTOR_USE_DC_DRIVER && !defined(UNIT_TEST_HOST)
 #include "../include/motor_drivers/dc_mirror_driver.h"
 #endif
-#if MOTOR_USE_MKS_SERVO
+#if MOTOR_USE_MKS_SERVO && !defined(UNIT_TEST_HOST)
 #include "../include/motor_drivers/MksServoMotorDriver.h"
 #endif
 #include <cstdlib>
@@ -55,9 +55,11 @@ IMotorDriver *getActiveMotorDriver() {
 // installDefaultServoAdapter is implemented in servo_adapter.cpp
 void installDefaultServoAdapter();
 
-#if MOTOR_USE_MKS_SERVO
+#if MOTOR_USE_MKS_SERVO && !defined(UNIT_TEST_HOST)
 static MksServoMotorDriver g_mksServoDriver;
-void installDefaultMksServoDriver() { setActiveMotorDriver(&g_mksServoDriver); }
+void installDefaultMksServoDriver() {
+  setActiveMotorDriver(&g_mksServoDriver);
+}
 #endif
 
 // No free-function forwards implemented here. Callers should query
@@ -112,11 +114,11 @@ const char *getActiveDriverName(const char *fallback) {
 
 // Install the default motor driver according to compile-time config.
 void installDefaultMotorDriver() {
-#if MOTOR_USE_MKS_SERVO
+#if MOTOR_USE_MKS_SERVO && !defined(UNIT_TEST_HOST)
   installDefaultMksServoDriver();
-#elif MOTOR_USE_DC_DRIVER
+#elif MOTOR_USE_DC_DRIVER && !defined(UNIT_TEST_HOST)
   installDefaultDCMirrorDriver();
-#else
+#elif !defined(UNIT_TEST_HOST)
   installDefaultServoAdapter();
 #endif
 }

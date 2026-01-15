@@ -137,6 +137,12 @@ void mapSensorToRobotFrame(const fusion::FusionConfig &cfg,
 void getLastMotorCommands(float &left_cmd, float &right_cmd);
 
 /**
+ * Receive the latest available sample from the queue, discarding any older stale samples.
+ * Returns true if a sample was retrieved, false otherwise.
+ */
+bool receiveLatestSample(QueueHandle_t queue, IMUSample &sample, uint32_t wait_ticks);
+
+/**
  * Emit raw IMU debug logs (throttled) when `ENABLE_DEBUG_LOGS` is defined.
  * This helper centralizes the throttling behavior used by `imuConsumerTask`.
  * @param sample IMU sample to log

@@ -404,6 +404,25 @@ void getLastMotorCommands(float &left_cmd, float &right_cmd) {
   }
 }
 
+bool receiveLatestSample(QueueHandle_t queue, IMUSample &sample, uint32_t wait_ticks) {
+  if (!queue) {
+    return false;
+  }
+
+  // Wait for at least one sample
+  if (xQueueReceive(queue, &sample, wait_ticks) != pdTRUE) {
+    return false;
+  }
+
+  // Drain the rest of the queue to get the freshest sample
+  IMUSample next_sample;
+  while (xQueueReceive(queue, &next_sample, 0) == pdTRUE) {
+    sample = next_sample;
+  }
+
+  return true;
+}
+
 void emitImuDebugLogsIfEnabled(const IMUSample &sample, uint32_t &last_print_ms,
                                uint32_t interval_ms) {
 #if defined(ENABLE_DEBUG_LOGS)

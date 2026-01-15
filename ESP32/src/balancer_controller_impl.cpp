@@ -269,13 +269,15 @@ void start(float fused_pitch_rad) {
   g_drive_v_filtered = 0.0f;
   g_drive_last_pitch_setpoint_deg = 0.0f;
   g_last_cmd_sign = 0;
-  char buf[128];
+  char buf[160];
   {
     bool men = false;
     if (auto driver = abbot::motor::getActiveMotorDriver()) {
       men = driver->areMotorsEnabled();
     }
-    snprintf(buf, sizeof(buf), "BALANCER: started (defaults used) - motors %s",
+    const char* filter_name = abbot::filter::getCurrentFilterName();
+    snprintf(buf, sizeof(buf), "BALANCER: started [Filter: %s] (Kp=%.4f Ki=%.4f Kd=%.4f) - motors %s",
+             filter_name, g_pid.getKp(), g_pid.getKi(), g_pid.getKd(),
              men ? "ENABLED" : "NOT ENABLED");
   }
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
@@ -832,7 +834,10 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
 
   // Convert pitch from radians to degrees for PID (more intuitive gains)
   float pitch_for_control_deg = radToDeg(fused_pitch - g_pitch_trim_rad);
-  float pitch_rate_deg_s = radToDeg(fused_pitch_rate);
+  
+  // Use raw gyro for the D term to eliminate filter lag. 
+  // Based on logs, pitch decreases when gyro Y is positive, so rate = -gyro_y.
+  float pitch_rate_deg_s = -radToDeg(g_last_gyro[1]);
   
   // Compute PID output taking into account the drive-setpoint->pitch mapping
   float pid_out =
@@ -902,10 +907,12 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
     float gz_dps = radToDeg(g_last_gyro[2]);
     LOG_PRINTF(
       abbot::log::CHANNEL_BALANCER,
-      "BALANCER_DBG t=%lums pitch=%.2fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.4f cmd=%.3f lat=%luus\n",
+      "BALANCER_DBG t=%lums pitch=%.2fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.4f cmd=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.1f gy=%.1f gz=%.1f\n",
       (unsigned long)now_cmd_dbg_ms, (double)radToDeg(fused_pitch),
       (double)pid_in_deg, (double)pid_out, (double)(g_pid.getKi() * g_pid.getIntegrator()), (double)cmd,
-      (unsigned long)bus_latency_us);
+      (unsigned long)bus_latency_us,
+      (double)g_last_accel[0], (double)g_last_accel[1], (double)g_last_accel[2],
+      (double)gx_dps, (double)gy_dps, (double)gz_dps);
     last_cmd_dbg_ms = now_cmd_dbg_ms;
   }
   // deadband: if command is small but non-zero, push to the edge instead of

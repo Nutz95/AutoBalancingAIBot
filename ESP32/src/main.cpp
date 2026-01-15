@@ -2,9 +2,11 @@
 // Include IMU drivers and configs
 #include "../config/imu_configs/BMI088Config.h"
 #include "../config/imu_configs/BNO055Config.h"
+#include "../config/imu_configs/BMI160Config.h"
 #include "../config/motor_configs/motor_common_config.h"
 #include "imu_drivers/BMI088Driver.h"
 #include "imu_drivers/BNO055Driver.h"
+#include "imu_drivers/BMI160Driver.h"
 #include "imu_drivers/imu_manager.h"
 #include "SystemTasks.h"
 #include "btle_hid.h"
@@ -13,14 +15,17 @@
 #include "motor_drivers/driver_manager.h"
 #include "serial_commands.h"
 
-// Select IMU driver at compile time (0 = BMI088, 1 = BNO055)
-#ifndef IMU_USE_BNO055
-#define IMU_USE_BNO055 1
+// Select IMU driver at compile time (0 = BMI088, 1 = BNO055, 2 = BMI160)
+#ifndef IMU_SELECTION
+#define IMU_SELECTION 2
 #endif
 
-#if IMU_USE_BNO055
+#if IMU_SELECTION == 1
 static abbot::BNO055Config imu_cfg;
 static abbot::BNO055Driver imu_driver(imu_cfg);
+#elif IMU_SELECTION == 2
+static abbot::BMI160Config imu_cfg;
+static abbot::BMI160Driver imu_driver(imu_cfg);
 #else
 static abbot::BMI088Config imu_cfg;
 static abbot::BMI088Driver imu_driver(imu_cfg);
@@ -51,51 +56,21 @@ void setup() {
   // initialize IMU driver
   bool ok = imu_driver.begin();
   if (!ok) {
-    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "%s init failed\n", imu_driver.getDriverName());
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "%s init failed! Check wiring/address.\n", imu_driver.getDriverName());
   } else {
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "%s initialized\n", imu_driver.getDriverName());
     abbot::imu::setActiveIMUDriver(&imu_driver);
+
+    // Only start producer/consumer if IMU is healthy
+    if (abbot::startIMUTasks(&imu_driver)) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "IMU tasks started");
+    } else {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Failed to start IMU tasks");
+    }
   }
 
-  // start IMU producer/consumer tasks for demo
   // Install default motor driver selected via manager/config and initialize
   abbot::motor::installDefaultMotorDriver();
-  if (auto drv = abbot::motor::getActiveMotorDriver()) {
-    drv->initMotorDriver();
-    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: active=%s",
-               abbot::motor::getActiveDriverName("none"));
-  }
-  // Log motor driver status and attempt to read encoder/status for both motors
-  {
-    bool enabled = false;
-    if (auto drv = abbot::motor::getActiveMotorDriver()) {
-      enabled = drv->areMotorsEnabled();
-    }
-    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "motor_driver: enabled=%s\n",
-               enabled ? "YES" : "NO");
-  }
-#if MOTOR_DRIVER_REAL
-  {
-    if (auto drv = abbot::motor::getActiveMotorDriver()) {
-      int32_t left_pos =
-          drv->readEncoder(abbot::motor::IMotorDriver::MotorSide::LEFT);
-      int32_t right_pos =
-          drv->readEncoder(abbot::motor::IMotorDriver::MotorSide::RIGHT);
-      LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
-                 "motor_driver: encoder LEFT_ID=%d pos=%ld\n", LEFT_MOTOR_ID,
-                 left_pos);
-      LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
-                 "motor_driver: encoder RIGHT_ID=%d pos=%ld\n", RIGHT_MOTOR_ID,
-                 right_pos);
-    }
-  }
-#endif
-
-  if (abbot::startIMUTasks(&imu_driver)) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "IMU tasks started");
-  } else {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Failed to start IMU tasks");
-  }
   // Diagnostic heartbeat to verify serial output during boot
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
               "BOOT DEBUG: setup complete, entering main loop");

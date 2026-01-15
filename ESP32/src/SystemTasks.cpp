@@ -45,7 +45,7 @@ static QueueHandle_t calibQueue = nullptr;
 static fusion::FusionConfig g_fusion_cfg;
 // Store sample rate (Hz) in one place so dt fallback uses the configured value
 // Sample rate (Hz) used by the selected filter
-static float g_filter_sample_rate_hz = 200.0f;
+static float g_filter_sample_rate_hz = 500.0f;
 // Fused outputs (units: radians, radians/sec)
 static float g_fused_pitch_rad = 0.0f;
 static float g_fused_pitch_rate_rads = 0.0f;
@@ -124,30 +124,34 @@ static void imuProducerTask(void *pvParameters) {
   static uint32_t last_drop_log = 0;
   static uint32_t consecutive_errors = 0;
 
+  const TickType_t xFrequency = pdMS_TO_TICKS(1); // Check every tick
+  TickType_t xLastWakeTime = xTaskGetTickCount();
+
   for (;;) {
-    // Attempt to read; driver->read will enforce sampling interval
+    // Attempt to read; driver->read will enforce sampling interval (µs precision)
     if (driver->read(sample)) {
       consecutive_errors = 0;
-      // Push to queue (non-blocking). If full, we drop the sample (better than blocking).
-      // With size 10, this handles jitter.
+      // Push to queue (non-blocking).
       if (imuQueue) {
         if (xQueueSend(imuQueue, &sample, 0) != pdTRUE) {
           drop_count++;
         }
       }
-      // If a calibration queue is attached, push sample there as well
-      // (non-blocking)
       if (calibQueue) {
         xQueueOverwrite(calibQueue, &sample);
       }
     } else {
-      // Small delay to prevent tight loop if read returns immediately (e.g. interval check)
-      vTaskDelay(1);
+      // If we didn't read (interval not met), don't block for a full tick yet.
+      // We will loop back and check micros() again.
+      // To prevent CPU hogging if micros() check is too fast, we yield after many failures.
+      static uint32_t fail_streak = 0;
+      if (++fail_streak > 100) {
+        vTaskDelay(0); // Yield to other tasks without sleeping
+        fail_streak = 0;
+      }
     }
 
-    // Auto-recovery: If we have many consecutive failures or haven't seen a
-    // valid sample in a while, try to reinit the driver from WITHIN the
-    // producer task (safest for I2C locks).
+    // Auto-recovery
     static uint32_t last_success_ms = 0;
     uint32_t now = millis();
     if (consecutive_errors == 0) {
@@ -157,8 +161,12 @@ static void imuProducerTask(void *pvParameters) {
     if (now - last_success_ms > 1000) {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "IMU_PRODUCER: Data timeout, attempting reinit...");
       driver->begin();
-      last_success_ms = now; // Reset timer to give it time to reinit
+      last_success_ms = now;
     }
+
+    // Use vTaskDelayUntil to maintain a loose 1kHz check rhythm if we are ahead,
+    // but the loop is mostly controlled by the driver's micros() check.
+    vTaskDelayUntil(&xLastWakeTime, xFrequency);
 
     // Log drops periodically
     if (drop_count > 0 && (now - last_drop_log > 5000)) {
@@ -204,8 +212,8 @@ static void imuConsumerTask(void *pvParameters) {
   abbot::imu_consumer::ImuFrequencyMeasurement freq_measurement;
   
   for (;;) {
-    // Wait for a sample with a timeout of 1s (proactive hang detection)
-    if (!imuQueue || xQueueReceive(imuQueue, &sample, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    // LATENCY FIX: Drain the queue to get the freshest sample using helper.
+    if (!abbot::imu_consumer::receiveLatestSample(imuQueue, sample, pdMS_TO_TICKS(1000))) {
       uint32_t now = millis();
       if (g_last_sample_ms > 0 && (now - g_last_sample_ms >= 1000)) {
         LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
@@ -216,7 +224,7 @@ static void imuConsumerTask(void *pvParameters) {
       continue;
     }
     
-    // Measure and log actual IMU frequency
+    // Measure and log actual IMU frequency (of the samples we actually process)
     abbot::imu_consumer::measureAndLogImuFrequency(freq_measurement,
                                                    g_filter_sample_rate_hz);
     

@@ -13,6 +13,9 @@ namespace motor {
 // virtual hardware methods declared in IMotorDriver.
 class AbstractMotorDriver : public IMotorDriver {
 public:
+  virtual ~AbstractMotorDriver() {
+  }
+
   // Public API: parse a serial command string. Implementation moved to
   // `src/motor_drivers/abstract_motor_driver.cpp` to avoid heavy header
   // dependencies and improve compile-time isolation.
