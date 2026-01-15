@@ -83,7 +83,9 @@ def main():
 
     rows = {'drive': defaultdict(dict), 'bal': defaultdict(dict), 'setdrive': defaultdict(dict), 'imu': dict()}
     gain_info = "Unknown Gains"
+    gains = {'kp': 0.0, 'ki': 0.0, 'kd': 0.0}
     filter_info = "Unknown Filter"
+    trim_info = {"val": 0.0, "type": "dynamic", "detected": False}
     
     if args.from_log:
         print(f"Parsing log file: {args.from_log}")
@@ -93,9 +95,21 @@ def main():
                 m_gain = GAIN_RE.search(line)
                 if m_gain:
                     gain_info = f"Kp={m_gain.group('kp')} Ki={m_gain.group('ki')} Kd={m_gain.group('kd')}"
+                    gains = {k: float(m_gain.group(k)) for k in ['kp', 'ki', 'kd']}
                 m_filter = FILTER_RE.search(line)
                 if m_filter:
-                    filter_info = m_filter.group('filter')
+                    filter_info = m_filter.group('filter') or m_filter.group('filter2')
+                
+                # Detect trim info
+                if "using calibrated trim =" in line:
+                    m = re.search(r"using calibrated trim = ([-0-9.]+) deg", line)
+                    if m:
+                        trim_info = {"val": float(m.group(1)), "type": "calibrated", "detected": True}
+                elif "dynamic trim captured =" in line:
+                    m = re.search(r"dynamic trim captured = ([-0-9.]+) deg", line)
+                    if m:
+                        trim_info = {"val": float(m.group(1)), "type": "dynamic", "detected": True}
+
                 parse_line(line, rows)
     else:
         if not args.host:
@@ -139,12 +153,25 @@ def main():
                         m_gain = GAIN_RE.search(line)
                         if m_gain:
                             gain_info = f"Kp={m_gain.group('kp')} Ki={m_gain.group('ki')} Kd={m_gain.group('kd')}"
+                            gains = {k: float(m_gain.group(k)) for k in ['kp', 'ki', 'kd']}
                             print(f">>> Detected Gains: {gain_info}")
 
                         m_filter = FILTER_RE.search(line)
                         if m_filter:
                             filter_info = m_filter.group('filter') or m_filter.group('filter2')
                             print(f">>> Detected Filter: {filter_info}")
+
+                        # Detect trim info
+                        if "using calibrated trim =" in line:
+                            m = re.search(r"using calibrated trim = ([-0-9.]+) deg", line)
+                            if m:
+                                trim_info = {"val": float(m.group(1)), "type": "calibrated", "detected": True}
+                                print(f">>> {trim_info['type'].upper()} TRIM detected: {trim_info['val']} deg")
+                        elif "dynamic trim captured =" in line:
+                            m = re.search(r"dynamic trim captured = ([-0-9.]+) deg", line)
+                            if m:
+                                trim_info = {"val": float(m.group(1)), "type": "dynamic", "detected": True}
+                                print(f">>> {trim_info['type'].upper()} TRIM detected: {trim_info['val']} deg")
 
                         if not started:
                             if "BALANCER: started" in line or "BALANCER_DBG" in line:
@@ -201,6 +228,12 @@ def main():
         if args.ffill:
             df = df.fillna(method='ffill', limit=10)
 
+        # Calculate PID components if gains are known
+        if 'pid_in' in df.columns and 'iterm' in df.columns and 'pid_out' in df.columns:
+            df['p_term'] = df['pid_in'] * gains['kp']
+            # D term is the remainder of the PID output
+            df['d_term'] = df['pid_out'] - df['p_term'] - df['iterm']
+
         t_axis = (df['time_ms'] - df['time_ms'].iloc[0]) / 1000.0
         
         # Calculate Gyro Pitch (simple integration for lag comparison)
@@ -226,51 +259,58 @@ def main():
                     gyro_pitch.append(val)
             df['gyro_pitch_est'] = gyro_pitch
 
-        plt.figure(figsize=(12, 12))
+        plt.figure(figsize=(12, 14))
         
         # Subplot 1: Pitch
-        ax1 = plt.subplot(3, 1, 1)
+        ax1 = plt.subplot(4, 1, 1)
         ax1.plot(t_axis, df['pitch_setpoint'], 'r--', label='Setpoint', alpha=0.7)
         ax1.plot(t_axis, df['pitch'], 'b-', label='Filtered Pitch (deg)', linewidth=2)
         if 'gyro_pitch_est' in df.columns:
             ax1.plot(t_axis, df['gyro_pitch_est'], 'c--', label='Gyro Integration (No-Lag Ref)', alpha=0.6)
         
-        # Draw a horizontal line for the trim if it was detected in the logs
-        m_trim = re.search(r"using calibrated trim = ([-0-9.]+) deg", "".join(open(args.out).readlines()) if not args.from_log else "")
-        if m_trim:
-             trim_val = float(m_trim.group(1))
-             ax1.axhline(y=trim_val, color='gray', linestyle=':', label=f'Trim ({trim_val} deg)', alpha=0.5)
+        # Display trim info
+        if trim_info['detected']:
+             color = 'gray' if trim_info['type'] == 'calibrated' else 'red'
+             label = f"Trim ({trim_info['val']} deg - {trim_info['type']})"
+             ax1.axhline(y=trim_info['val'], color=color, linestyle=':', label=label, alpha=0.8)
 
         ax1.set_ylabel('Degrees')
-        ax1.legend()
+        ax1.legend(loc='upper right')
         ax1.grid(True)
         ax1.set_title(f'Balancer Pitch stability ({filter_info} | {gain_info})')
 
-        # Subplot 2: PID Output / Command
-        ax2 = plt.subplot(3, 1, 2, sharex=ax1)
-        if 'pid_out' in df.columns:
-            ax2.plot(t_axis, df['pid_out'], 'g-', label='PID Out (Balancer)')
+        # Subplot 2: PID Components (Decomposition)
+        ax2 = plt.subplot(4, 1, 2, sharex=ax1)
+        if 'p_term' in df.columns:
+            ax2.plot(t_axis, df['p_term'], label='P contribution (Kp*err)', alpha=0.8)
         if 'iterm' in df.columns:
-            ax2.plot(t_axis, df['iterm'], 'm:', label='I-Term', alpha=0.5)
-        if 'pid_out_drive' in df.columns:
-            ax2.plot(t_axis, df['pid_out_drive'], 'r.', label='PID Out (Drive)', alpha=0.5)
-        if 'cmd' in df.columns:
-            ax2.plot(t_axis, df['cmd'], 'b--', label='Final Cmd', alpha=0.6)
-        if 'tgtV' in df.columns:
-            ax2.plot(t_axis, df['tgtV'], 'orange', label='Target Velocity', alpha=0.3)
-        ax2.set_ylabel('Command')
-        ax2.legend()
+            ax2.plot(t_axis, df['iterm'], label='I contribution (Ki*sum)', alpha=0.8)
+        if 'd_term' in df.columns:
+            ax2.plot(t_axis, df['d_term'], label='D contribution (Kd*rate)', alpha=0.8)
+        ax2.set_ylabel('PID Terms')
+        ax2.set_title('PID Decomposition (Influence of each gain)')
+        ax2.legend(loc='upper right')
         ax2.grid(True)
 
-        # Subplot 3: IMU (Accel/Gyro)
-        ax3 = plt.subplot(3, 1, 3, sharex=ax1)
-        ax3.plot(t_axis, df['gx'], label='Gyro X', alpha=0.5)
-        ax3.plot(t_axis, df['gy'], label='Gyro Y', alpha=0.5)
-        ax3.plot(t_axis, df['ax'], label='Accel X', alpha=0.5)
-        ax3.set_ylabel('IMU Raw')
-        ax3.set_xlabel('Time (s)')
-        ax3.legend()
+        # Subplot 3: Total PID and Motor Command
+        ax3 = plt.subplot(4, 1, 3, sharex=ax1)
+        if 'pid_out' in df.columns:
+            ax3.plot(t_axis, df['pid_out'], 'g-', label='Total PID Out', linewidth=1.5)
+        if 'cmd' in df.columns:
+            ax3.plot(t_axis, df['cmd'], 'k--', label='Final Motor Cmd (after Deadband/Slew)', alpha=0.8)
+        ax3.set_ylabel('Command')
+        ax3.legend(loc='upper right')
         ax3.grid(True)
+
+        # Subplot 4: IMU (Accel/Gyro)
+        ax4 = plt.subplot(4, 1, 4, sharex=ax1)
+        ax4.plot(t_axis, df['gx'], label='Gyro X', alpha=0.5)
+        ax4.plot(t_axis, df['gy'], label='Gyro Y', alpha=0.5)
+        ax4.plot(t_axis, df['ax'], label='Accel X', alpha=0.5)
+        ax4.set_ylabel('IMU Raw')
+        ax4.set_xlabel('Time (s)')
+        ax4.legend(loc='upper right')
+        ax4.grid(True)
 
         plt.tight_layout()
         plt.savefig(args.png)

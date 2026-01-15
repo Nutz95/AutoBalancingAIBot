@@ -56,5 +56,13 @@ const char *getActiveDriverName(const char *fallback) {
   return fallback;
 }
 
+int8_t getActivePitchRateSign() {
+  IIMUDriver *drv = getActiveIMUDriver();
+  if (drv) {
+    return drv->getPitchRateSign();
+  }
+  return 1;
+}
+
 } // namespace imu
 } // namespace abbot

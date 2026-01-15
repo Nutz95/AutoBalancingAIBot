@@ -35,6 +35,11 @@ struct BMI160Config {
   int8_t gyro_sign_y = -1;
   int8_t gyro_sign_z = 1;
 
+  // Balancing logic orientation: 1 or -1
+  // Defines if positive pitch rate (falling forward) matches positive gyro Y.
+  // Set to 1 if Pitch increases when falling forward and Gyro Y is positive.
+  int8_t pitch_rate_sign = 1;
+
   unsigned long sampling_interval_us() const {
     return (sampling_hz > 0) ? (1000000u / sampling_hz) : 0u;
   }

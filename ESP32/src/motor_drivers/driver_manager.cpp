@@ -114,13 +114,22 @@ const char *getActiveDriverName(const char *fallback) {
 
 // Install the default motor driver according to compile-time config.
 void installDefaultMotorDriver() {
+  IMotorDriver *drv = nullptr;
 #if MOTOR_USE_MKS_SERVO && !defined(UNIT_TEST_HOST)
   installDefaultMksServoDriver();
+  drv = getActiveMotorDriver();
 #elif MOTOR_USE_DC_DRIVER && !defined(UNIT_TEST_HOST)
   installDefaultDCMirrorDriver();
+  drv = getActiveMotorDriver();
 #elif !defined(UNIT_TEST_HOST)
   installDefaultServoAdapter();
+  drv = getActiveMotorDriver();
 #endif
+
+  if (drv) {
+    LOG_PRINTF(::abbot::log::CHANNEL_MOTOR, "driver_manager: initializing %s driver...\n", drv->getDriverName());
+    drv->initMotorDriver();
+  }
 }
 
 // Helper: map numeric id -> MotorSide using active driver's getMotorId

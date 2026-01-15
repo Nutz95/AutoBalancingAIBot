@@ -32,17 +32,19 @@ void MksServoMotorDriver::initMotorDriver() {
     // Initial configuration for both motors
     uint8_t ids[] = {(uint8_t)m_left.id, (uint8_t)m_right.id};
     for (uint8_t id : ids) {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "mks_servo: configuring motor ID 0x%02X...\n", id);
+        
         setMode(id, MKS_SERVO_DEFAULT_MODE);
-        delay(10);
+        delay(20);
         setMStep(id, MKS_SERVO_DEFAULT_MSTEP);
-        delay(10);
+        delay(20);
         setCurrent(id, MKS_SERVO_MA);
-        delay(10);
+        delay(20);
         setHoldCurrent(id, MKS_SERVO_HOLD_PCT);
-        delay(10);
+        delay(20);
 
         LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
-                   "mks_servo: motor ID 0x%02X configuration complete\n", id);
+                   "mks_servo: motor ID 0x%02X configuration commands sent\n", id);
     }
 
     // Ensure motors are initially disabled and stopped for safety
@@ -160,14 +162,29 @@ void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_co
             // 2. Wait for ACKs sequentially. 
             // While we wait for Serial2, Serial1 is already receiving data in background.
             uint8_t ackBuffer[5];
+            bool leftOk = true;
+            bool rightOk = true;
+
             if (m_left.enabled) {
-                readResponse(Serial2, m_left.id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
+                leftOk = readResponse(Serial2, m_left.id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
             }
             if (m_right.enabled) {
-                readResponse(Serial1, m_right.id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
+                rightOk = readResponse(Serial1, m_right.id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
             }
 
             last_bus_latency_us_ = (uint32_t)(micros() - start_us);
+
+            // Log warnings if ACKs are missing (throttled to 1s)
+            uint32_t now = millis();
+            if (!leftOk && (now - m_left.last_ack_log_ms > 1000)) {
+                LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: WARN: No ACK (Left ID:0x%02X) in parallel loop (lat:%lu us)\n", m_left.id, last_bus_latency_us_);
+                m_left.last_ack_log_ms = now;
+            }
+            if (!rightOk && (now - m_right.last_ack_log_ms > 1000)) {
+                LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: WARN: No ACK (Right ID:0x%02X) in parallel loop (lat:%lu us)\n", m_right.id, last_bus_latency_us_);
+                m_right.last_ack_log_ms = now;
+            }
+
             xSemaphoreGive(m_rightBusMutex);
         }
         xSemaphoreGive(m_leftBusMutex);

@@ -34,6 +34,10 @@ public:
 
   const char* getDriverName() const override;
 
+  int8_t getPitchRateSign() const override {
+    return cfg_.pitch_rate_sign;
+  }
+
 private:
   BMI088Config cfg_;
   Bmi088 imu_ =

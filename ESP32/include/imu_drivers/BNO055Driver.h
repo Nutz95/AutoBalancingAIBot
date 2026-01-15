@@ -30,6 +30,10 @@ public:
 
   const char* getDriverName() const override;
 
+  int8_t getPitchRateSign() const override {
+    return cfg_.pitch_rate_sign;
+  }
+
   bool isCalibrated() const override;
 
 private:

@@ -6,6 +6,7 @@
 
 #include "autotune_controller.h"
 #include "logging.h"
+#include "imu_drivers/imu_manager.h"
 #include "motor_drivers/driver_manager.h"
 #include "pid_controller.h"
 #include "units.h"
@@ -836,8 +837,8 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   float pitch_for_control_deg = radToDeg(fused_pitch - g_pitch_trim_rad);
   
   // Use raw gyro for the D term to eliminate filter lag. 
-  // Based on logs, pitch decreases when gyro Y is positive, so rate = -gyro_y.
-  float pitch_rate_deg_s = -radToDeg(g_last_gyro[1]);
+  // The sign is now managed by the active IMU driver configuration.
+  float pitch_rate_deg_s = (float)abbot::imu::getActivePitchRateSign() * radToDeg(g_last_gyro[1]);
   
   // Compute PID output taking into account the drive-setpoint->pitch mapping
   float pid_out =

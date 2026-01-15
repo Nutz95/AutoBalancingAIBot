@@ -25,5 +25,11 @@ IIMUDriver *getActiveIMUDriver();
  */
 const char *getActiveDriverName(const char *fallback = "none");
 
+/**
+ * @brief Helper to get the pitch rate sign of the active driver.
+ * @return 1, -1, or 1 as fallback.
+ */
+int8_t getActivePitchRateSign();
+
 } // namespace imu
 } // namespace abbot

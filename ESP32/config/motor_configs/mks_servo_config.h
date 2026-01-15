@@ -60,21 +60,23 @@ enum class MksServoHoldCurrent : uint8_t {
 // =============================================================================
 
 // Motor 1 (Left) - Serial Port 2
+// Moved to GPIO 39/40 to avoid EMI from SPI bus (pins 4-7)
 #ifndef MKS_SERVO_P1_TX_PIN
-#define MKS_SERVO_P1_TX_PIN 15
+#define MKS_SERVO_P1_TX_PIN 39
 #endif
 
 #ifndef MKS_SERVO_P1_RX_PIN
-#define MKS_SERVO_P1_RX_PIN 16
+#define MKS_SERVO_P1_RX_PIN 40
 #endif
 
 // Motor 2 (Right) - Serial Port 1
+// Moved to GPIO 41/42 to avoid EMI from SPI bus (pins 4-7)
 #ifndef MKS_SERVO_P2_TX_PIN
-#define MKS_SERVO_P2_TX_PIN 17
+#define MKS_SERVO_P2_TX_PIN 41
 #endif
 
 #ifndef MKS_SERVO_P2_RX_PIN
-#define MKS_SERVO_P2_RX_PIN 18
+#define MKS_SERVO_P2_RX_PIN 42
 #endif
 
 #ifndef MKS_SERVO_BAUD
@@ -153,13 +155,15 @@ enum class MksServoHoldCurrent : uint8_t {
 // Motor response delay (internal processing) is typically 200-500us.
 
 // Critical command timeout (e.g. speed command)
+// Increased to 3500us because at 500Hz/500Hz setup, motor processing + echo 
+// can sometimes exceed 2ms on some hardware/converters.
 #ifndef MKS_SERVO_TIMEOUT_CONTROL_US
-#define MKS_SERVO_TIMEOUT_CONTROL_US 2000
+#define MKS_SERVO_TIMEOUT_CONTROL_US 3500
 #endif
 
 // Telemetry/Data timeout (e.g. reading position)
 #ifndef MKS_SERVO_TIMEOUT_DATA_US
-#define MKS_SERVO_TIMEOUT_DATA_US 3000
+#define MKS_SERVO_TIMEOUT_DATA_US 5000
 #endif
 
 // Heavy request timeout (e.g. scanning or register dump)

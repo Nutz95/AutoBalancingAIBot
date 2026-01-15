@@ -28,6 +28,9 @@ struct BMI088Config {
   int8_t gyro_sign_y = -1;
   int8_t gyro_sign_z = -1;   // Match accel Z inversion for consistency
 
+  // Balancing logic orientation: 1 or -1
+  int8_t pitch_rate_sign = 1;
+
   // Convenience: compute interval in milliseconds (integer, may lose precision)
   unsigned long sampling_interval_ms() const {
     return (sampling_hz > 0) ? (1000u / sampling_hz) : 0u;

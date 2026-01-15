@@ -56,6 +56,11 @@ public:
   virtual bool isCalibrated() const {
     return true;
   }
+
+  /**
+   * @brief Get the pitch rate sign for balancing logic (1 or -1).
+   */
+  virtual int8_t getPitchRateSign() const = 0;
 };
 
 } // namespace abbot
