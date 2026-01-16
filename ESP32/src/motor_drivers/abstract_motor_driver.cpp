@@ -137,6 +137,11 @@ float AbstractMotorDriver::readSpeed(MotorSide /*side*/) {
   return 0.0f;
 }
 
+void AbstractMotorDriver::readEncodersBoth(int32_t &left, int32_t &right) {
+  left = readEncoder(MotorSide::LEFT);
+  right = readEncoder(MotorSide::RIGHT);
+}
+
 uint64_t AbstractMotorDriver::getLastCommandTimeUs(MotorSide /*side*/) const {
   return 0;
 }

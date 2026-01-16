@@ -77,7 +77,14 @@ bool BNO055Driver::read(IMUSample &out) {
 
   out.ts_ms = millis();
   out.ts_us = now_us;
-  last_read_us_ = now_us;
+  
+  // Use fixed-interval step to maintain average frequency and avoid drift/jitter accumulation.
+  // If we are significantly late (> 2 intervals), reset the baseline to 'now'.
+  if (now_us - last_read_us_ > 2 * interval_us) {
+    last_read_us_ = now_us;
+  } else {
+    last_read_us_ += interval_us;
+  }
 
   // Apply software calibration if available (though BNO055 has internal cal)
   abbot::imu_cal::applyCalibrationToSample(out);

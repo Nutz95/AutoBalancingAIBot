@@ -96,21 +96,34 @@
 
 // Debug logging interval (milliseconds)
 // Controls how often BALANCER_DBG logs are emitted to reduce console spam
-// Set to 0 to disable throttling, 1 for max rate (1000 Hz), 500 for 2 Hz
-// For motor characterization scripts, use 1-2ms (500-1000 Hz)
+// 20ms (50Hz) is recommended to avoid Serial/WiFi congestion.
 #ifndef BALANCER_DEBUG_LOG_INTERVAL_MS
 #define BALANCER_DEBUG_LOG_INTERVAL_MS 20
 #endif
 
-/**
- * @brief Enable high-frequency encoder reading during balancing.
- * If true, the controller reads motor encoders at the PID loop rate.
- * Disabling this (default) prioritizes the RS485 bus for critical control commands
- * and eliminates periodic communication latency spikes caused by position reads.
- */
+// Performance & Telemetry Optimization
+// If 1, the balancer loop will regularly read wheel encoders during balancing.
+// WARNING: This adds RS485 bus latency (~600us per motor at 256000 baud).
+// Recommended only when investigating "sliding" or using cascaded position loop.
 #ifndef BALANCER_ENABLE_ENCODER_UPDATES
-#define BALANCER_ENABLE_ENCODER_UPDATES false
+#define BALANCER_ENABLE_ENCODER_UPDATES 1
 #endif
+
+// Interval for encoder updates (ms). Throttles bus traffic.
+// Only used if BALANCER_ENABLE_ENCODER_UPDATES is 1.
+// Increased to 100ms to reduce loop jitter and improve pitch stability.
+#ifndef BALANCER_ENCODER_UPDATE_MS
+#define BALANCER_ENCODER_UPDATE_MS 100
+#endif
+
+// Smoothing factor for pitch rate (D-term input). 
+// 1.0 = no filtering, lower = more smoothing.
+// Recommended: 0.2 to 0.5 to reduce motor jitter from raw gyro noise.
+#ifndef BALANCER_PITCH_RATE_ALPHA
+#define BALANCER_PITCH_RATE_ALPHA 0.4f
+#endif
+
+// (Duplicate flag removed)
 
 // Motor command gain scaling factors (to compensate for asymmetric motor response)
 // Initialized from motor characterization ratios if available, else 1.0

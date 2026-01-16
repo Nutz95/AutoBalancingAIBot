@@ -24,7 +24,7 @@ import pandas as pd
 DRIVE_RE = re.compile(r"DRIVE DBG t=(?P<t>\d+)ms.*?tgtV=(?P<tgtV>[-0-9.eE]+).*?filtV=(?P<filtV>[-0-9.eE]+).*?pitch_setpoint=(?P<pitch_setpoint>[-0-9.eE]+)deg.*?pitch_setpoint_rate=(?P<pitch_setpoint_rate>[-0-9.eE]+)deg/s.*?pid_in=(?P<pid_in_drive>[-0-9.eE]+)deg.*?pid_rate=(?P<pid_rate_drive>[-0-9.eE]+)deg/s.*?pid_out=(?P<pid_out_drive>[-0-9.eE]+)")
 SETDRIVE_RE = re.compile(r"SETDRIVE: t=(?P<t>\d+)ms v_req=(?P<v_req>[-0-9.eE]+) w_req=(?P<w_req>[-0-9.eE]+)")
 BAL_RE = re.compile(
-    r"BALANCER_DBG t=(?P<t>\d+)ms.*?pitch=(?P<pitch>[-0-9.eE]+)deg.*?pid_in=(?P<pid_in>[-0-9.eE]+)deg.*?pid_out=(?P<pid_out>[-0-9.eE]+).*?iterm=(?P<iterm>[-0-9.eE]+).*?cmd=(?P<cmd>[-0-9.eE]+).*?lat=(?P<lat>\d+)us.*?ax=(?P<ax>[-0-9.eE]+).*?ay=(?P<ay>[-0-9.eE]+).*?az=(?P<az>[-0-9.eE]+).*?gx=(?P<gx>[-0-9.eE]+).*?gy=(?P<gy>[-0-9.eE]+).*?gz=(?P<gz>[-0-9.eE]+)"
+    r"BALANCER_DBG t=(?P<t>\d+)ms.*?pitch=(?P<pitch>[-0-9.eE]+)deg.*?pid_in=(?P<pid_in>[-0-9.eE]+)deg.*?pid_out=(?P<pid_out>[-0-9.eE]+).*?iterm=(?P<iterm>[-0-9.eE]+).*?cmd=(?P<cmd>[-0-9.eE]+).*?lat=(?P<lat>\d+)us.*?ax=(?P<ax>[-0-9.eE]+).*?ay=(?P<ay>[-0-9.eE]+).*?az=(?P<az>[-0-9.eE]+).*?gx=(?P<gx>[-0-9.eE]+).*?gy=(?P<gy>[-0-9.eE]+).*?gz=(?P<gz>[-0-9.eE]+)(?:.*?lp_hz=(?P<lp_hz>[-0-9.eE]+))?(?:.*?encL=(?P<encL>[-0-9]+))?(?:.*?encR=(?P<encR>[-0-9]+))?"
 )
 GAIN_RE = re.compile(r"BALANCER: started.*?\(Kp=(?P<kp>[-0-9.eE]+) Ki=(?P<ki>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+)\)")
 FILTER_RE = re.compile(r"FUSION: active filter=(?P<filter>[A-Za-z0-9_]+)|\[Filter: (?P<filter2>[A-Za-z0-9_]+)\]")
@@ -238,7 +238,7 @@ def main():
         
         # Calculate Gyro Pitch (simple integration for lag comparison)
         if 'gy' in df.columns and len(df) > 1:
-            dt = df['time_ms'].diff() / 1000.0
+            dt_integrated = df['time_ms'].diff() / 1000.0
             
             # Estimate gyro bias from the first 5 samples where the robot is usually still
             gyro_bias_est = df['gy'].head(5).mean()
@@ -249,7 +249,7 @@ def main():
             gyro_pitch = [start_pitch]
             for i in range(1, len(df)):
                 gy_val = df['gy'].iloc[i]
-                dt_val = dt.iloc[i]
+                dt_val = dt_integrated.iloc[i]
                 if pd.isna(gy_val) or pd.isna(dt_val):
                     gyro_pitch.append(gyro_pitch[-1])
                 else:
@@ -259,10 +259,10 @@ def main():
                     gyro_pitch.append(val)
             df['gyro_pitch_est'] = gyro_pitch
 
-        plt.figure(figsize=(12, 14))
+        plt.figure(figsize=(12, 20))
         
         # Subplot 1: Pitch
-        ax1 = plt.subplot(4, 1, 1)
+        ax1 = plt.subplot(6, 1, 1)
         ax1.plot(t_axis, df['pitch_setpoint'], 'r--', label='Setpoint', alpha=0.7)
         ax1.plot(t_axis, df['pitch'], 'b-', label='Filtered Pitch (deg)', linewidth=2)
         if 'gyro_pitch_est' in df.columns:
@@ -280,7 +280,7 @@ def main():
         ax1.set_title(f'Balancer Pitch stability ({filter_info} | {gain_info})')
 
         # Subplot 2: PID Components (Decomposition)
-        ax2 = plt.subplot(4, 1, 2, sharex=ax1)
+        ax2 = plt.subplot(6, 1, 2, sharex=ax1)
         if 'p_term' in df.columns:
             ax2.plot(t_axis, df['p_term'], label='P contribution (Kp*err)', alpha=0.8)
         if 'iterm' in df.columns:
@@ -292,25 +292,53 @@ def main():
         ax2.legend(loc='upper right')
         ax2.grid(True)
 
-        # Subplot 3: Total PID and Motor Command
-        ax3 = plt.subplot(4, 1, 3, sharex=ax1)
-        if 'pid_out' in df.columns:
-            ax3.plot(t_axis, df['pid_out'], 'g-', label='Total PID Out', linewidth=1.5)
-        if 'cmd' in df.columns:
-            ax3.plot(t_axis, df['cmd'], 'k--', label='Final Motor Cmd (after Deadband/Slew)', alpha=0.8)
-        ax3.set_ylabel('Command')
-        ax3.legend(loc='upper right')
+        # Subplot 3: Loop Frequency and Latency
+        ax3 = plt.subplot(6, 1, 3, sharex=ax1)
+        if 'lp_hz' in df.columns:
+            ax3.plot(t_axis, df['lp_hz'], 'r-', label='Loop Freq (Hz)', alpha=0.7)
+            ax3.axhline(y=500.0, color='k', linestyle=':', alpha=0.3)
+            ax3.set_ylim(0, 600)
+        
+        ax3_twin = ax3.twinx()
+        if 'lat' in df.columns:
+            ax3_twin.plot(t_axis, df['lat'] / 1000.0, 'b-', label='Bus Latency (ms)', alpha=0.3)
+            ax3_twin.set_ylim(0, 5)
+        
+        ax3.set_ylabel('Frequency (Hz)', color='r')
+        ax3_twin.set_ylabel('Latency (ms)', color='b')
+        ax3.set_title('Timing Stability (Target: 500Hz / 2.0ms)')
         ax3.grid(True)
 
-        # Subplot 4: IMU (Accel/Gyro)
-        ax4 = plt.subplot(4, 1, 4, sharex=ax1)
-        ax4.plot(t_axis, df['gx'], label='Gyro X', alpha=0.5)
-        ax4.plot(t_axis, df['gy'], label='Gyro Y', alpha=0.5)
-        ax4.plot(t_axis, df['ax'], label='Accel X', alpha=0.5)
-        ax4.set_ylabel('IMU Raw')
-        ax4.set_xlabel('Time (s)')
+        # Subplot 4: Total PID and Motor Command
+        ax4 = plt.subplot(6, 1, 4, sharex=ax1)
+        if 'pid_out' in df.columns:
+            ax4.plot(t_axis, df['pid_out'], 'g-', label='Total PID Out', linewidth=1.5)
+        if 'cmd' in df.columns:
+            ax4.plot(t_axis, df['cmd'], 'k--', label='Final Motor Cmd (after Deadband/Slew)', alpha=0.8)
+        ax4.set_ylabel('Command')
         ax4.legend(loc='upper right')
         ax4.grid(True)
+
+        # Subplot 5: Wheel Encoders
+        ax5 = plt.subplot(6, 1, 5, sharex=ax1)
+        if 'encL' in df.columns:
+            ax5.plot(t_axis, df['encL'], 'm-', label='Enc Left', alpha=0.8)
+        if 'encR' in df.columns:
+            ax5.plot(t_axis, df['encR'], 'k-', label='Enc Right', alpha=0.8)
+        ax5.set_ylabel('Ticks')
+        ax5.set_title('Encoder Position (Sliding/Drift)')
+        ax5.legend(loc='upper right')
+        ax5.grid(True)
+
+        # Subplot 6: IMU (Accel/Gyro)
+        ax6 = plt.subplot(6, 1, 6, sharex=ax1)
+        ax6.plot(t_axis, df['gx'], label='Gyro X', alpha=0.5)
+        ax6.plot(t_axis, df['gy'], label='Gyro Y', alpha=0.5)
+        ax6.plot(t_axis, df['ax'], label='Accel X', alpha=0.5)
+        ax6.set_ylabel('IMU Raw')
+        ax6.set_xlabel('Time (s)')
+        ax6.legend(loc='upper right')
+        ax6.grid(True)
 
         plt.tight_layout()
         plt.savefig(args.png)

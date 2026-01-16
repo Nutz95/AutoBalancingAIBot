@@ -23,6 +23,7 @@
 #include <cmath>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
+#include <freertos/semphr.h>
 
 namespace abbot {
 namespace balancer {
@@ -65,6 +66,25 @@ struct EncoderVelocityState {
 };
 
 static EncoderVelocityState g_encoder_velocity_state;
+static SemaphoreHandle_t g_encoder_mutex = nullptr;
+static TaskHandle_t g_telemetry_task_handle = nullptr;
+
+// Forward declarations
+static void updateEncoderVelocity(float dt_sec);
+
+/**
+ * @brief Background task for motor telemetry.
+ * Decouples slow RS485 encoder reads from the fast PID loop.
+ */
+static void telemetryTask(void *pvParameters) {
+    const TickType_t xDelay = (BALANCER_ENCODER_UPDATE_MS > 0) ? pdMS_TO_TICKS(BALANCER_ENCODER_UPDATE_MS) : pdMS_TO_TICKS(100);
+    while (true) {
+        // We poll encoders regardless of balancer activity to keep odom fresh,
+        // but only if a driver is available.
+        updateEncoderVelocity(0.0f);
+        vTaskDelay(xDelay);
+    }
+}
 
 // Drive setpoints (high-level): normalized forward and turn commands
 static float g_drive_target_v = 0.0f; // desired normalized forward [-1..1]
@@ -91,6 +111,15 @@ static const float g_fall_stop_rate_rad_s =
 static const float g_trim_max_rad = degToRad(BALANCER_TRIM_MAX_DEG);
 
 void init() {
+  if (g_encoder_mutex == nullptr) {
+    g_encoder_mutex = xSemaphoreCreateMutex();
+  }
+  if (g_telemetry_task_handle == nullptr) {
+#if BALANCER_ENABLE_ENCODER_UPDATES
+    xTaskCreatePinnedToCore(telemetryTask, "telemetryTask", 4096, nullptr, 1, &g_telemetry_task_handle, 0); // Core 0 to avoid IMU core (1)
+#endif
+  }
+
   g_pid.begin(BALANCER_DEFAULT_KP, BALANCER_DEFAULT_KI, BALANCER_DEFAULT_KD,
               BALANCER_INTEGRATOR_LIMIT);
   g_pid.setLeakCoeff(BALANCER_INTEGRATOR_LEAK_COEFF);
@@ -282,6 +311,10 @@ void start(float fused_pitch_rad) {
              men ? "ENABLED" : "NOT ENABLED");
   }
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+  
+  // Debug output of configuration state
+  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: encoders_enabled=%d log_interval=%dms\n", 
+             (int)BALANCER_ENABLE_ENCODER_UPDATES, (int)BALANCER_DEBUG_LOG_INTERVAL_MS);
 }
 
 void stop() {
@@ -653,41 +686,43 @@ static float computePidWithDriveSetpoint(float fused_pitch_deg,
   return pid_out;
 }
 
-// Read encoders and compute velocity at PID loop rate (400Hz)
-// Provides high-frequency velocity feedback for future cascaded control
-// or velocity-based compensation
-static void updateEncoderVelocity(float dt_sec) {
+// Read encoders and compute velocity at background task rate
+static void updateEncoderVelocity(float /*dt_sec*/) {
   auto active_driver = abbot::motor::getActiveMotorDriver();
   if (!active_driver) {
     return;
   }
   
   uint32_t now_us = (uint32_t)esp_timer_get_time();
-  int32_t encoder_left = abbot::motor::readEncoderBySide(
-      abbot::motor::IMotorDriver::MotorSide::LEFT);
-  int32_t encoder_right = abbot::motor::readEncoderBySide(
-      abbot::motor::IMotorDriver::MotorSide::RIGHT);
+  int32_t encoder_left = 0;
+  int32_t encoder_right = 0;
   
-  if (g_encoder_velocity_state.initialized) {
-    uint32_t dt_us = now_us - g_encoder_velocity_state.last_read_time_us;
-    if (dt_us > 0) {
-      float dt_sec_actual = (float)dt_us / 1000000.0f;
-      
-      int32_t delta_left = encoder_left - g_encoder_velocity_state.last_encoder_left;
-      int32_t delta_right = encoder_right - g_encoder_velocity_state.last_encoder_right;
-      
-      // Velocity in counts/sec
-      g_encoder_velocity_state.velocity_left_counts_per_sec = 
-          (float)delta_left / dt_sec_actual;
-      g_encoder_velocity_state.velocity_right_counts_per_sec = 
-          (float)delta_right / dt_sec_actual;
+  // Use the optimized parallel read 
+  active_driver->readEncodersBoth(encoder_left, encoder_right);
+  
+  if (g_encoder_mutex && xSemaphoreTake(g_encoder_mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
+    if (g_encoder_velocity_state.initialized) {
+      uint32_t dt_us = now_us - g_encoder_velocity_state.last_read_time_us;
+      if (dt_us > 0) {
+        float dt_sec_actual = (float)dt_us / 1000000.0f;
+        
+        int32_t delta_left = encoder_left - g_encoder_velocity_state.last_encoder_left;
+        int32_t delta_right = encoder_right - g_encoder_velocity_state.last_encoder_right;
+        
+        // Velocity in counts/sec
+        g_encoder_velocity_state.velocity_left_counts_per_sec = 
+            (float)delta_left / dt_sec_actual;
+        g_encoder_velocity_state.velocity_right_counts_per_sec = 
+            (float)delta_right / dt_sec_actual;
+      }
     }
+    
+    g_encoder_velocity_state.last_encoder_left = encoder_left;
+    g_encoder_velocity_state.last_encoder_right = encoder_right;
+    g_encoder_velocity_state.last_read_time_us = now_us;
+    g_encoder_velocity_state.initialized = true;
+    xSemaphoreGive(g_encoder_mutex);
   }
-  
-  g_encoder_velocity_state.last_encoder_left = encoder_left;
-  g_encoder_velocity_state.last_encoder_right = encoder_right;
-  g_encoder_velocity_state.last_read_time_us = now_us;
-  g_encoder_velocity_state.initialized = true;
 }
 
 // Called each IMU loop to compute and (if active) command motors. Returns
@@ -695,12 +730,15 @@ static void updateEncoderVelocity(float dt_sec) {
 // Note: Pitch sign is now handled by axis mapping in FusionConfig
 // (accel_sign/gyro_sign), so pitch arrives with correct sign: positive = tilted
 // forward.
-float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
-  // Update encoder velocity at PID loop rate if enabled
-  // By default, this is disabled to keep the RS485 bus clear for control commands
-#if BALANCER_ENABLE_ENCODER_UPDATES
-  updateEncoderVelocity(dt);
-#endif
+float processCycle(float fused_pitch, float last_fused_pitch_rate, float dt) {
+  // 1. Filter the raw gyro pitch rate to reduce D-term noise/jitter
+  static float filtered_pitch_rate = 0.0f;
+  const float alpha = BALANCER_PITCH_RATE_ALPHA;
+  filtered_pitch_rate = (alpha * last_fused_pitch_rate) + ((1.0f - alpha) * filtered_pitch_rate);
+  
+  float fused_pitch_rate = filtered_pitch_rate;
+
+  // Encoder updates are now handled by a background task to minimize PID loop latency.
   
   // Check if autotuning is active
   if (g_autotune_active && g_autotune.isActive()) {
@@ -836,9 +874,9 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   // Convert pitch from radians to degrees for PID (more intuitive gains)
   float pitch_for_control_deg = radToDeg(fused_pitch - g_pitch_trim_rad);
   
-  // Use raw gyro for the D term to eliminate filter lag. 
-  // The sign is now managed by the active IMU driver configuration.
-  float pitch_rate_deg_s = (float)abbot::imu::getActivePitchRateSign() * radToDeg(g_last_gyro[1]);
+  // Use the filtered pitch rate for the D term to reduce high-frequency noise/jitter.
+  // fused_pitch_rate is already filtered at the top of processCycle and is in rad/s.
+  float pitch_rate_deg_s = radToDeg(fused_pitch_rate);
   
   // Compute PID output taking into account the drive-setpoint->pitch mapping
   float pid_out =
@@ -898,7 +936,9 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
   static uint32_t last_cmd_dbg_ms = 0;
   uint32_t now_cmd_dbg_ms = millis();
   uint32_t log_interval = BALANCER_DEBUG_LOG_INTERVAL_MS;
-  if (log_interval == 0 || (now_cmd_dbg_ms - last_cmd_dbg_ms >= log_interval)) {
+  if ((log_interval == 0 || (now_cmd_dbg_ms - last_cmd_dbg_ms >= log_interval)) && 
+      abbot::log::isChannelEnabled(abbot::log::CHANNEL_BALANCER)) {
+    
     uint32_t bus_latency_us = 0;
     if (auto drv = abbot::motor::getActiveMotorDriver()) {
       bus_latency_us = drv->getLastBusLatencyUs();
@@ -906,14 +946,26 @@ float processCycle(float fused_pitch, float fused_pitch_rate, float dt) {
     float gx_dps = radToDeg(g_last_gyro[0]);
     float gy_dps = radToDeg(g_last_gyro[1]);
     float gz_dps = radToDeg(g_last_gyro[2]);
-    LOG_PRINTF(
+    
+    long left_enc = 0;
+    long right_enc = 0;
+    // Non-blocking lock for logs: skip if busy to avoid stalling the 500Hz loop
+    if (g_encoder_mutex && xSemaphoreTake(g_encoder_mutex, 0) == pdTRUE) {
+      left_enc = (long)g_encoder_velocity_state.last_encoder_left;
+      right_enc = (long)g_encoder_velocity_state.last_encoder_right;
+      xSemaphoreGive(g_encoder_mutex);
+    }
+
+    LOG_PRINTF_TRY(
       abbot::log::CHANNEL_BALANCER,
-      "BALANCER_DBG t=%lums pitch=%.2fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.4f cmd=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.1f gy=%.1f gz=%.1f\n",
+      "BALANCER_DBG t=%lums pitch=%.2fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.4f cmd=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.1f gy=%.1f gz=%.1f lp_hz=%.1f encL=%ld encR=%ld\n",
       (unsigned long)now_cmd_dbg_ms, (double)radToDeg(fused_pitch),
       (double)pid_in_deg, (double)pid_out, (double)(g_pid.getKi() * g_pid.getIntegrator()), (double)cmd,
       (unsigned long)bus_latency_us,
       (double)g_last_accel[0], (double)g_last_accel[1], (double)g_last_accel[2],
-      (double)gx_dps, (double)gy_dps, (double)gz_dps);
+      (double)gx_dps, (double)gy_dps, (double)gz_dps,
+      (double)(1.0f / dt),
+      left_enc, right_enc);
     last_cmd_dbg_ms = now_cmd_dbg_ms;
   }
   // deadband: if command is small but non-zero, push to the edge instead of

@@ -31,6 +31,8 @@ public:
   virtual void printStatus() = 0;
   virtual void dumpConfig() = 0;
   virtual void setMotorCommandBoth(float left_command, float right_command) = 0;
+  // Read both encoders in parallel if the implementation supports it
+  virtual void readEncodersBoth(int32_t& left, int32_t& right) = 0;
   // Use MotorSide for per-motor control instead of numeric IDs
   virtual void setMotorCommand(MotorSide side, float command) = 0;
   virtual void setMotorCommandRaw(MotorSide side, int16_t rawSpeed) = 0;

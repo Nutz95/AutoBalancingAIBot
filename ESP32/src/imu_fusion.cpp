@@ -57,10 +57,15 @@ void Madgwick::update(float gx, float gy, float gz, float ax, float ay,
     ez = (ax * vy - ay * vx);
   }
 
-  // Apply feedback
+  // Apply feedback (accel correction)
   gx += beta_ * ex;
   gy += beta_ * ey;
   gz += beta_ * ez;
+
+  // Store the corrected gyro rate as the official pitch rate 
+  // instead of deriving it from noisy pitch changes.
+  // Note: gy is robot pitch rate in this axis mapping.
+  last_pitch_rate_ = gy;
 
   // Integrate quaternion rate
   float half_dt = 0.5f * dt;
@@ -94,11 +99,6 @@ void Madgwick::update(float gx, float gy, float gz, float ax, float ay,
   }
   float pitch = asinf(v);
 
-  if (dt > 1e-9f && last_dt_ > 0.0f) {
-    last_pitch_rate_ = (pitch - last_pitch_) / dt;
-  } else {
-    last_pitch_rate_ = 0.0f;
-  }
   last_pitch_ = pitch;
   last_dt_ = dt;
 }

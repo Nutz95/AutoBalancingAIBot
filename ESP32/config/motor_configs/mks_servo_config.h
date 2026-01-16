@@ -83,6 +83,8 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_BAUD 256000
 #endif
 
+// If both motors are on separate RS485 buses (Serial1 and Serial2), 
+// they can both have different IDs.
 #ifndef LEFT_MOTOR_ID
 #define LEFT_MOTOR_ID 0x01
 #endif
@@ -155,15 +157,16 @@ enum class MksServoHoldCurrent : uint8_t {
 // Motor response delay (internal processing) is typically 200-500us.
 
 // Critical command timeout (e.g. speed command)
-// Increased to 3500us because at 500Hz/500Hz setup, motor processing + echo 
-// can sometimes exceed 2ms on some hardware/converters.
+// Reduced to 1500us to ensure we don't break the 500Hz (2ms) loop budget
+// if a motor response is delayed.
 #ifndef MKS_SERVO_TIMEOUT_CONTROL_US
-#define MKS_SERVO_TIMEOUT_CONTROL_US 3500
+#define MKS_SERVO_TIMEOUT_CONTROL_US 1500
 #endif
 
 // Telemetry/Data timeout (e.g. reading position)
+// Position reads can take longer to process internally on MKS drivers
 #ifndef MKS_SERVO_TIMEOUT_DATA_US
-#define MKS_SERVO_TIMEOUT_DATA_US 5000
+#define MKS_SERVO_TIMEOUT_DATA_US 2500
 #endif
 
 // Heavy request timeout (e.g. scanning or register dump)
@@ -177,9 +180,16 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_BUS_QUIET_US 200
 #endif
 
+// Wait time after sending a telemetry request before trying to read the response.
+// At 256kbaud, a 4-byte request takes ~160us. 500us ensures the frame is fully sent
+// and the motor has time to process and begin its response.
+#ifndef MKS_SERVO_TELEMETRY_WAIT_US
+#define MKS_SERVO_TELEMETRY_WAIT_US 500
+#endif
+
 // Turnaround delay for RS485 auto-direction hardware (us)
 #ifndef MKS_SERVO_RS485_TURNAROUND_US
-#define MKS_SERVO_RS485_TURNAROUND_US 50
+#define MKS_SERVO_RS485_TURNAROUND_US 200
 #endif
 
 // How long to wait for bus availability (ms)

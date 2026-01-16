@@ -239,5 +239,31 @@ void lockedPrintf(const char *fmt, ...) {
   }
 }
 
+void lockedPrintfNonBlocking(const char *fmt, ...) {
+  if (!fmt) {
+    return;
+  }
+  
+  if (g_log_mutex) {
+    // Try to take mutex immediately. If busy, drop the log to protect timing.
+    if (xSemaphoreTake(g_log_mutex, 0) != pdTRUE) {
+      return;
+    }
+  }
+
+  char tmp[256];
+  va_list ap;
+  va_start(ap, fmt);
+  vsnprintf(tmp, sizeof(tmp), fmt, ap);
+  va_end(ap);
+  
+  Serial.print(tmp);
+  abbot::wifi_console::sendLine(tmp);
+
+  if (g_log_mutex) {
+    xSemaphoreGive(g_log_mutex);
+  }
+}
+
 } // namespace log
 } // namespace abbot

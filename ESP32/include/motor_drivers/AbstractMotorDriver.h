@@ -27,6 +27,13 @@ public:
    * avoid single-line inline bodies in headers.
    */
   virtual float readSpeed(MotorSide /*side*/) override;
+
+  /**
+   * Default implementation that reads encoders sequentially.
+   * Drivers with high-speed parallel bus support should override this.
+   */
+  virtual void readEncodersBoth(int32_t &left, int32_t &right) override;
+
   // Default implementation for drivers that don't track command timestamps.
   virtual uint64_t getLastCommandTimeUs(MotorSide /*side*/) const override;
 };

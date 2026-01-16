@@ -141,14 +141,7 @@ static void imuProducerTask(void *pvParameters) {
         xQueueOverwrite(calibQueue, &sample);
       }
     } else {
-      // If we didn't read (interval not met), don't block for a full tick yet.
-      // We will loop back and check micros() again.
-      // To prevent CPU hogging if micros() check is too fast, we yield after many failures.
-      static uint32_t fail_streak = 0;
-      if (++fail_streak > 100) {
-        vTaskDelay(0); // Yield to other tasks without sleeping
-        fail_streak = 0;
-      }
+      consecutive_errors++;
     }
 
     // Auto-recovery
@@ -164,9 +157,11 @@ static void imuProducerTask(void *pvParameters) {
       last_success_ms = now;
     }
 
-    // Use vTaskDelayUntil to maintain a loose 1kHz check rhythm if we are ahead,
-    // but the loop is mostly controlled by the driver's micros() check.
-    vTaskDelayUntil(&xLastWakeTime, xFrequency);
+    // Yield to let other tasks (like IMUConsumer) run on Core 1.
+    // We wait 1 tick (1ms) regardless of success/fail. 
+    // This provides a 1kHz polling rhythm which is perfect for catching 500Hz samples
+    // without starving the lower-priority PID consumer task.
+    vTaskDelay(xFrequency);
 
     // Log drops periodically
     if (drop_count > 0 && (now - last_drop_log > 5000)) {

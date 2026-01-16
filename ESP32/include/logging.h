@@ -92,12 +92,22 @@ const char *channelName(Channel c);
     }                                                                          \
   } while (0)
 
+// Non-blocking version: skips the print if the logging mutex is busy.
+// Useful for high-frequency loops (PID) to avoid stalling when other tasks log.
+#define LOG_PRINTF_TRY(ch, fmt, ...)                                           \
+  do {                                                                         \
+    if (::abbot::log::isChannelEnabled(ch)) {                                   \
+      ::abbot::log::lockedPrintfNonBlocking((fmt), ##__VA_ARGS__);              \
+    }                                                                          \
+  } while (0)
+
 // Locked/serialized print helpers implemented in logging.cpp
 void lockedPrint(const char *s);
 void lockedPrintln(const char *s);
 void lockedPrint(const String &s);
 void lockedPrintln(const String &s);
 void lockedPrintf(const char *fmt, ...);
+void lockedPrintfNonBlocking(const char *fmt, ...);
 
 } // namespace log
 } // namespace abbot

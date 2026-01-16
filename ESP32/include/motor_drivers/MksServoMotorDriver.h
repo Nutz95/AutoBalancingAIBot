@@ -4,10 +4,12 @@
 #include "AbstractMotorDriver.h"
 #include "../../config/motor_configs/mks_servo_config.h"
 #include "speed_estimator.h"
+#include <atomic>
 
 #if !defined(UNIT_TEST_HOST)
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
+#include <freertos/task.h>
 #else
 // Minimal stubs for host-native unit tests
 typedef void* SemaphoreHandle_t;
@@ -48,6 +50,7 @@ public:
     void printStatus() override;
     void dumpConfig() override;
     void setMotorCommandBoth(float left_command, float right_command) override;
+    void readEncodersBoth(int32_t& left, int32_t& right) override;
     void setMotorCommand(MotorSide side, float command) override;
     void setMotorCommandRaw(MotorSide side, int16_t rawSpeed) override;
     int32_t readEncoder(MotorSide side) override;
@@ -68,7 +71,9 @@ public:
     }
 
     uint32_t getLastBusLatencyUs() const override {
-        return last_bus_latency_us_;
+        uint32_t l = m_left_async.last_latency_us.load();
+        uint32_t r = m_right_async.last_latency_us.load();
+        return (l > r) ? l : r;
     }
 
     // Serial command interface
@@ -97,6 +102,23 @@ private:
     bool m_enabled;
     SemaphoreHandle_t m_leftBusMutex;
     SemaphoreHandle_t m_rightBusMutex;
+
+    // Async control state for background tasks
+    struct AsyncState {
+        std::atomic<float> target_speed{0.0f};
+        std::atomic<bool> speed_dirty{false};
+        std::atomic<int32_t> encoder_value{0};
+        std::atomic<bool> encoder_dirty{false};
+        std::atomic<uint32_t> last_latency_us{0};
+        TaskHandle_t task_handle = nullptr;
+        uint32_t last_telemetry_ms = 0;
+    };
+
+    AsyncState m_left_async;
+    AsyncState m_right_async;
+
+    static void motorTaskEntry(void* pvParameters);
+    void runMotorTask(MotorSide side);
 
     // Protocol helpers
     void sendSpeedCommand(uint8_t id, float normalized_speed, bool invert);
