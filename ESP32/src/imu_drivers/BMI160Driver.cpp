@@ -30,15 +30,17 @@ bool BMI160Driver::begin() {
     // Initialisation du SPI avec les bonnes pins pour l'ESP32-S3
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: Initializing SPI bus...");
     SPI.begin(cfg_.spi_sck, cfg_.spi_miso, cfg_.spi_mosi, cfg_.spi_cs);
-    SPI.setClockDivider(SPI_CLOCK_DIV32); // ~2.5MHz pour une stabilité maximale sur câbles longs
+    // Use SPISettings from config.
     
     // Auto-détection du dummy byte (octet factice)
     // On fait plusieurs essais pour stabiliser le bus SPI
+    SPI.beginTransaction(SPISettings(cfg_.spi_speed_hz, MSBFIRST, SPI_MODE3));
     digitalWrite(cfg_.spi_cs, LOW);
     SPI.transfer(0x00 | 0x80); // Read Chip ID
     uint8_t first = SPI.transfer(0x00); 
     uint8_t second = SPI.transfer(0x00);
     digitalWrite(cfg_.spi_cs, HIGH);
+    SPI.endTransaction();
     delay(10);
 
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI160: SPI Init probe - first=0x%02X, second=0x%02X\n", first, second);
@@ -186,6 +188,7 @@ bool BMI160Driver::readRaw(IMUSample &out) {
   // Register 0x0C is DATA_GYRO_X_LSB
   uint8_t raw_data[12];
   
+  SPI.beginTransaction(SPISettings(cfg_.spi_speed_hz, MSBFIRST, SPI_MODE3));
   digitalWrite(cfg_.spi_cs, LOW);
   SPI.transfer(0x0C | 0x80); // Register 0x0C (GYR_X_L) | Read Bit
   
@@ -199,6 +202,7 @@ bool BMI160Driver::readRaw(IMUSample &out) {
     zero_check |= raw_data[i];
   }
   digitalWrite(cfg_.spi_cs, HIGH);
+  SPI.endTransaction();
 
   // If all 12 bytes are zero, something is wrong with the SPI bus or sensor.
   // Return false to trigger the auto-recovery in SystemTasks.

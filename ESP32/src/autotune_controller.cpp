@@ -13,8 +13,7 @@ void AutotuneController::start(const Config *config) {
     m_config = Config(); // Use defaults
   }
   m_state = State::WAITING_START;
-  m_start_time_ms = 0;
-  m_elapsed_ms = 0;
+  m_elapsed_sec = 0.0f;
 }
 
 void AutotuneController::stop() {
@@ -27,9 +26,9 @@ void AutotuneController::stop() {
 void AutotuneController::reset() {
   m_state = State::IDLE;
   m_current_output = 0.0f;
-  m_start_time_ms = 0;
-  m_elapsed_ms = 0;
+  m_elapsed_sec = 0.0f;
   memset(&m_data, 0, sizeof(m_data));
+  m_data.peak_increasing = true; 
   memset(&m_result, 0, sizeof(m_result));
 }
 
@@ -46,17 +45,12 @@ void AutotuneController::complete() {
   m_current_output = 0.0f;
 }
 
-float AutotuneController::update(float pitch_deg, uint32_t dt_ms) {
+float AutotuneController::update(float pitch_deg, float dt_sec) {
   if (!isActive()) {
     return 0.0f;
   }
 
-  // Initialize start time on first update
-  if (m_start_time_ms == 0) {
-    m_start_time_ms = dt_ms;
-  }
-
-  m_elapsed_ms += dt_ms;
+  m_elapsed_sec += dt_sec;
 
   // Safety check: abort if pitch too large
   if (fabsf(pitch_deg) > m_config.max_pitch_abort) {
@@ -65,7 +59,7 @@ float AutotuneController::update(float pitch_deg, uint32_t dt_ms) {
   }
 
   // Timeout check
-  if (m_elapsed_ms > m_config.timeout_ms) {
+  if (m_elapsed_sec > (float)m_config.timeout_ms / 1000.0f) {
     fail("Timeout - no oscillation detected");
     return 0.0f;
   }
@@ -120,20 +114,17 @@ float AutotuneController::update(float pitch_deg, uint32_t dt_ms) {
 }
 
 bool AutotuneController::detectZeroCrossing(float pitch_deg) {
-  bool above_zero = pitch_deg > 0.0f;
-
-  // Simple zero crossing: sign change
+  // Use a small hysteresis to avoid noise triggers near zero
   bool crossed = false;
-  if (m_data.last_pitch != 0.0f) {
-    // Check if sign changed
-    bool last_above = m_data.last_pitch > 0.0f;
-    if (last_above != above_zero) {
+
+  if (m_data.last_pitch > m_config.hysteresis && pitch_deg < -m_config.hysteresis) {
       crossed = true;
-    }
+  } else if (m_data.last_pitch < -m_config.hysteresis && pitch_deg > m_config.hysteresis) {
+      crossed = true;
   }
 
-  if (crossed && m_data.num_crossings < 10) {
-    m_data.crossing_times_ms[m_data.num_crossings] = m_elapsed_ms;
+  if (crossed && m_data.num_crossings < MAX_SAMPLES) {
+    m_data.crossing_times_sec[m_data.num_crossings] = m_elapsed_sec;
     m_data.num_crossings++;
   }
 
@@ -143,29 +134,25 @@ bool AutotuneController::detectZeroCrossing(float pitch_deg) {
 }
 
 void AutotuneController::recordPeak(float pitch_deg) {
-  // Simple peak detection: record if magnitude increased then decreased
-  static float last_abs = 0.0f;
-  static float peak_candidate = 0.0f;
-  static bool increasing = true;
-
   float current_abs = fabsf(pitch_deg);
 
-  if (increasing && current_abs < last_abs) {
+  if (m_data.peak_increasing && current_abs < m_data.last_abs_pitch) {
     // Peak detected
-    if (m_data.num_peaks < 10 && peak_candidate > m_config.deadband) {
-      m_data.peak_values[m_data.num_peaks] = peak_candidate;
+    if (m_data.num_peaks < MAX_SAMPLES && m_data.peak_candidate > m_config.deadband) {
+      m_data.peak_values[m_data.num_peaks] = m_data.peak_candidate;
       m_data.num_peaks++;
     }
-    increasing = false;
-  } else if (!increasing && current_abs > last_abs) {
-    increasing = true;
+    m_data.peak_increasing = false;
+  } else if (!m_data.peak_increasing && current_abs > m_data.last_abs_pitch) {
+    m_data.peak_increasing = true;
+    m_data.peak_candidate = 0.0f; // reset for next peak
   }
 
-  if (current_abs > peak_candidate) {
-    peak_candidate = current_abs;
+  if (current_abs > m_data.peak_candidate) {
+    m_data.peak_candidate = current_abs;
   }
 
-  last_abs = current_abs;
+  m_data.last_abs_pitch = current_abs;
 }
 
 bool AutotuneController::hasEnoughData() const {
@@ -181,8 +168,8 @@ void AutotuneController::computeGains() {
   }
 
   // Calculate ultimate period (average time between crossings)
-  float Tu_ms = computeAveragePeriod();
-  if (Tu_ms <= 0.0f) {
+  float Tu_sec = computeAveragePeriod();
+  if (Tu_sec <= 0.0f) {
     fail("Invalid oscillation period");
     return;
   }
@@ -202,7 +189,6 @@ void AutotuneController::computeGains() {
   // Kp = 0.45 * Ku
   // Ti = 2.2 * Tu  =>  Ki = Kp / Ti = 0.45*Ku / (2.2*Tu)
   // Td = Tu / 6.3  =>  Kd = Kp * Td = 0.45*Ku * Tu/6.3
-  float Tu_sec = Tu_ms / 1000.0f;
   float Kp = 0.45f * Ku;
   float Ki = 0.0f; // Start with no integral term
   float Kd = Kp * Tu_sec / 6.3f;
@@ -212,7 +198,7 @@ void AutotuneController::computeGains() {
   m_result.Ki = Ki;
   m_result.Kd = Kd;
   m_result.ultimate_gain = Ku;
-  m_result.ultimate_period_ms = Tu_ms;
+  m_result.ultimate_period_ms = Tu_sec * 1000.0f;
   m_result.oscillation_amplitude = amplitude;
   m_result.success = true;
 }
@@ -228,8 +214,8 @@ float AutotuneController::computeAveragePeriod() const {
   uint8_t count = 0;
 
   for (uint8_t i = 1; i < m_data.num_crossings; i++) {
-    uint32_t period =
-        m_data.crossing_times_ms[i] - m_data.crossing_times_ms[i - 1];
+    float period =
+        m_data.crossing_times_sec[i] - m_data.crossing_times_sec[i - 1];
     sum += period * 2.0f; // Full cycle is 2x crossing interval
     count++;
   }

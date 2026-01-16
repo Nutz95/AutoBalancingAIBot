@@ -16,6 +16,8 @@
  */
 class AutotuneController {
 public:
+  static constexpr uint8_t MAX_SAMPLES = 32;
+
   enum class State {
     IDLE,          ///< Not running
     WAITING_START, ///< Waiting for first zero crossing
@@ -27,13 +29,14 @@ public:
 
   struct Config {
     float relay_amplitude =
-        0.25f; ///< Relay output magnitude (±) - 25% (~750 speed units)
+        0.18f; ///< Relay output magnitude (±) - Reduced for safety during tuning
     float deadband = 0.05f; ///< Deadband around zero (degrees) - Reduced to
                             ///< minimize coasting
+    float hysteresis = 0.02f; ///< Noise filter for zero-crossing (degrees)
     float max_pitch_abort =
         45.0f;                  ///< Abort if pitch exceeds this (safety limit)
-    uint32_t timeout_ms = 8000; ///< Max time to wait for oscillations
-    uint32_t min_cycles = 3;    ///< Minimum consistent cycles required
+    uint32_t timeout_ms = 15000; ///< Max time to wait for oscillations
+    uint32_t min_cycles = 8;    ///< Minimum consistent cycles required
   };
 
   struct Result {
@@ -63,10 +66,10 @@ public:
   /**
    * @brief Update autotune state machine (call every control cycle)
    * @param pitch_deg Current pitch angle in degrees
-   * @param dt_ms Time since last update in milliseconds
+   * @param dt_sec Time since last update in seconds
    * @return Relay command output (or 0.0 if not running)
    */
-  float update(float pitch_deg, uint32_t dt_ms);
+  float update(float pitch_deg, float dt_sec);
 
   /**
    * @brief Get current tuning state
@@ -93,11 +96,14 @@ public:
 
 private:
   struct OscillationData {
-    uint32_t crossing_times_ms[10] = {0}; ///< Timestamps of zero crossings
-    float peak_values[10] = {0.0f};       ///< Peak pitch values
+    float crossing_times_sec[MAX_SAMPLES] = {0}; ///< Timestamps of zero crossings
+    float peak_values[MAX_SAMPLES] = {0.0f};       ///< Peak pitch values
     uint8_t num_crossings = 0;
     uint8_t num_peaks = 0;
     float last_pitch = 0.0f;
+    bool peak_increasing = true;
+    float peak_candidate = 0.0f;
+    float last_abs_pitch = 0.0f;
   };
 
   void reset();
@@ -114,7 +120,6 @@ private:
   Config m_config;
   Result m_result;
   OscillationData m_data;
-  uint32_t m_start_time_ms = 0;
-  uint32_t m_elapsed_ms = 0;
+  float m_elapsed_sec = 0.0f;
   float m_current_output = 0.0f;
 };

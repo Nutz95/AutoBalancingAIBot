@@ -80,6 +80,13 @@ static void ensureMenus(IIMUDriver *driver) {
     }
   }
 
+  // Add a direct Reboot entry to the main menu for convenience
+  root->addEntry(menuId++, "REBOOT", [](const String&) {
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "System reboot requested...");
+    delay(200);
+    ESP.restart();
+  });
+
   portENTER_CRITICAL(&g_menu_mux);
   g_rootMenu = std::move(root);
   g_building_menu = false;

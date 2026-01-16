@@ -746,10 +746,8 @@ float processCycle(float fused_pitch, float last_fused_pitch_rate, float dt) {
     float error_rad = fused_pitch;
     float error_deg = radToDeg(error_rad);
 
-    uint32_t dt_ms = (uint32_t)(dt * 1000.0f);
-
-    // Autotune relay output - use directly (same sign convention as PID)
-    float autotune_raw = g_autotune.update(error_deg, dt_ms);
+    // Pass dt in seconds for high-precision timing inside autotune
+    float autotune_raw = g_autotune.update(error_deg, dt);
     float autotune_cmd = autotune_raw; // No inversion - consistent with PID
 
     // Debug: log autotune state and command
@@ -1211,25 +1209,34 @@ void getMotorGains(float &left_gain, float &right_gain) {
 
 // --- Calibrated trim management ---
 void calibrateTrim() {
-  // Reinitialize the filter from the current accelerometer reading so the
-  // fused pitch is immediately consistent with gravity. Then sample a few
-  // fused-pitch readings and use the median to reject brief noise spikes.
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: Starting trim calibration (stay still)...");
+  
+  // Reinitialize the filter from the current accelerometer reading to get in the ballpark.
   ::abbot::reinitFilterFromAccel();
 
   // Let filter settle briefly
-  vTaskDelay(pdMS_TO_TICKS(30));
+  vTaskDelay(pdMS_TO_TICKS(100));
 
-  const int N = 7; // odd so median is simple
-  float samples[N];
+  const int N = 51; // More samples for better statistical stability (approx 1s)
+  float *samples = new float[N];
+  
   for (int i = 0; i < N; ++i) {
     samples[i] = ::abbot::getFusedPitch();
-    // stagger samples to allow tiny sensor noise to decorrelate
+    // stagger samples to allow sensor noise to decorrelate
     vTaskDelay(pdMS_TO_TICKS(20));
+    
+    if (i % 10 == 0) {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: Sampling trim... %d%%\n", (i * 100) / N);
+    }
   }
 
-  // compute median
+  // compute median to reject outliers and spikes
   std::sort(samples, samples + N);
   float median = samples[N/2];
+  float min_val = samples[0];
+  float max_val = samples[N-1];
+
+  delete[] samples;
 
   g_calibrated_trim_rad = median;
   g_has_calibrated_trim = true;
@@ -1241,10 +1248,12 @@ void calibrateTrim() {
   }
 
   float trim_deg = radToDeg(g_calibrated_trim_rad);
-  char buf[128];
+  float spread_deg = radToDeg(max_val - min_val);
+  
+  char buf[256];
   snprintf(buf, sizeof(buf),
-           "BALANCER: calibrated trim set to %.4f° (%.6f rad), persisted=%s",
-           (double)trim_deg, (double)g_calibrated_trim_rad,
+           "BALANCER: Trim calibrated to %.4f° (spread=%.4f°), persisted=%s",
+           (double)trim_deg, (double)spread_deg,
            g_prefs_started ? "yes" : "no");
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
 }

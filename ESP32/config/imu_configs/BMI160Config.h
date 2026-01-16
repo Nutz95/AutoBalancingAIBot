@@ -16,6 +16,10 @@ struct BMI160Config {
   int spi_miso = 6;
   int spi_cs = 7;
 
+  // SPI Bus Speed (Hz). Default is 10MHz (10000000).
+  // If stability issues or long cables, reduce to 5MHz (5000000) or 2MHz.
+  uint32_t spi_speed_hz = 10000000;
+
   // I2C address fallback (if still needed)
   uint8_t i2c_addr = 0x69;
   int sda_pin = 11;

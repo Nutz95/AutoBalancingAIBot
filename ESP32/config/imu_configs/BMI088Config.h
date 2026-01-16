@@ -14,6 +14,9 @@ struct BMI088Config {
   uint8_t accel_cs_pin = 4; // GPIO4 (chip select for accel)
   uint8_t gyro_cs_pin  = 5; // GPIO5 (chip select for gyro)
 
+  // SPI Bus Speed (Hz). Default is 10MHz (10000000).
+  uint32_t spi_speed_hz = 10000000;
+
   // Sampling frequency in Hz (target read frequency)
   // Increased to 400Hz for faster control loop and better gyro integration
   uint16_t sampling_hz = 400;
