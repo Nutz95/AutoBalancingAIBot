@@ -110,6 +110,7 @@ private:
         std::atomic<int32_t> encoder_value{0};
         std::atomic<bool> encoder_dirty{false};
         std::atomic<uint32_t> last_latency_us{0};
+        std::atomic<bool> last_reported_enabled{false};
         TaskHandle_t task_handle = nullptr;
         uint32_t last_telemetry_ms = 0;
     };

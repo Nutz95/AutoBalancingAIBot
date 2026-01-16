@@ -77,19 +77,35 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
     
     while (true) {
         // Wait for a notification (new command) or timeout (telemetry)
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10)); // Max latency 10ms for telemetry if no commands
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10)); 
 
         // Use the bus mutex to avoid conflicts with manual commands (serial console)
         if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-            // 1. Send Command if dirty
-            if (async.speed_dirty.load() || !m_enabled) {
-                float cmd = async.target_speed.load();
-                if (!m_enabled) cmd = 0.0f;
-                sendSpeedCommand(state.id, cmd, state.invert);
-                async.speed_dirty.store(false);
+            bool current_enabled = m_enabled;
+            bool enabled_changed = (current_enabled != async.last_reported_enabled.load());
+            bool speed_dirty = async.speed_dirty.exchange(false);
+            
+            // 1. Handle Torque State Changes (Enable/Disable torque)
+            // We handle this inside the task to avoid bus collisions with speed commands.
+            if (enabled_changed) {
+                uint8_t data = current_enabled ? 0x01 : 0x00;
+                // Send Torque command. We repeat it twice for redundancy.
+                sendFunctionCommand(state.id, 0xF3, &data, 1);
+                delay(10);
+                sendFunctionCommand(state.id, 0xF3, &data, 1);
+                
+                async.last_reported_enabled.store(current_enabled);
+                // After enabling torque, always force a speed command update
+                speed_dirty = true;
             }
 
-            // 2. Telemetry if time
+            // 2. Send Speed Command if dirty or state just changed
+            if (speed_dirty || !current_enabled) {
+                float cmd = current_enabled ? async.target_speed.load() : 0.0f;
+                sendSpeedCommand(state.id, cmd, state.invert);
+            }
+
+            // 3. Telemetry if time
             uint32_t now = millis();
             if (now - async.last_telemetry_ms >= telemetry_interval_ms) {
                 // Read encoder using local protocol (0x31)
@@ -135,24 +151,37 @@ float MksServoMotorDriver::getLastMotorCommand(MotorSide side) {
 }
 
 void MksServoMotorDriver::enableMotors() {
-    m_enabled = true;
-    setEnable(m_left.id, true);
-    setEnable(m_right.id, true);
+    if (m_enabled) {
+        return;
+    }
     
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: motors ENABLED");
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: enabling motors (Queueing Torque ON)");
+    m_enabled = true;
+    
+    // Notify background tasks to perform Torque ON and initial speed sync
+    if (m_left_async.task_handle) {
+        xTaskNotifyGive(m_left_async.task_handle);
+    }
+    if (m_right_async.task_handle) {
+        xTaskNotifyGive(m_right_async.task_handle);
+    }
 }
 
 void MksServoMotorDriver::disableMotors() {
+    if (!m_enabled) {
+        return;
+    }
+
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: disabling motors (Queueing Torque OFF)");
     m_enabled = false;
 
-    // Send 0 speed first to ensure motors stop before disabling torque
-    sendSpeedCommand(m_left.id, 0.0f, false);
-    sendSpeedCommand(m_right.id, 0.0f, false);
-
-    setEnable(m_left.id, false);
-    setEnable(m_right.id, false);
-
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: motors DISABLED");
+    // Notify background tasks to perform Torque OFF
+    if (m_left_async.task_handle) {
+        xTaskNotifyGive(m_left_async.task_handle);
+    }
+    if (m_right_async.task_handle) {
+        xTaskNotifyGive(m_right_async.task_handle);
+    }
 }
 
 bool MksServoMotorDriver::areMotorsEnabled() {
@@ -572,13 +601,14 @@ void MksServoMotorDriver::setHoldCurrent(uint8_t id, MksServoHoldCurrent hold_pc
 }
 
 void MksServoMotorDriver::setEnable(uint8_t id, bool enable) {
-    if (id == m_left.id) m_left.enabled = enable;
-    if (id == m_right.id) m_right.enabled = enable;
+    if (id == m_left.id) {
+        m_left.enabled = enable;
+    }
+    if (id == m_right.id) {
+        m_right.enabled = enable;
+    }
 
     uint8_t data = enable ? 0x01 : 0x00;
-    sendFunctionCommand(id, 0xF3, &data, 1);
-    // Send twice to ensure it's received, especially for disabling
-    delay(5);
     sendFunctionCommand(id, 0xF3, &data, 1);
 }
 

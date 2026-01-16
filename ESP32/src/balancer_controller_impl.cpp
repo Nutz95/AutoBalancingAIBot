@@ -741,66 +741,69 @@ float processCycle(float fused_pitch, float last_fused_pitch_rate, float dt) {
   // Encoder updates are now handled by a background task to minimize PID loop latency.
   
   // Check if autotuning is active
-  if (g_autotune_active && g_autotune.isActive()) {
-    // Pitch is already correctly signed from fusion
-    float error_rad = fused_pitch;
-    float error_deg = radToDeg(error_rad);
+  if (g_autotune_active) {
+    if (g_autotune.isActive()) {
+      // Use the trimmed pitch just like the PID controller
+      float error_rad = fused_pitch - g_pitch_trim_rad;
+      float error_deg = radToDeg(error_rad);
 
-    // Pass dt in seconds for high-precision timing inside autotune
-    float autotune_raw = g_autotune.update(error_deg, dt);
-    float autotune_cmd = autotune_raw; // No inversion - consistent with PID
+      // Pass dt in seconds for high-precision timing inside autotune
+      float autotune_raw = g_autotune.update(error_deg, dt);
+      float autotune_cmd = autotune_raw; // No inversion - consistent with PID
 
-    // Debug: log autotune state and command
-    static uint32_t last_log_ms = 0;
-    uint32_t now_ms = millis();
-    if (now_ms - last_log_ms > 500) {
-      char dbg[128];
-      int men = 0;
-      if (auto driver = abbot::motor::getActiveMotorDriver()) {
-        men = driver->areMotorsEnabled() ? 1 : 0;
+      // Debug: log autotune state and command
+      static uint32_t last_log_ms = 0;
+      uint32_t now_ms = millis();
+      if (now_ms - last_log_ms > 500) {
+        char dbg[128];
+        int men = 0;
+        if (auto driver = abbot::motor::getActiveMotorDriver()) {
+          men = driver->areMotorsEnabled() ? 1 : 0;
+        }
+        snprintf(dbg, sizeof(dbg),
+                "AUTOTUNE: state=%d err=%.2f° cmd=%.3f motors_en=%d",
+                (int)g_autotune.getState(), (double)error_deg,
+                (double)autotune_cmd, men);
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, dbg);
+        last_log_ms = now_ms;
       }
-      snprintf(dbg, sizeof(dbg),
-               "AUTOTUNE: state=%d err=%.2f° cmd=%.3f motors_en=%d",
-               (int)g_autotune.getState(), (double)error_deg,
-               (double)autotune_cmd, men);
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, dbg);
-      last_log_ms = now_ms;
+
+      // Check if autotune just finished during this update
+      if (g_autotune.isActive()) {
+        // Apply autotune command to motors (apply per-motor gain scaling)
+        if (auto driver = abbot::motor::getActiveMotorDriver()) {
+          if (driver->areMotorsEnabled()) {
+            float left_at = autotune_cmd * g_left_motor_gain;
+            float right_at = autotune_cmd * g_right_motor_gain;
+            driver->setMotorCommandBoth(left_at, right_at);
+          }
+        }
+        return autotune_cmd;
+      }
     }
 
-    // Check if autotune just finished
-    if (!g_autotune.isActive()) {
-      g_autotune_active = false;
+    // Cleanup block for autotune completion, failure or external stop
+    g_autotune_active = false;
 
-      if (g_autotune.getState() == AutotuneController::State::COMPLETE) {
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                    "AUTOTUNE: COMPLETE - use 'AUTOTUNE APPLY' to set gains");
-      } else if (g_autotune.getState() == AutotuneController::State::FAILED) {
-        char buf[128];
-        snprintf(buf, sizeof(buf), "AUTOTUNE: FAILED - %s",
-                 g_autotune.getFailureReason());
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
-      }
-
-      // Zero and disable motors
-      if (auto driver = abbot::motor::getActiveMotorDriver()) {
-        driver->setMotorCommandBoth(0.0f, 0.0f);
-        driver->disableMotors();
-      }
+    if (g_autotune.getState() == AutotuneController::State::COMPLETE) {
+      // Results are now logged by the AutotuneController::complete() function
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                  "AUTOTUNE: motors disabled automatically");
-      return 0.0f;
+                  "AUTOTUNE: SUCCESS - Enter 'AUTOTUNE APPLY' to update robot gains");
+    } else if (g_autotune.getState() == AutotuneController::State::FAILED) {
+      char buf[128];
+      snprintf(buf, sizeof(buf), "AUTOTUNE: FAILED - %s",
+               g_autotune.getFailureReason());
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
     }
 
-    // Apply autotune command to motors (apply per-motor gain scaling)
+    // Zero and disable motors for safety
     if (auto driver = abbot::motor::getActiveMotorDriver()) {
-      if (driver->areMotorsEnabled()) {
-        float left_at = autotune_cmd * g_left_motor_gain;
-        float right_at = autotune_cmd * g_right_motor_gain;
-        driver->setMotorCommandBoth(left_at, right_at);
-      }
+      driver->setMotorCommandBoth(0.0f, 0.0f);
+      driver->disableMotors();
     }
-
-    return autotune_cmd;
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "AUTOTUNE: motors disabled automatically");
+    return 0.0f;
   }
 
   if (!g_active) {
@@ -1028,26 +1031,28 @@ void startAutotune() {
     return;
   }
 
-  // Stop regular balancing
+  // Stop regular balancing if active (but don't disable motors here to avoid double cycling)
   if (g_active) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                "AUTOTUNE: stopping balancer to start tuning");
-    stop();
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: stopping balancer; starting tuner");
+    g_active = false;
+    g_pending_enable_ts = 0;
   }
 
   // Start with current configurable parameters (defaults in g_autocfg)
   g_autotune.start(&g_autocfg);
   g_autotune_active = true;
 
-  // Always enable motors for autotuning
+  // Ensure motors are enabled for autotuning
   if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    driver->setMotorCommandBoth(0.0f, 0.0f);
+    // Queue enable. Delays are now handled by individual motor tasks to avoid bus collisions.
     driver->enableMotors();
   }
+  
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
               "AUTOTUNE: motors enabled automatically");
-
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-              "AUTOTUNE: started - applying relay control (HOLD THE ROBOT!)");
+              "AUTOTUNE: started - applying relay control (Keep fingers near top to prevent fall)");
 }
 
 void stopAutotune() {

@@ -29,14 +29,14 @@ public:
 
   struct Config {
     float relay_amplitude =
-        0.18f; ///< Relay output magnitude (±) - Reduced for safety during tuning
+        0.25f; ///< Relay output magnitude (±) - Reduced for safety during tuning
     float deadband = 0.05f; ///< Deadband around zero (degrees) - Reduced to
                             ///< minimize coasting
     float hysteresis = 0.02f; ///< Noise filter for zero-crossing (degrees)
     float max_pitch_abort =
-        45.0f;                  ///< Abort if pitch exceeds this (safety limit)
+        35.0f;                  ///< Abort if pitch exceeds this (safety limit)
     uint32_t timeout_ms = 15000; ///< Max time to wait for oscillations
-    uint32_t min_cycles = 8;    ///< Minimum consistent cycles required
+    uint32_t min_cycles = 4;    ///< Minimum consistent cycles required
   };
 
   struct Result {

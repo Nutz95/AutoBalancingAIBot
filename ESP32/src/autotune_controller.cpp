@@ -1,4 +1,5 @@
 #include "autotune_controller.h"
+#include "logging.h"
 #include <cstring>
 
 #ifndef M_PI
@@ -43,6 +44,13 @@ void AutotuneController::complete() {
   m_state = State::COMPLETE;
   m_result.success = true;
   m_current_output = 0.0f;
+
+  char msg[256];
+  snprintf(msg, sizeof(msg),
+           "AUTOTUNE: RESULTS - Ku=%.3f Tu=%.3fs Amp=%.2fdeg | PROPOSED: Kp=%.5f Ki=%.5f Kd=%.5f",
+           (double)m_result.ultimate_gain, (double)(m_result.ultimate_period_ms / 1000.0f),
+           (double)m_result.oscillation_amplitude, (double)m_result.Kp, (double)m_result.Ki, (double)m_result.Kd);
+  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
 }
 
 float AutotuneController::update(float pitch_deg, float dt_sec) {
@@ -52,9 +60,24 @@ float AutotuneController::update(float pitch_deg, float dt_sec) {
 
   m_elapsed_sec += dt_sec;
 
+  // Helper: compute relay output with deadband (NO RAMP for immediate reaction)
+  auto computeRelayOutput = [&](float angle_deg) {
+    float abs_ang = fabsf(angle_deg);
+    // Deadband: no output when within threshold
+    if (abs_ang <= m_config.deadband) {
+      return 0.0f;
+    }
+    // For a balancer: if pitch > 0 (leaning forward), wheels must move FORWARD (+amp)
+    float amp = m_config.relay_amplitude;
+    return (angle_deg > 0.0f) ? amp : -amp;
+  };
+
   // Safety check: abort if pitch too large
   if (fabsf(pitch_deg) > m_config.max_pitch_abort) {
-    fail("Pitch exceeded safety limit");
+    char fail_msg[64];
+    snprintf(fail_msg, sizeof(fail_msg), "Pitch exceeded safety limit (%.1f > %.1f)", 
+             (double)fabsf(pitch_deg), (double)m_config.max_pitch_abort);
+    fail(fail_msg);
     return 0.0f;
   }
 
@@ -64,26 +87,15 @@ float AutotuneController::update(float pitch_deg, float dt_sec) {
     return 0.0f;
   }
 
-  // Helper: compute relay output with deadband (NO RAMP for immediate reaction)
-  auto computeRelayOutput = [&](float angle_deg) {
-    float abs_ang = fabsf(angle_deg);
-    // Deadband: no output when within threshold
-    if (abs_ang <= m_config.deadband) {
-      return 0.0f;
-    }
-    // Immediate full amplitude
-    float amp = m_config.relay_amplitude;
-    return (angle_deg > 0.0f) ? -amp : amp;
-  };
-
   // State machine
   switch (m_state) {
   case State::WAITING_START:
-    // Apply relay (with deadband + ramp) and wait for first zero crossing
+    // Apply relay and wait for first zero crossing
     m_current_output = computeRelayOutput(pitch_deg);
 
     if (detectZeroCrossing(pitch_deg)) {
       m_state = State::COLLECTING;
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: First zero-crossing detected, collecting cycles...");
     }
     break;
 
@@ -97,6 +109,7 @@ float AutotuneController::update(float pitch_deg, float dt_sec) {
     // Check if we have enough data
     if (hasEnoughData()) {
       m_state = State::ANALYZING;
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "AUTOTUNE: Data collection complete. Analyzing...");
     }
     break;
 
@@ -126,6 +139,11 @@ bool AutotuneController::detectZeroCrossing(float pitch_deg) {
   if (crossed && m_data.num_crossings < MAX_SAMPLES) {
     m_data.crossing_times_sec[m_data.num_crossings] = m_elapsed_sec;
     m_data.num_crossings++;
+    
+    char msg[64];
+    snprintf(msg, sizeof(msg), "AUTOTUNE: Crossing %d/%d recorded at %.2fs", 
+             m_data.num_crossings, m_config.min_cycles * 2, (double)m_elapsed_sec);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
   }
 
   m_data.last_pitch = pitch_deg;
@@ -136,16 +154,24 @@ bool AutotuneController::detectZeroCrossing(float pitch_deg) {
 void AutotuneController::recordPeak(float pitch_deg) {
   float current_abs = fabsf(pitch_deg);
 
-  if (m_data.peak_increasing && current_abs < m_data.last_abs_pitch) {
-    // Peak detected
-    if (m_data.num_peaks < MAX_SAMPLES && m_data.peak_candidate > m_config.deadband) {
+  // Peak detection logic: looking for the local maximum of the absolute pitch
+  if (m_data.peak_increasing && current_abs < (m_data.last_abs_pitch - m_config.hysteresis)) {
+    // Local peak confirmed by a drop greater than hysteresis
+    if (m_data.num_peaks < MAX_SAMPLES && m_data.peak_candidate > (m_config.deadband * 2.0f)) {
       m_data.peak_values[m_data.num_peaks] = m_data.peak_candidate;
+      
+      char msg[64];
+      snprintf(msg, sizeof(msg), "AUTOTUNE: Peak %d/%d detected: %.2f deg", 
+               m_data.num_peaks + 1, m_config.min_cycles, (double)m_data.peak_candidate);
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
+      
       m_data.num_peaks++;
     }
     m_data.peak_increasing = false;
-  } else if (!m_data.peak_increasing && current_abs > m_data.last_abs_pitch) {
+  } else if (!m_data.peak_increasing && current_abs > (m_data.last_abs_pitch + m_config.hysteresis)) {
+    // Signal is increasing again
     m_data.peak_increasing = true;
-    m_data.peak_candidate = 0.0f; // reset for next peak
+    m_data.peak_candidate = 0.0f; 
   }
 
   if (current_abs > m_data.peak_candidate) {
@@ -186,11 +212,12 @@ void AutotuneController::computeGains() {
   float Ku = (4.0f * m_config.relay_amplitude) / (M_PI * amplitude);
 
   // Tyreus-Luyben tuning rules (more conservative than Ziegler-Nichols)
-  // Kp = 0.45 * Ku
-  // Ti = 2.2 * Tu  =>  Ki = Kp / Ti = 0.45*Ku / (2.2*Tu)
-  // Td = Tu / 6.3  =>  Kd = Kp * Td = 0.45*Ku * Tu/6.3
+  // Kp = Ku / 2.2 (or 0.45*Ku)
+  // Ti = 2.2 * Tu
+  // Td = Tu / 6.3
   float Kp = 0.45f * Ku;
-  float Ki = 0.0f; // Start with no integral term
+  float Ti = 2.2f * Tu_sec;
+  float Ki = Kp / Ti; // Calculate integral term
   float Kd = Kp * Tu_sec / 6.3f;
 
   // Store results
@@ -228,11 +255,16 @@ float AutotuneController::computeAverageAmplitude() const {
     return 0.0f;
   }
 
-  // Average the peak amplitudes (zero-to-peak)
+  // To improve stability, we ignore the first 2 peaks if we have enough data,
+  // as the initial oscillations are often much larger or smaller than the steady state.
+  uint8_t start_idx = (m_data.num_peaks > 4) ? 2 : 0;
   float sum = 0.0f;
-  for (uint8_t i = 0; i < m_data.num_peaks; i++) {
+  uint8_t count = 0;
+  
+  for (uint8_t i = start_idx; i < m_data.num_peaks; i++) {
     sum += m_data.peak_values[i];
+    count++;
   }
 
-  return sum / m_data.num_peaks;
+  return (count > 0) ? (sum / count) : 0.0f;
 }

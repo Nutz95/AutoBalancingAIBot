@@ -72,6 +72,7 @@ def main():
     p = argparse.ArgumentParser()
     p.add_argument('--host')
     p.add_argument('--port', type=int, default=2333)
+    p.add_argument('--name', help='Base name for output files (e.g. "capture10" will create .txt, .csv, .png)')
     p.add_argument('-o', '--out', default='balancer_capture.txt')
     p.add_argument('--csv', default='balancer_capture.csv')
     p.add_argument('--png', default='balancer_capture.png')
@@ -80,6 +81,11 @@ def main():
     p.add_argument('--no-ffill', dest='ffill', action='store_false', help='Disable forward-fill')
     p.set_defaults(ffill=True)
     args = p.parse_args()
+
+    if args.name:
+        args.out = f"{args.name}.txt"
+        args.csv = f"{args.name}.csv"
+        args.png = f"{args.name}.png"
 
     rows = {'drive': defaultdict(dict), 'bal': defaultdict(dict), 'setdrive': defaultdict(dict), 'imu': dict()}
     gain_info = "Unknown Gains"
@@ -259,10 +265,10 @@ def main():
                     gyro_pitch.append(val)
             df['gyro_pitch_est'] = gyro_pitch
 
-        plt.figure(figsize=(12, 20))
+        plt.figure(figsize=(12, 24))
         
         # Subplot 1: Pitch
-        ax1 = plt.subplot(6, 1, 1)
+        ax1 = plt.subplot(7, 1, 1)
         ax1.plot(t_axis, df['pitch_setpoint'], 'r--', label='Setpoint', alpha=0.7)
         ax1.plot(t_axis, df['pitch'], 'b-', label='Filtered Pitch (deg)', linewidth=2)
         if 'gyro_pitch_est' in df.columns:
@@ -280,7 +286,7 @@ def main():
         ax1.set_title(f'Balancer Pitch stability ({filter_info} | {gain_info})')
 
         # Subplot 2: PID Components (Decomposition)
-        ax2 = plt.subplot(6, 1, 2, sharex=ax1)
+        ax2 = plt.subplot(7, 1, 2, sharex=ax1)
         if 'p_term' in df.columns:
             ax2.plot(t_axis, df['p_term'], label='P contribution (Kp*err)', alpha=0.8)
         if 'iterm' in df.columns:
@@ -293,7 +299,7 @@ def main():
         ax2.grid(True)
 
         # Subplot 3: Loop Frequency and Latency
-        ax3 = plt.subplot(6, 1, 3, sharex=ax1)
+        ax3 = plt.subplot(7, 1, 3, sharex=ax1)
         if 'lp_hz' in df.columns:
             ax3.plot(t_axis, df['lp_hz'], 'r-', label='Loop Freq (Hz)', alpha=0.7)
             ax3.axhline(y=500.0, color='k', linestyle=':', alpha=0.3)
@@ -310,7 +316,7 @@ def main():
         ax3.grid(True)
 
         # Subplot 4: Total PID and Motor Command
-        ax4 = plt.subplot(6, 1, 4, sharex=ax1)
+        ax4 = plt.subplot(7, 1, 4, sharex=ax1)
         if 'pid_out' in df.columns:
             ax4.plot(t_axis, df['pid_out'], 'g-', label='Total PID Out', linewidth=1.5)
         if 'cmd' in df.columns:
@@ -320,7 +326,7 @@ def main():
         ax4.grid(True)
 
         # Subplot 5: Wheel Encoders
-        ax5 = plt.subplot(6, 1, 5, sharex=ax1)
+        ax5 = plt.subplot(7, 1, 5, sharex=ax1)
         if 'encL' in df.columns:
             ax5.plot(t_axis, df['encL'], 'm-', label='Enc Left', alpha=0.8)
         if 'encR' in df.columns:
@@ -330,15 +336,26 @@ def main():
         ax5.legend(loc='upper right')
         ax5.grid(True)
 
-        # Subplot 6: IMU (Accel/Gyro)
-        ax6 = plt.subplot(6, 1, 6, sharex=ax1)
-        ax6.plot(t_axis, df['gx'], label='Gyro X', alpha=0.5)
-        ax6.plot(t_axis, df['gy'], label='Gyro Y', alpha=0.5)
-        ax6.plot(t_axis, df['ax'], label='Accel X', alpha=0.5)
-        ax6.set_ylabel('IMU Raw')
-        ax6.set_xlabel('Time (s)')
+        # Subplot 6: Yaw Stability (Experimental)
+        ax6 = plt.subplot(7, 1, 6, sharex=ax1)
+        if 'gz' in df.columns:
+            ax6.plot(t_axis, df['gz'], 'r-', label='Gyro Z (Yaw Rate)', alpha=0.8)
+        if 'ay' in df.columns:
+            ax6.plot(t_axis, df['ay'], 'b-', label='Accel Y (Lateral)', alpha=0.6)
+        ax6.set_ylabel('Yaw/Lat')
+        ax6.set_title('Yaw and Lateral Stability')
         ax6.legend(loc='upper right')
         ax6.grid(True)
+
+        # Subplot 7: IMU Raw Pitch-Axis
+        ax7 = plt.subplot(7, 1, 7, sharex=ax1)
+        ax7.plot(t_axis, df['gx'], label='Gyro X (Roll)', alpha=0.3)
+        ax7.plot(t_axis, df['gy'], label='Gyro Y (Pitch)', alpha=0.8)
+        ax7.plot(t_axis, df['ax'], label='Accel X (Linear)', alpha=0.6)
+        ax7.set_ylabel('IMU Raw')
+        ax7.set_xlabel('Time (s)')
+        ax7.legend(loc='upper right')
+        ax7.grid(True)
 
         plt.tight_layout()
         plt.savefig(args.png)
