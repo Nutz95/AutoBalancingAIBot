@@ -28,11 +28,17 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
                                  int32_t enc_l_ticks, int32_t enc_r_ticks,
                                  float v_enc_ticks_s) {
     
+    // Low-pass filter the pitch rate to reduce high-frequency vibrations in motor commands
+    // Alpha 0.2 at 1000Hz gives a cutoff of approx 35Hz (much smoother for mechanical stability).
+    static float lp_pitch_rate = 0.0f;
+    lp_pitch_rate = (lp_pitch_rate * 0.8f) + (pitch_rate_rads * 0.2f);
+
     // 1. Position tracking (LQR state x)
     int32_t avg_enc = (enc_l_ticks + enc_r_ticks) / 2;
     if (needs_reset_enc_) {
         enc_dist_zeropoint_ = avg_enc;
         needs_reset_enc_ = false;
+        lp_pitch_rate = pitch_rate_rads;
     }
     float dist_err = (float)(avg_enc - enc_dist_zeropoint_);
 
@@ -41,7 +47,9 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
     yaw_error_accum_rad_ += (yaw_rate_rads - w_target_yaw_req_) * dt_s;
     
     // Simple PD for steering (Negative feedback to resist turning)
-    float steer = -((yaw_error_accum_rad_ * BALANCER_DEFAULT_K_YAW) + (yaw_rate_rads * BALANCER_DEFAULT_K_YAW_RATE));
+    // Adding a small deadband to yaw_rate to stop jittery tiny corrections
+    float filtered_yaw_rate = (fabsf(yaw_rate_rads) < 0.01f) ? 0.0f : yaw_rate_rads;
+    float steer = -((yaw_error_accum_rad_ * BALANCER_DEFAULT_K_YAW) + (filtered_yaw_rate * BALANCER_DEFAULT_K_YAW_RATE));
 
     // 3. Adaptive Trim (Navbot Pillar)
     if (cfg_.adaptive_trim_enabled) {
@@ -50,7 +58,7 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
 
     // Convert to degrees for gain application (standard for this project)
     float theta_err_deg = (pitch_rad - pitch_trim_rad_) * (180.0f / M_PI);
-    float pitch_rate_deg = pitch_rate_rads * (180.0f / M_PI);
+    float pitch_rate_deg = lp_pitch_rate * (180.0f / M_PI);
     
     // 4. Control Law: u = Kp*theta + Kg*gyro - Kd*dist - Ks*speed
     float term_angle = cfg_.k_pitch * theta_err_deg;

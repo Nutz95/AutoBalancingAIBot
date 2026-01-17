@@ -9,7 +9,7 @@
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_ALPHA
-#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.0001f  // Very slow adaptation (10 ticks/s drift = ~0.05 deg/s trim)
+#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.001f  // Faster adaptation (10x from previous)
 #endif
 
 // --- Cascaded LQR Gains ---
@@ -22,11 +22,11 @@
 #endif
 
 #ifndef BALANCER_DEFAULT_K_DIST
-#define BALANCER_DEFAULT_K_DIST 0.000001f   // Scaled for high resolution ticks
+#define BALANCER_DEFAULT_K_DIST 0.00001f   // Further increased to stop movement
 #endif
 
 #ifndef BALANCER_DEFAULT_K_SPEED
-#define BALANCER_DEFAULT_K_SPEED 0.00001f    // Scaled for high resolution ticks/s
+#define BALANCER_DEFAULT_K_SPEED 0.0001f    // Further increased to add damping
 #endif
 
 // --- Yaw / Heading Control ---

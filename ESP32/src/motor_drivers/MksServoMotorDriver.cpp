@@ -149,10 +149,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     // We use the absolute timestamp from esp_timer for better dt consistency
                     float s = state.speedEstimator.update(corrected_p, esp_timer_get_time());
 
-                    if (MKS_SERVO_ENCODER_UPDATE_HZ > 100 && (now % 500 == 0)) {
-                         LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: speed_dbg ID 0x%02X L=%ld v=%.1f\n", state.id, (long)corrected_p, s);
-                    }
-
+                    async.speed_value.store(s);
                     async.encoder_value.store(corrected_p);
                     async.encoder_dirty.store(true);
                     async.last_telemetry_ms = now;
@@ -281,8 +278,8 @@ int32_t MksServoMotorDriver::readEncoder(MotorSide side) {
 }
 
 float MksServoMotorDriver::readSpeed(MotorSide side) {
-    // Return velocity estimator result
-    return (side == MotorSide::LEFT) ? m_left.speedEstimator.get() : m_right.speedEstimator.get();
+    // Return velocity estimator result from atomic async state (stable core transfer)
+    return (side == MotorSide::LEFT) ? m_left_async.speed_value.load() : m_right_async.speed_value.load();
 }
 
 void MksServoMotorDriver::resetSpeedEstimator() {

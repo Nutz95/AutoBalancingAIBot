@@ -108,6 +108,7 @@ private:
         std::atomic<float> target_speed{0.0f};
         std::atomic<bool> speed_dirty{false};
         std::atomic<int32_t> encoder_value{0};
+        std::atomic<float> speed_value{0.0f};
         std::atomic<bool> encoder_dirty{false};
         std::atomic<uint32_t> last_latency_us{0};
         std::atomic<bool> last_reported_enabled{true}; // Init to true to force torque sync at boot

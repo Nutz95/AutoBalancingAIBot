@@ -441,15 +441,28 @@ def main():
         ax4.legend(loc='upper right')
         ax4.grid(True)
 
-        # Subplot 5: Wheel Encoders
+        # Subplot 5: Navigation Analysis (Linear Distance & Rotation)
         ax5 = plt.subplot(7, 1, 5, sharex=ax1)
-        if 'encL' in df.columns:
-            ax5.plot(t_axis, df['encL'], 'm-', label='Enc Left', alpha=0.8)
-        if 'encR' in df.columns:
-            ax5.plot(t_axis, df['encR'], 'k-', label='Enc Right', alpha=0.8)
-        ax5.set_ylabel('Ticks')
-        ax5.set_title('Encoder Position (Sliding/Drift)')
-        ax5.legend(loc='upper right')
+        if 'encL' in df.columns and 'encR' in df.columns:
+            linear_pos = (df['encL'] + df['encR']) / 2.0
+            rotation = (df['encL'] - df['encR']) / 2.0  # Proxy for heading
+            # Center them to start at 0 for easier reading
+            linear_pos -= linear_pos.iloc[0]
+            rotation -= rotation.iloc[0]
+            
+            ax5.plot(t_axis, linear_pos, 'k-', label='Linear Position (Avg Ticks)', linewidth=1.5)
+            ax5.set_ylabel('Linear (Ticks)')
+            
+            ax5_twin = ax5.twinx()
+            ax5_twin.plot(t_axis, rotation, 'c--', label='Rotation/Yaw (Delta Ticks)', alpha=0.6)
+            ax5_twin.set_ylabel('Rotation (Ticks)', color='c')
+            
+            # Combine legends
+            lines, labels = ax5.get_legend_handles_labels()
+            lines2, labels2 = ax5_twin.get_legend_handles_labels()
+            ax5.legend(lines + lines2, labels + labels2, loc='upper left')
+            
+        ax5.set_title('Navigation Analysis (Forward/Backward & Yaw Orientation)')
         ax5.grid(True)
 
         # Subplot 6: Yaw Stability and Heading Hold
