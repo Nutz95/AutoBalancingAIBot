@@ -29,9 +29,10 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
                                  float v_enc_ticks_s) {
     
     // Low-pass filter the pitch rate to reduce high-frequency vibrations in motor commands
-    // Alpha 0.2 at 1000Hz gives a cutoff of approx 35Hz (much smoother for mechanical stability).
+    // Alpha BALANCER_PITCH_RATE_LPF_ALPHA at 1000Hz gives a cutoff of approx 35Hz (much smoother for mechanical stability).
     static float lp_pitch_rate = 0.0f;
-    lp_pitch_rate = (lp_pitch_rate * 0.8f) + (pitch_rate_rads * 0.2f);
+    const float alpha = BALANCER_PITCH_RATE_LPF_ALPHA;
+    lp_pitch_rate = (lp_pitch_rate * (1.0f - alpha)) + (pitch_rate_rads * alpha);
 
     // 1. Position tracking (LQR state x)
     int32_t avg_enc = (enc_l_ticks + enc_r_ticks) / 2;
@@ -48,7 +49,7 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
     
     // Simple PD for steering (Negative feedback to resist turning)
     // Adding a small deadband to yaw_rate to stop jittery tiny corrections
-    float filtered_yaw_rate = (fabsf(yaw_rate_rads) < 0.01f) ? 0.0f : yaw_rate_rads;
+    float filtered_yaw_rate = (fabsf(yaw_rate_rads) < BALANCER_YAW_DEADBAND) ? 0.0f : yaw_rate_rads;
     float steer = -((yaw_error_accum_rad_ * BALANCER_DEFAULT_K_YAW) + (filtered_yaw_rate * BALANCER_DEFAULT_K_YAW_RATE));
 
     // 3. Adaptive Trim (Navbot Pillar)
@@ -66,10 +67,10 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
     float term_dist  = -cfg_.k_dist  * dist_err;
     float term_speed = -cfg_.k_speed * (v_enc_ticks_s - v_target_speed_);
 
-    // Safety: Limit the influence of position/speed terms to prevent them
-    // from overpowering the pitch stability during a fall.
-    term_dist = std::max(-0.2f, std::min(0.2f, term_dist));
-    term_speed = std::max(-0.3f, std::min(0.3f, term_speed));
+    // Safety: Increase limits to allow the robot to fight back more strongly against drift.
+    // Limits are now defined in lqr_config.h to avoid "magic numbers".
+    term_dist = std::max(-BALANCER_LQR_SAT_DIST, std::min(BALANCER_LQR_SAT_DIST, term_dist));
+    term_speed = std::max(-BALANCER_LQR_SAT_SPEED, std::min(BALANCER_LQR_SAT_SPEED, term_speed));
 
     float u = term_angle + term_gyro + term_dist + term_speed;
 

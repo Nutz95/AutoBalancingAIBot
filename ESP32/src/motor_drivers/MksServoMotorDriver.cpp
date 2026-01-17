@@ -153,6 +153,13 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     async.encoder_value.store(corrected_p);
                     async.encoder_dirty.store(true);
                     async.last_telemetry_ms = now;
+
+                    // Diagnostic: Log non-zero speed once in a while to verify atomic store
+                    static uint32_t last_speed_check_ms = 0;
+                    if (fabsf(s) > 0.1f && (now - last_speed_check_ms > 5000)) {
+                        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ID 0x%02X speed_ticks_s = %.2f\n", state.id, (double)s);
+                        last_speed_check_ms = now;
+                    }
                 }
             }
             xSemaphoreGiveRecursive(mutex);

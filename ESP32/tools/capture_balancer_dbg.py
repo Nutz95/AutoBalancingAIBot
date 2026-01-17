@@ -15,6 +15,7 @@ import re
 import socket
 import sys
 import time
+import math
 from collections import defaultdict
 
 import numpy as np
@@ -266,6 +267,9 @@ def main():
 
     # Extra stats calculation for display
     stats_text = ""
+    # Ticks to meters scale: (math.pi * 0.067) / 51200.0 (67mm wheel)
+    t2m = (math.pi * 0.067) / 51200.0
+    
     try:
         valid_pitch = df['pitch'].dropna()
         if not valid_pitch.empty:
@@ -285,8 +289,9 @@ def main():
         if 'encL' in df.columns and 'encR' in df.columns:
             start_enc = (df['encL'].iloc[0] + df['encR'].iloc[0]) / 2
             end_enc = (df['encL'].iloc[-1] + df['encR'].iloc[-1]) / 2
-            drift = end_enc - start_enc
-            stats_text += f"Avg Encoder Drift: {drift:.1f} ticks\n"
+            drift_ticks = end_enc - start_enc
+            drift_m = drift_ticks * t2m
+            stats_text += f"Avg Encoder Drift: {drift_ticks:.1f} ticks ({drift_m:.3f} m)\n"
             
         if strategy_mode == 'LQR' and 'iterm' in df.columns:
             final_trim = df['iterm'].ffill().iloc[-1]
@@ -451,15 +456,27 @@ def main():
             rotation -= rotation.iloc[0]
             
             ax5.plot(t_axis, linear_pos, 'k-', label='Linear Position (Avg Ticks)', linewidth=1.5)
-            ax5.set_ylabel('Linear (Ticks)')
+            ax5.set_ylabel('Linear (Ticks)', color='k')
             
-            ax5_twin = ax5.twinx()
-            ax5_twin.plot(t_axis, rotation, 'c--', label='Rotation/Yaw (Delta Ticks)', alpha=0.6)
-            ax5_twin.set_ylabel('Rotation (Ticks)', color='c')
+            # Add secondary scale for meters
+            # Ticks to meters scale: (math.pi * 0.067) / 51200.0 (67mm wheel)
+            t2m = (math.pi * 0.067) / 51200.0
+            ax5_m = ax5.twinx()
+            ax5_m.set_ylabel('Linear (Meters)', color='gray')
+            # Set the limits of the meter axis proportional to the ticks axis
+            y1_min, y1_max = ax5.get_ylim()
+            ax5_m.set_ylim(y1_min * t2m, y1_max * t2m)
+            ax5_m.tick_params(axis='y', labelcolor='gray')
+
+            ax5_rot = ax5.twinx()
+            ax5_rot.spines['right'].set_position(('outward', 60))
+            ax5_rot.plot(t_axis, rotation, 'c--', label='Rotation/Yaw (Delta Ticks)', alpha=0.6)
+            ax5_rot.set_ylabel('Rotation (Ticks)', color='c')
+            ax5_rot.tick_params(axis='y', labelcolor='c')
             
             # Combine legends
             lines, labels = ax5.get_legend_handles_labels()
-            lines2, labels2 = ax5_twin.get_legend_handles_labels()
+            lines2, labels2 = ax5_rot.get_legend_handles_labels()
             ax5.legend(lines + lines2, labels + labels2, loc='upper left')
             
         ax5.set_title('Navigation Analysis (Forward/Backward & Yaw Orientation)')
