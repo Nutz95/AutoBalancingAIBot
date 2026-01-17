@@ -1,6 +1,7 @@
 #include "imu_consumer_helpers.h"
 #include "SystemTasks.h" // For ENABLE_DEBUG_LOGS
 #include "../config/imu_filter_config.h"
+#include "../config/balancer_config.h"
 #include "../include/balancer_controller.h"
 #include "imu_calibration.h"
 #include "imu_mapping.h"
@@ -342,22 +343,37 @@ void requestWarmup(ConsumerState &state, float seconds, float sample_rate_hz) {
 void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               float fused_pitch_rate_local, float left_cmd,
                               float right_cmd, const float accel_robot[3], 
-                              const float gyro_robot[3]) {
+                              const float gyro_robot[3], float freq_hz, uint32_t lat_us) {
+  static uint32_t last_log_ms = 0;
+  uint32_t now = millis();
+  
   if (!abbot::log::isChannelEnabled(abbot::log::CHANNEL_BALANCER)) {
     return;
   }
+
+  // Throttle to avoid serial saturation which causes loop frequency drops
+  if (now - last_log_ms < BALANCER_DEBUG_LOG_INTERVAL_MS) {
+    return;
+  }
+  last_log_ms = now;
+
   float pitch_deg = radToDeg(fused_pitch_local);
-  float pitch_rate_deg = radToDeg(fused_pitch_rate_local);
   
   // Format compatible with capture_balancer_dbg.py
-  // We map: pid_in -> pitch, pid_out -> cmd, iterm -> 0 (or adaptive trim)
+  // We map: pid_in -> pitch, pid_out -> cmd, iterm -> adaptive trim or integrator
   float avg_cmd = (left_cmd + right_cmd) / 2.0f;
+  float steer = (left_cmd - right_cmd) / 2.0f;
+  
+  // Get detailed diagnostics from controller
+  abbot::balancer::controller::Diagnostics diag = {};
+  abbot::balancer::controller::getDiagnostics(diag);
   
   LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
-             "BALANCER_DBG t=%lums pitch=%.3fdeg pid_in=%.3fdeg pid_out=%.3f iterm=0.000 cmd=%.3f lat=1000us ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f\n",
-             (unsigned long)ts_ms, pitch_deg, pitch_deg, avg_cmd, avg_cmd,
-             accel_robot[0], accel_robot[1], accel_robot[2], 
-             gyro_robot[0], gyro_robot[1], gyro_robot[2]);
+             "BALANCER_DBG t=%lums pitch=%.3fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.3f cmd=%.3f steer=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f lp_hz=%.1f encL=%ld encR=%ld termA=%.4f termG=%.4f termD=%.4f termS=%.4f\n",
+             (unsigned long)ts_ms, pitch_deg, pitch_deg, avg_cmd, diag.iterm, avg_cmd, steer,
+             (unsigned long)lat_us, accel_robot[0], accel_robot[1], accel_robot[2], 
+             gyro_robot[0], gyro_robot[1], gyro_robot[2], freq_hz, (long)diag.enc_l, (long)diag.enc_r,
+             diag.lqr_angle, diag.lqr_gyro, diag.lqr_dist, diag.lqr_speed);
 }
 
 bool measureAndLogImuFrequency(ImuFrequencyMeasurement &freq_state,

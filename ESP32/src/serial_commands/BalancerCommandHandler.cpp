@@ -1,6 +1,7 @@
 #include "units.h"
 #include "serial_commands/BalancerCommandHandler.h"
 #include "balancer_controller.h"
+#include "balancing/BalancingManager.h"
 #include "logging.h"
 #include "imu_fusion.h"
 #include "filter_manager.h"
@@ -52,13 +53,24 @@ BalancerCommandHandler::BalancerCommandHandler(IFusionService* fusionService)
     });
 
     // Submenu: CASCADED_LQR settings
-    m_menu->addEntry(20, "BALANCE LQR GAINS [<kp> <kg> <kd> <ks>]", [](const String &p) {
+    m_menu->addEntry(20, "BALANCE LQR GAINS [<kp> <kg> <kd> <ks>|RESET]", [](const String &p) {
         String s = p; s.trim();
         if (s.length() == 0) {
             abbot::balancer::controller::CascadedGains g;
             abbot::balancer::controller::getCascadedGains(g);
             LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: Kp_pitch=%.6f Kg_gyro=%.6f Kd_dist=%.6f Ks_speed=%.6f\n", 
                        (double)g.k_pitch, (double)g.k_gyro, (double)g.k_dist, (double)g.k_speed);
+        } else if (s.equalsIgnoreCase("RESET")) {
+            auto strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
+            if (strategy) {
+                strategy->resetToDefaults();
+                abbot::balancer::controller::CascadedGains g;
+                abbot::balancer::controller::getCascadedGains(g);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: Gains reset to defaults (Kp=%.4f Kg=%.4f Kd=%.4f Ks=%.4f)\n", 
+                           (double)g.k_pitch, (double)g.k_gyro, (double)g.k_dist, (double)g.k_speed);
+            } else {
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: Error - Strategy not found");
+            }
         } else {
             float kp, kg, kd, ks;
             if (sscanf(s.c_str(), "%f %f %f %f", &kp, &kg, &kd, &ks) == 4) {
@@ -180,12 +192,26 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
             abbot::balancer::controller::getCascadedGains(g);
             LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: Kp_pitch=%.6f Kg_gyro=%.6f Kd_dist=%.6f Ks_speed=%.6f\n", 
                        (double)g.k_pitch, (double)g.k_gyro, (double)g.k_dist, (double)g.k_speed);
+        } else if (p.equalsIgnoreCase("RESET")) {
+            auto strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
+            if (strategy) {
+                strategy->resetToDefaults();
+                abbot::balancer::controller::CascadedGains g;
+                abbot::balancer::controller::getCascadedGains(g);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: Gains reset to defaults (Kp=%.4f Kg=%.4f Kd=%.4f Ks=%.4f)\n", 
+                           (double)g.k_pitch, (double)g.k_gyro, (double)g.k_dist, (double)g.k_speed);
+            } else {
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: Error - Strategy not found");
+            }
         } else {
             float kp, kg, kd, ks;
             if (sscanf(p.c_str(), "%f %f %f %f", &kp, &kg, &kd, &ks) == 4) {
                 abbot::balancer::controller::CascadedGains g = {kp, kg, kd, ks};
                 abbot::balancer::controller::setCascadedGains(g);
-                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: gains updated");
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: gains updated (Kp=%.6f Kg=%.6f Kd=%.6f Ks=%.6f)\n", 
+                           (double)kp, (double)kg, (double)kd, (double)ks);
+            } else {
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE LQR GAINS <kp> <kg> <kd> <ks> | RESET");
             }
         }
         return true;

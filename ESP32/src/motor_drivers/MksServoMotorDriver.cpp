@@ -49,6 +49,7 @@ void MksServoMotorDriver::initMotorDriver() {
     }
 
     // Ensure motors are initially disabled and stopped for safety
+    // This will now trigger an explicit Torque OFF packet because last_reported_enabled=true initially.
     disableMotors();
 
     // Create background tasks for each motor bus on Core 0.
@@ -73,42 +74,51 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
     HardwareSerial& serial = (side == MotorSide::LEFT) ? Serial2 : Serial1;
     SemaphoreHandle_t mutex = (side == MotorSide::LEFT) ? m_leftBusMutex : m_rightBusMutex;
 
-    const uint32_t telemetry_interval_ms = BALANCER_ENCODER_UPDATE_MS > 0 ? BALANCER_ENCODER_UPDATE_MS : 50;
+    const uint32_t telemetry_interval_ms = (MKS_SERVO_ENCODER_UPDATE_HZ > 0) ? (1000 / MKS_SERVO_ENCODER_UPDATE_HZ) : 10;
     
     while (true) {
-        // Wait for a notification (new command) or timeout (telemetry)
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(10)); 
+        // High reactivity wait (1ms)
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1)); 
 
-        // Use the bus mutex to avoid conflicts with manual commands (serial console)
-        if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+        if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
             bool current_enabled = m_enabled;
             bool enabled_changed = (current_enabled != async.last_reported_enabled.load());
             bool speed_dirty = async.speed_dirty.exchange(false);
             
-            // 1. Handle Torque State Changes (Enable/Disable torque)
-            // We handle this inside the task to avoid bus collisions with speed commands.
+            // 1. Handle Torque State Changes
             if (enabled_changed) {
                 uint8_t data = current_enabled ? 0x01 : 0x00;
-                // Send Torque command. We repeat it twice for redundancy.
                 sendFunctionCommand(state.id, 0xF3, &data, 1);
-                delay(10);
-                sendFunctionCommand(state.id, 0xF3, &data, 1);
-                
                 async.last_reported_enabled.store(current_enabled);
-                // After enabling torque, always force a speed command update
                 speed_dirty = true;
             }
 
-            // 2. Send Speed Command if dirty or state just changed
-            if (speed_dirty || !current_enabled) {
+            // 2. Send Speed Command
+            if (speed_dirty || (enabled_changed && current_enabled)) {
                 float cmd = current_enabled ? async.target_speed.load() : 0.0f;
-                sendSpeedCommand(state.id, cmd, state.invert);
+                // SPEED ACK: FALSE. This restores < 200us latency for high frequency control.
+                sendSpeedCommand(state.id, cmd, state.invert, false); 
+                
+                // Fixed delay after command to ensure it's processed and clear the bus
+                // before any subsequent encoder reads.
+                if (MKS_SERVO_BUS_QUIET_US > 0) {
+                    delayMicroseconds(MKS_SERVO_BUS_QUIET_US);
+                }
+            } else if (!current_enabled) {
+                // Occasional safety zeroing
+                static uint32_t last_zero_ms = 0;
+                if (millis() - last_zero_ms > 200) {
+                    sendSpeedCommand(state.id, 0.0f, state.invert, false);
+                    last_zero_ms = millis();
+                }
             }
 
-            // 3. Telemetry if time
+            // 3. Telemetry read
             uint32_t now = millis();
             if (now - async.last_telemetry_ms >= telemetry_interval_ms) {
-                // Read encoder using local protocol (0x31)
+                // Clear any leftover ACKs from the speed commands
+                while (serial.available() > 0) { serial.read(); }
+
                 uint8_t readFrame[4];
                 readFrame[0] = 0xFA;
                 readFrame[1] = state.id;
@@ -116,35 +126,32 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                 readFrame[3] = calculateChecksum(readFrame, 3);
                 writeFrame(serial, readFrame, 4);
 
-                uint8_t response[10]; // Expect 10 bytes for 0x31
-                if (readResponse(serial, state.id, 0x31, response, 10, MKS_SERVO_TIMEOUT_DATA_US)) {
-                    // MKS 0x31: Byte 3 is sign (0 pos, 1 neg), Bytes 5-8 is pos (BE)
+                uint8_t response[10]; 
+                bool got_response = readResponse(serial, state.id, 0x31, response, 10, MKS_SERVO_TIMEOUT_DATA_US);
+                
+                // DEBUG: Log encoder read failures (throttled to avoid spam)
+                static uint32_t last_debug_ms = 0;
+                if (!got_response && (now - last_debug_ms > MKS_SERVO_DIAG_LOG_ms)) {
+                    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, 
+                               "mks_servo: Motor ID 0x%02X encoder read TIMEOUT on %s\n", 
+                               state.id, (side == MotorSide::LEFT) ? "Serial2" : "Serial1");
+                    last_debug_ms = now;
+                }
+                
+                if (got_response) {
                     int32_t p = ((int32_t)response[5] << 24) | ((int32_t)response[6] << 16) | 
                                 ((int32_t)response[7] << 8) | (int32_t)response[8];
-                    if (response[3] == 1) {
-                        p = -p;
-                    }
+                    if (response[3] == 1) { p = -p; }
                     
-                    // Respect inversion logic for odometry consistency
                     int32_t corrected_p = state.invert ? -p : p;
                     
-                    // Outlier rejection: if p is 0 but previous value was significantly non-zero,
-                    // ignore this sample as it's likely a telemetry glitch.
-                    int32_t prev_p = async.encoder_value.load();
-                    if (p == 0 && abs(prev_p) > BALANCER_ENCODER_GLITCH_THRESHOLD) {
-                        // Skip update
-                    } else {
-                        async.encoder_value.store(corrected_p);
-                        async.encoder_dirty.store(true);
-                    }
+                    async.encoder_value.store(corrected_p);
+                    async.encoder_dirty.store(true);
                     async.last_telemetry_ms = now;
                 }
             }
             xSemaphoreGiveRecursive(mutex);
         }
-        
-        // Minor yield to prevent starving Core 0
-        vTaskDelay(1); 
     }
 }
 
@@ -476,7 +483,7 @@ void MksServoMotorDriver::dumpMotorRegisters(uint8_t id) {
 
 // --- Protocol Helpers ---
 
-void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, bool invert) {
+void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, bool invert, bool wait_for_ack) {
     // normalized_speed is [-1.0, 1.0]
     // 1. Handle inversion and direction
     float speedValue = normalized_speed;
@@ -488,16 +495,13 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
     float absoluteSpeed = (speedValue >= 0) ? speedValue : -speedValue;
 
     // 2. Map to 12-bit speed (0-3000 RPM)
-    // Use 32-bit types for calculations before casting to 16-bit
     uint32_t speedValueCalc = (uint32_t)(absoluteSpeed * (float)VELOCITY_MAX_SPEED);
     if (speedValueCalc > 3000) {
         speedValueCalc = 3000;
     }
     uint16_t speedValueUint = (uint16_t)speedValueCalc;
 
-    // Throttled logging for transparency
     MotorState& state = (id == m_left.id) ? m_left : m_right;
-    uint32_t now_ms = millis();
     unsigned long start_us = micros();
 
     SemaphoreHandle_t mutex = getMutexForMotor(id);
@@ -506,7 +510,6 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
     }
 
     // 3. Construct 0xF6 Frame (7 bytes)
-    // [0xFA] [Addr] [0xF6] [Dir/SpeedH] [SpeedL] [Acc] [Checksum]
     uint8_t frame[7];
     frame[0] = 0xFA;
     frame[1] = id;
@@ -517,20 +520,20 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
     frame[6] = calculateChecksum(frame, 6);
 
     HardwareSerial& serial = getSerialForMotor(id);
-
-    // Clear any leftover data in RX buffer before sending
-    while (serial.available() > 0) {
-        serial.read();
-    }
-
     writeFrame(serial, frame, 7);
     
-    // Consume ACK: 0xFB [ID] 0xF6 [Status] [Checksum] (5 bytes)
-    uint8_t ackBuffer[5];
-    // Reduce timeout for critical speed command ACK.
-    // readResponse naturally skips the TX echo because it filters for header 0xFB.
-    bool ackOk = readResponse(serial, id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
-    
+    bool ackOk = true;
+    if (wait_for_ack) {
+        // Consume ACK: 0xFB [ID] 0xF6 [Status] [Checksum] (5 bytes)
+        uint8_t ackBuffer[5];
+        ackOk = readResponse(serial, id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
+        
+        if (ackOk && ackBuffer[3] != 0x01 && (millis() - state.last_ack_log_ms >= 1000)) {
+            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ID 0x%02X command error status=0x%02X\n", id, ackBuffer[3]);
+            state.last_ack_log_ms = millis();
+        }
+    }
+
     unsigned long duration_us = micros() - start_us;
     
     // Update per-motor latency atomic
@@ -538,48 +541,6 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
         m_left_async.last_latency_us.store((uint32_t)duration_us);
     } else {
         m_right_async.last_latency_us.store((uint32_t)duration_us);
-    }
-
-    // Log bus utilization stats occasionally
-    static unsigned long total_bus_time_us = 0;
-    static unsigned int bus_transaction_count = 0;
-    static unsigned long last_stat_log_ms = 0;
-    
-    total_bus_time_us += duration_us;
-    bus_transaction_count++;
-
-    // Guard against overflow
-    if (bus_transaction_count > 10000) {
-        total_bus_time_us = 0;
-        bus_transaction_count = 0;
-    }
-
-    if (now_ms - last_stat_log_ms > 2000) {
-        float avg_us = (bus_transaction_count > 0) ? ((float)total_bus_time_us / bus_transaction_count) : 0.0f;
-        // Estimate utilization: (avg_us * 2 motors * 200Hz loop?) 
-        // We don't know the exact loop rate here, but we can report avg transaction time.
-        // At 400Hz (2.5ms period), if avg_us is 1250us, we are at 50% capacity per motor -> 100% total!
-        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, 
-            "RS485 STATS: Avg Tx Time=%.0f us. Last=%.0f us. (Budget per motor @400Hz ~1200us)\n", 
-            (double)avg_us, (double)duration_us);
-        
-        last_stat_log_ms = now_ms;
-        total_bus_time_us = 0;
-        bus_transaction_count = 0;
-    }
-
-    if (ackOk) {
-        // Only log if status is not success (0x01) and throttle to 1 second
-        if (ackBuffer[3] != 0x01 && (now_ms - state.last_ack_log_ms >= 1000)) {
-            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ID 0x%02X command status=0x%02X (speed=%.3f)\n", 
-                       id, ackBuffer[3], (double)normalized_speed);
-            state.last_ack_log_ms = now_ms;
-        }
-    } else {
-        if (now_ms - state.last_ack_log_ms >= 1000) {
-            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: WARN: No ACK for speed command to ID 0x%02X (took %lu us)\n", id, duration_us);
-            state.last_ack_log_ms = now_ms;
-        }
     }
 
     xSemaphoreGiveRecursive(mutex);

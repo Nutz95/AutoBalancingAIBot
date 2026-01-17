@@ -24,9 +24,9 @@ public:
     StrategyType getActiveType() const { return current_type_; }
 
     // Unified compute call
-    float compute(float pitch_rad, float pitch_rate_rads, float dt_s,
-                int32_t enc_l_ticks, int32_t enc_r_ticks,
-                float v_enc_ticks_s);
+    IBalancingStrategy::Result compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
+                                     int32_t enc_l_ticks, int32_t enc_r_ticks,
+                                     float v_enc_ticks_s);
 
     void reset(float initial_pitch_rad);
     void setDriveSetpoints(float v_norm, float w_norm);

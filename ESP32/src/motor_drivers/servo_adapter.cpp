@@ -68,16 +68,29 @@ public:
   }
   int32_t readEncoder(MotorSide side) override {
     int id = (side == MotorSide::LEFT) ? LEFT_MOTOR_ID : RIGHT_MOTOR_ID;
+    // For servos, readEncoder now triggers a hardware refresh to ensure 
+    // telemetry/control logic sees the actual current position.
+    ::abbot::motor::refreshEncoder(id);
     return ::abbot::motor::readEncoder(id);
+  }
+
+  void readEncodersBoth(int32_t &left, int32_t &right) override {
+    // Refresh both hardware encoders in sequence.
+    ::abbot::motor::refreshEncoder(LEFT_MOTOR_ID);
+    ::abbot::motor::refreshEncoder(RIGHT_MOTOR_ID);
+    left = ::abbot::motor::readEncoder(LEFT_MOTOR_ID);
+    right = ::abbot::motor::readEncoder(RIGHT_MOTOR_ID);
   }
   // 64-bit position helpers are optional; use readEncoder/resetPositionTracking
   // (no-op) 64-bit helpers are not part of the common interface
   void resetPositionTracking() override {
     ::abbot::motor::resetPositionTracking();
+    resetSpeedEstimator();
   }
 
   // Reset internal speed estimator state
   void resetSpeedEstimator() override {
+    abbot::motor::CriticalGuard g(&s_servo_speed_mux);
     m_est[0].reset();
     m_est[1].reset();
   }

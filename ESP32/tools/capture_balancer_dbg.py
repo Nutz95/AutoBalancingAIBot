@@ -24,28 +24,37 @@ import pandas as pd
 DRIVE_RE = re.compile(r"DRIVE DBG t=(?P<t>\d+)ms.*?tgtV=(?P<tgtV>[-0-9.eE]+).*?filtV=(?P<filtV>[-0-9.eE]+).*?pitch_setpoint=(?P<pitch_setpoint>[-0-9.eE]+)deg.*?pitch_setpoint_rate=(?P<pitch_setpoint_rate>[-0-9.eE]+)deg/s.*?pid_in=(?P<pid_in_drive>[-0-9.eE]+)deg.*?pid_rate=(?P<pid_rate_drive>[-0-9.eE]+)deg/s.*?pid_out=(?P<pid_out_drive>[-0-9.eE]+)")
 SETDRIVE_RE = re.compile(r"SETDRIVE: t=(?P<t>\d+)ms v_req=(?P<v_req>[-0-9.eE]+) w_req=(?P<w_req>[-0-9.eE]+)")
 BAL_RE = re.compile(
-    r"BALANCER_DBG t=(?P<t>\d+)ms.*?pitch=(?P<pitch>[-0-9.eE]+)deg.*?pid_in=(?P<pid_in>[-0-9.eE]+)deg.*?pid_out=(?P<pid_out>[-0-9.eE]+).*?iterm=(?P<iterm>[-0-9.eE]+).*?cmd=(?P<cmd>[-0-9.eE]+).*?lat=(?P<lat>\d+)us.*?ax=(?P<ax>[-0-9.eE]+).*?ay=(?P<ay>[-0-9.eE]+).*?az=(?P<az>[-0-9.eE]+).*?gx=(?P<gx>[-0-9.eE]+).*?gy=(?P<gy>[-0-9.eE]+).*?gz=(?P<gz>[-0-9.eE]+)(?:.*?lp_hz=(?P<lp_hz>[-0-9.eE]+))?(?:.*?encL=(?P<encL>[-0-9]+))?(?:.*?encR=(?P<encR>[-0-9]+))?"
+    r"BALANCER_DBG t=(?P<t>\d+)ms.*?pitch=(?P<pitch>[-0-9.eE]+)deg.*?pid_in=(?P<pid_in>[-0-9.eE]+)deg.*?pid_out=(?P<pid_out>[-0-9.eE]+).*?iterm=(?P<iterm>[-0-9.eE]+).*?cmd=(?P<cmd>[-0-9.eE]+)(?:.*?steer=(?P<steer>[-0-9.eE]+))?.*?lat=(?P<lat>\d+)us.*?ax=(?P<ax>[-0-9.eE]+).*?ay=(?P<ay>[-0-9.eE]+).*?az=(?P<az>[-0-9.eE]+).*?gx=(?P<gx>[-0-9.eE]+).*?gy=(?P<gy>[-0-9.eE]+).*?gz=(?P<gz>[-0-9.eE]+)(?:.*?lp_hz=(?P<lp_hz>[-0-9.eE]+))?(?:.*?encL=(?P<encL>[-0-9.eE]+))?(?:.*?encR=(?P<encR>[-0-9.eE]+))?(?:.*?termA=(?P<lqr_angle>[-0-9.eE]+))?(?:.*?termG=(?P<lqr_gyro>[-0-9.eE]+))?(?:.*?termD=(?P<lqr_dist>[-0-9.eE]+))?(?:.*?termS=(?P<lqr_speed>[-0-9.eE]+))?"
 )
-GAIN_RE = re.compile(r"BALANCER: started.*?\(Kp=(?P<kp>[-0-9.eE]+) Ki=(?P<ki>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+)\)")
+GAIN_RE_PID = re.compile(r"BALANCER: started \(PID\) \(Kp=(?P<kp>[-0-9.eE]+) Ki=(?P<ki>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+)\)")
+GAIN_RE_LQR = re.compile(r"BALANCER: started \(LQR\) \(Kp=(?P<kp>[-0-9.eE]+) Kg=(?P<kg>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+) Ks=(?P<ks>[-0-9.eE]+)\)")
 FILTER_RE = re.compile(r"FUSION: active filter=(?P<filter>[A-Za-z0-9_]+)|\[Filter: (?P<filter2>[A-Za-z0-9_]+)\]")
 
+
+def safe_float(v):
+    if v is None:
+        return 0.0
+    try:
+        return float(v)
+    except ValueError:
+        return 0.0
 
 def parse_line(line, rows):
     m = DRIVE_RE.search(line)
     if m:
-        d = {k: float(v) for k, v in m.groupdict().items()}
+        d = {k: safe_float(v) for k, v in m.groupdict().items()}
         t = int(float(d.pop('t')))
         rows['drive'][t].update(d)
         return
     m = SETDRIVE_RE.search(line)
     if m:
-        d = {k: float(v) for k, v in m.groupdict().items()}
+        d = {k: safe_float(v) for k, v in m.groupdict().items()}
         t = int(float(d.pop('t')))
         rows['setdrive'][t].update(d)
         return
     m = BAL_RE.search(line)
     if m:
-        d = {k: float(v) if v is not None else 0.0 for k, v in m.groupdict().items()}
+        d = {k: safe_float(v) for k, v in m.groupdict().items()}
         t = int(float(d.pop('t')))
         rows['bal'][t].update(d)
         return
@@ -53,16 +62,16 @@ def parse_line(line, rows):
     if ',' in line:
         parts = [p.strip() for p in line.split(',')]
         try:
-            t0 = float(parts[0])
+            t0 = safe_float(parts[0])
             # guess layout similar to TUNING CSV: timestamp_ms, pitch_deg, pitch_rad, pitch_rate_deg, pitch_rate_rad, ax,ay,az,gx,gy,gz,...
             if len(parts) >= 11:
                 t = int(t0)
-                ax = float(parts[5])
-                ay = float(parts[6])
-                az = float(parts[7])
-                gx = float(parts[8])
-                gy = float(parts[9])
-                gz = float(parts[10])
+                ax = safe_float(parts[5])
+                ay = safe_float(parts[6])
+                az = safe_float(parts[7])
+                gx = safe_float(parts[8])
+                gy = safe_float(parts[9])
+                gz = safe_float(parts[10])
                 rows['imu'][t] = {'ax': ax, 'ay': ay, 'az': az, 'gx': gx, 'gy': gy, 'gz': gz}
         except Exception:
             pass
@@ -90,6 +99,7 @@ def main():
     rows = {'drive': defaultdict(dict), 'bal': defaultdict(dict), 'setdrive': defaultdict(dict), 'imu': dict()}
     gain_info = "Unknown Gains"
     gains = {'kp': 0.0, 'ki': 0.0, 'kd': 0.0}
+    strategy_mode = 'PID' # Default
     filter_info = "Unknown Filter"
     trim_info = {"val": 0.0, "type": "dynamic", "detected": False}
     
@@ -98,10 +108,16 @@ def main():
         with open(args.from_log, 'r', encoding='utf8', errors='ignore') as f:
             for line in f:
                 line = line.strip()
-                m_gain = GAIN_RE.search(line)
-                if m_gain:
-                    gain_info = f"Kp={m_gain.group('kp')} Ki={m_gain.group('ki')} Kd={m_gain.group('kd')}"
-                    gains = {k: float(m_gain.group(k)) for k in ['kp', 'ki', 'kd']}
+                m_gain_pid = GAIN_RE_PID.search(line)
+                m_gain_lqr = GAIN_RE_LQR.search(line)
+                if m_gain_pid:
+                    gains = {k: float(m_gain_pid.group(k)) for k in ['kp', 'ki', 'kd']}
+                    gain_info = f"PID: Kp={gains['kp']} Ki={gains['ki']} Kd={gains['kd']}"
+                    strategy_mode = 'PID'
+                elif m_gain_lqr:
+                    gains = {k: float(m_gain_lqr.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
+                    gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
+                    strategy_mode = 'LQR'
                 m_filter = FILTER_RE.search(line)
                 if m_filter:
                     filter_info = m_filter.group('filter') or m_filter.group('filter2')
@@ -156,11 +172,18 @@ def main():
                         if len(recent_lines) > 100: recent_lines.pop(0)
 
                         # Look for gains and filter in any line received
-                        m_gain = GAIN_RE.search(line)
-                        if m_gain:
-                            gain_info = f"Kp={m_gain.group('kp')} Ki={m_gain.group('ki')} Kd={m_gain.group('kd')}"
-                            gains = {k: float(m_gain.group(k)) for k in ['kp', 'ki', 'kd']}
-                            print(f">>> Detected Gains: {gain_info}")
+                        m_gain_pid = GAIN_RE_PID.search(line)
+                        m_gain_lqr = GAIN_RE_LQR.search(line)
+                        if m_gain_pid:
+                            gains = {k: float(m_gain_pid.group(k)) for k in ['kp', 'ki', 'kd']}
+                            gain_info = f"PID: Kp={gains['kp']} Ki={gains['ki']} Kd={gains['kd']}"
+                            strategy_mode = 'PID'
+                            print(f">>> Detected Strategy: {gain_info}")
+                        elif m_gain_lqr:
+                            gains = {k: float(m_gain_lqr.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
+                            gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
+                            strategy_mode = 'LQR'
+                            print(f">>> Detected Strategy: {gain_info}")
 
                         m_filter = FILTER_RE.search(line)
                         if m_filter:
@@ -182,12 +205,22 @@ def main():
                         if not started:
                             if "BALANCER: started" in line or "BALANCER_DBG" in line:
                                 print(">>> Balancer START detected! Catching up on history...")
-                                # Re-parse recent history to catch filter info if missed
+                                # Re-parse recent history to catch metadata if missed
                                 for prev_line in recent_lines:
                                     m_f = FILTER_RE.search(prev_line)
-                                    if m_f: filter_info = m_f.group('filter') or m_f.group('filter2')
-                                    m_g = GAIN_RE.search(prev_line)
-                                    if m_g: gain_info = f"Kp={m_g.group('kp')} Ki={m_g.group('ki')} Kd={m_g.group('kd')}"
+                                    if m_f: 
+                                        filter_info = m_f.group('filter') or m_f.group('filter2')
+                                    
+                                    m_g_pid = GAIN_RE_PID.search(prev_line)
+                                    m_g_lqr = GAIN_RE_LQR.search(prev_line)
+                                    if m_g_pid:
+                                        gains = {k: float(m_g_pid.group(k)) for k in ['kp', 'ki', 'kd']}
+                                        gain_info = f"PID: Kp={gains['kp']} Ki={gains['ki']} Kd={gains['kd']}"
+                                        strategy_mode = 'PID'
+                                    elif m_g_lqr:
+                                        gains = {k: float(m_g_lqr.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
+                                        gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
+                                        strategy_mode = 'LQR'
                                 started = True
                         
                         if started:
@@ -217,6 +250,17 @@ def main():
         recs.append(r)
     
     df = pd.DataFrame(recs).sort_values('time_ms')
+    
+    # Auto-detect strategy mode if not explicitly caught from header
+    if strategy_mode == 'PID':
+        lqr_cols = ['lqr_angle', 'lqr_gyro', 'lqr_dist', 'lqr_speed']
+        if all(c in df.columns for c in lqr_cols):
+            # If we have these columns and they contain non-zero data, it's LQR
+            if df[lqr_cols].any().any():
+                strategy_mode = 'LQR'
+                if gain_info == "Unknown Gains":
+                    gain_info = "LQR (Back-detected from logs)"
+
     df.to_csv(args.csv, index=False)
     print(f"Wrote CSV: {args.csv}")
 
@@ -242,7 +286,11 @@ def main():
             start_enc = (df['encL'].iloc[0] + df['encR'].iloc[0]) / 2
             end_enc = (df['encL'].iloc[-1] + df['encR'].iloc[-1]) / 2
             drift = end_enc - start_enc
-            stats_text += f"Avg Encoder Drift: {drift:.1f} ticks"
+            stats_text += f"Avg Encoder Drift: {drift:.1f} ticks\n"
+            
+        if strategy_mode == 'LQR' and 'iterm' in df.columns:
+            final_trim = df['iterm'].ffill().iloc[-1]
+            stats_text += f"Final Adaptive Trim: {final_trim:.3f}°"
     except Exception as e:
         print(f"Stats calculation failed: {e}")
 
@@ -260,11 +308,25 @@ def main():
         if args.ffill:
             df = df.ffill(limit=10)
 
-        # Calculate PID components if gains are known
-        if 'pid_in' in df.columns and 'iterm' in df.columns and 'pid_out' in df.columns:
-            df['p_term'] = df['pid_in'] * gains['kp']
-            # D term is the remainder of the PID output
-            df['d_term'] = df['pid_out'] - df['p_term'] - df['iterm']
+        # Calculate PID/LQR components if gains are known
+        if strategy_mode == 'PID' and 'pid_in' in df.columns and 'iterm' in df.columns and 'pid_out' in df.columns:
+            df['p_term'] = (df['pid_in'] - trim_info['val']) * gains['kp']
+            df['d_term'] = df['pid_out'] - df['p_term'] - df['iterm'] # Roughly iterm + d_term
+        elif strategy_mode == 'LQR' and 'pitch' in df.columns and 'gy' in df.columns:
+            # LQR u = Kp*theta + Kg*gyro - Kd*dist - Ks*speed
+            # theta and gyro are in degrees in the log
+            # dist is (encL+encR)/2
+            # speed is d(dist)/dt
+            df['lqr_angle'] = (df['pitch'] - trim_info['val']) * gains['kp']
+            df['lqr_gyro'] = df['gy'] * gains['kg']
+            if 'encL' in df.columns and 'encR' in df.columns:
+                df['dist'] = (df['encL'] + df['encR']) / 2.0
+                df['dist_err'] = df['dist'] - df['dist'].iloc[0] # Relative to start of capture
+                df['lqr_dist'] = -df['dist_err'] * gains['kd']
+                # Velocity estimation (simple)
+                dt_s = df['time_ms'].diff() / 1000.0
+                df['speed'] = df['dist'].diff() / dt_s
+                df['lqr_speed'] = -df['speed'] * gains['ks']
 
         t_axis = (df['time_ms'] - df['time_ms'].iloc[0]) / 1000.0
         
@@ -295,10 +357,14 @@ def main():
         
         # Subplot 1: Pitch
         ax1 = plt.subplot(7, 1, 1)
-        ax1.plot(t_axis, df['pitch_setpoint'], 'r--', label='Setpoint', alpha=0.7)
+        ax1.plot(t_axis, df['pitch_setpoint'], 'r--', label='Target (User)', alpha=0.7)
         ax1.plot(t_axis, df['pitch'], 'b-', label='Filtered Pitch (deg)', linewidth=2)
+        
+        if strategy_mode == 'LQR' and 'iterm' in df.columns:
+            ax1.plot(t_axis, df['iterm'], 'm:', label='Dynamic Pitch Trim (Adaptive)', linewidth=2)
+            
         if 'gyro_pitch_est' in df.columns:
-            ax1.plot(t_axis, df['gyro_pitch_est'], 'c--', label='Gyro Integration (No-Lag Ref)', alpha=0.6)
+            ax1.plot(t_axis, df['gyro_pitch_est'], 'c--', label='Gyro Integration (Ref)', alpha=0.4)
         
         # Display stats overlay
         if stats_text:
@@ -318,14 +384,26 @@ def main():
 
         # Subplot 2: PID Components (Decomposition)
         ax2 = plt.subplot(7, 1, 2, sharex=ax1)
-        if 'p_term' in df.columns:
-            ax2.plot(t_axis, df['p_term'], label='P contribution (Kp*err)', alpha=0.8)
-        if 'iterm' in df.columns:
-            ax2.plot(t_axis, df['iterm'], label='I contribution (Ki*sum)', alpha=0.8)
-        if 'd_term' in df.columns:
-            ax2.plot(t_axis, df['d_term'], label='D contribution (Kd*rate)', alpha=0.8)
-        ax2.set_ylabel('PID Terms')
-        ax2.set_title('PID Decomposition (Influence of each gain)')
+        if strategy_mode == 'PID':
+            if 'p_term' in df.columns:
+                ax2.plot(t_axis, df['p_term'], label='P contribution (Kp*err)', alpha=0.8)
+            if 'iterm' in df.columns:
+                ax2.plot(t_axis, df['iterm'], label='I contribution (Ki*sum)', alpha=0.8)
+            if 'd_term' in df.columns:
+                ax2.plot(t_axis, df['d_term'], label='D contribution (Kd*rate)', alpha=0.8)
+            ax2.set_title('PID Decomposition (Influence of each gain)')
+        elif strategy_mode == 'LQR':
+            if 'lqr_angle' in df.columns:
+                ax2.plot(t_axis, df['lqr_angle'], label='Angle (Kp*theta)', alpha=0.8)
+            if 'lqr_gyro' in df.columns:
+                ax2.plot(t_axis, df['lqr_gyro'], label='Gyro (Kg*rate)', alpha=0.8)
+            if 'lqr_dist' in df.columns:
+                ax2.plot(t_axis, df['lqr_dist'], label='Dist (Kd*dist)', alpha=0.8)
+            if 'lqr_speed' in df.columns:
+                ax2.plot(t_axis, df['lqr_speed'], label='Speed (Ks*vel)', alpha=0.8)
+            ax2.set_title('LQR Decomposition (Influence of each gain)')
+        
+        ax2.set_ylabel('PID/LQR Terms')
         ax2.legend(loc='upper right')
         ax2.grid(True)
 
@@ -333,8 +411,11 @@ def main():
         ax3 = plt.subplot(7, 1, 3, sharex=ax1)
         if 'lp_hz' in df.columns:
             ax3.plot(t_axis, df['lp_hz'], 'r-', label='Loop Freq (Hz)', alpha=0.7)
-            ax3.axhline(y=500.0, color='k', linestyle=':', alpha=0.3)
-            ax3.set_ylim(0, 600)
+            # Adapt target line to data
+            max_hz = df['lp_hz'].max()
+            target_hz = 1000.0 if max_hz > 700 else 500.0
+            ax3.axhline(y=target_hz, color='k', linestyle=':', alpha=0.3)
+            ax3.set_ylim(0, target_hz * 1.2)
         
         ax3_twin = ax3.twinx()
         if 'lat' in df.columns:
@@ -349,9 +430,11 @@ def main():
         # Subplot 4: Total PID and Motor Command
         ax4 = plt.subplot(7, 1, 4, sharex=ax1)
         if 'pid_out' in df.columns:
-            ax4.plot(t_axis, df['pid_out'], 'g-', label='Total PID Out', linewidth=1.5)
+            ax4.plot(t_axis, df['pid_out'], 'g-', label='Total PID/LQR Out', linewidth=1.5)
         if 'cmd' in df.columns:
-            ax4.plot(t_axis, df['cmd'], 'k--', label='Final Motor Cmd (after Deadband/Slew)', alpha=0.8)
+            ax4.plot(t_axis, df['cmd'], 'k--', label='Throttle Cmd', alpha=0.8)
+        if 'steer' in df.columns:
+            ax4.plot(t_axis, df['steer'], 'r-', label='Steer Cmd', alpha=0.9)
         ax4.set_ylabel('Command')
         ax4.legend(loc='upper right')
         ax4.grid(True)
@@ -367,15 +450,18 @@ def main():
         ax5.legend(loc='upper right')
         ax5.grid(True)
 
-        # Subplot 6: Yaw Stability (Experimental)
+        # Subplot 6: Yaw Stability (Heading Hold)
         ax6 = plt.subplot(7, 1, 6, sharex=ax1)
         if 'gz' in df.columns:
-            ax6.plot(t_axis, df['gz'], 'r-', label='Gyro Z (Yaw Rate)', alpha=0.8)
-        if 'ay' in df.columns:
-            ax6.plot(t_axis, df['ay'], 'b-', label='Accel Y (Lateral)', alpha=0.6)
-        ax6.set_ylabel('Yaw/Lat')
-        ax6.set_title('Yaw and Lateral Stability')
-        ax6.legend(loc='upper right')
+            ax6.plot(t_axis, np.degrees(df['gz']), 'r-', label='Yaw Rate (deg/s)', alpha=0.8)
+        if 'steer' in df.columns:
+            ax6_twin = ax6.twinx()
+            ax6_twin.plot(t_axis, df['steer'], 'b-', label='Steer (Heading Hold)', alpha=0.5)
+            ax6_twin.set_ylabel('Steer Output', color='b')
+            ax6_twin.set_ylim(-1.0, 1.0)
+        ax6.set_ylabel('Rate (deg/s)', color='r')
+        ax6.set_title('Yaw Stability and Heading Hold')
+        ax6.legend(loc='upper left')
         ax6.grid(True)
 
         # Subplot 7: IMU Raw Pitch-Axis

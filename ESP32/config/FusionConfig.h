@@ -9,7 +9,7 @@ struct FusionConfig {
     // Lower value (0.01-0.05) = trust gyro more, smoother but may drift slowly
     // Higher value (0.1-0.3) = trust accel more, corrects drift but noisier
     float beta = 0.05f; 
-    float sample_rate = 500.0f; // Hz (Matches BMI160 sampling rate)
+    float sample_rate = 1000.0f; // Hz (Matches BMI160 sampling rate)
     // Axis mapping: allow remapping/inversion of sensor axes into the robot
     // coordinate frame used by the fusion/filter. This makes it easy to
     // accommodate different sensor mountings without changing fusion code.

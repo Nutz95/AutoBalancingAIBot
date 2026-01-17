@@ -42,6 +42,10 @@ void setMotorCommandRaw(int id, int16_t rawSpeed);
 // Returns int64_t position in encoder counts (4096 per revolution).
 int32_t readEncoder(int id);
 
+// Trigger a hardware refresh of the encoder position for the given ID.
+// This performs the serial UART transaction with the servo.
+bool refreshEncoder(int id);
+
 // Reset position tracking: re-initialize accumulators to current encoder
 // positions and clear all position targets. Use to recover from any drift or
 // desync.

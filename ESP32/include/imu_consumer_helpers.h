@@ -107,7 +107,7 @@ void requestWarmup(ConsumerState &state, float seconds, float sample_rate_hz);
 void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               float fused_pitch_rate_local, float left_cmd,
                               float right_cmd, const float accel_robot[3], 
-                              const float gyro_robot[3]);
+                              const float gyro_robot[3], float freq_hz, uint32_t lat_us);
 
 /**
  * Measure and log IMU frequency.

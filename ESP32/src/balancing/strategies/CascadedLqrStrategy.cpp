@@ -20,14 +20,15 @@ void CascadedLqrStrategy::reset(float initial_pitch_rad) {
     pitch_trim_rad_ = initial_pitch_rad;
     v_target_speed_ = 0.0f;
     w_target_yaw_req_ = 0.0f;
+    yaw_error_accum_rad_ = 0.0f;
     needs_reset_enc_ = true;
 }
 
-float CascadedLqrStrategy::compute(float pitch_rad, float pitch_rate_rads, float dt_s,
+IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
                                  int32_t enc_l_ticks, int32_t enc_r_ticks,
                                  float v_enc_ticks_s) {
     
-    // 1. Position tracking
+    // 1. Position tracking (LQR state x)
     int32_t avg_enc = (enc_l_ticks + enc_r_ticks) / 2;
     if (needs_reset_enc_) {
         enc_dist_zeropoint_ = avg_enc;
@@ -35,7 +36,14 @@ float CascadedLqrStrategy::compute(float pitch_rad, float pitch_rate_rads, float
     }
     float dist_err = (float)(avg_enc - enc_dist_zeropoint_);
 
-    // 2. Adaptive Trim (Navbot Pillar)
+    // 2. Yaw Tracking (Heading Hold)
+    // Integrate yaw rate to get relative heading error from start
+    yaw_error_accum_rad_ += (yaw_rate_rads - w_target_yaw_req_) * dt_s;
+    
+    // Simple PD for steering (Negative feedback to resist turning)
+    float steer = -((yaw_error_accum_rad_ * BALANCER_DEFAULT_K_YAW) + (yaw_rate_rads * BALANCER_DEFAULT_K_YAW_RATE));
+
+    // 3. Adaptive Trim (Navbot Pillar)
     if (cfg_.adaptive_trim_enabled) {
         updateAdaptiveTrim(dist_err, dt_s);
     }
@@ -44,18 +52,23 @@ float CascadedLqrStrategy::compute(float pitch_rad, float pitch_rate_rads, float
     float theta_err_deg = (pitch_rad - pitch_trim_rad_) * (180.0f / M_PI);
     float pitch_rate_deg = pitch_rate_rads * (180.0f / M_PI);
     
-    // 3. Control Law: u = Kp*theta + Kg*gyro - Kd*dist - Ks*speed
-    // Signs: 
-    // - theta > 0 (lean fwd) -> u > 0 (drive fwd to catch)
-    // - gyro > 0 (falling fwd) -> u > 0 (catch up)
-    // - dist > 0 (fwd of origin) -> u < 0 (return to origin)
-    // - speed > 0 (moving fwd) -> u < 0 (lean back to slow down)
-    float u = (cfg_.k_pitch * theta_err_deg) +
-              (cfg_.k_gyro  * pitch_rate_deg) -
-              (cfg_.k_dist  * dist_err) -
-              (cfg_.k_speed * (v_enc_ticks_s - v_target_speed_));
+    // 4. Control Law: u = Kp*theta + Kg*gyro - Kd*dist - Ks*speed
+    float term_angle = cfg_.k_pitch * theta_err_deg;
+    float term_gyro  = cfg_.k_gyro  * pitch_rate_deg;
+    float term_dist  = -cfg_.k_dist  * dist_err;
+    float term_speed = -cfg_.k_speed * (v_enc_ticks_s - v_target_speed_);
 
-    return u;
+    float u = term_angle + term_gyro + term_dist + term_speed;
+
+    return {
+        u, 
+        steer,
+        pitch_trim_rad_ * (180.0f / (float)M_PI),
+        term_angle,
+        term_gyro,
+        term_dist,
+        term_speed
+    }; 
 }
 
 void CascadedLqrStrategy::updateAdaptiveTrim(float dist_err, float dt) {
@@ -88,6 +101,8 @@ void CascadedLqrStrategy::loadConfig() {
         cfg_.adaptive_trim_enabled = prefs.getBool("ate", (BALANCER_ENABLE_ADAPTIVE_TRIM != 0));
         cfg_.adaptive_trim_alpha = prefs.getFloat("ata", BALANCER_ADAPTIVE_TRIM_ALPHA);
         prefs.end();
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: gains loaded (Kp=%.6f Kg=%.6f Kd=%.6f Ks=%.6f)\n", 
+                   (double)cfg_.k_pitch, (double)cfg_.k_gyro, (double)cfg_.k_dist, (double)cfg_.k_speed);
     }
 }
 
@@ -111,6 +126,7 @@ void CascadedLqrStrategy::resetToDefaults() {
     cfg_.k_speed = BALANCER_DEFAULT_K_SPEED;
     cfg_.adaptive_trim_enabled = (BALANCER_ENABLE_ADAPTIVE_TRIM != 0);
     cfg_.adaptive_trim_alpha = BALANCER_ADAPTIVE_TRIM_ALPHA;
+    saveConfig();
 }
 
 void CascadedLqrStrategy::setConfig(const Config& cfg) {

@@ -120,6 +120,26 @@
 			"label": "check compile warnings",
 			"type": "shell",
 			"command": "pio run"
+		},
+		{
+			"label": "pio run build fix (Optimized Motor Driver)",
+			"type": "shell",
+			"command": "pio run"
+		},
+		{
+			"label": "pio run build fix (Telemetry config + Sync fix)",
+			"type": "shell",
+			"command": "pio run"
+		},
+		{
+			"label": "pio run build fix (Sign and Tuning Reset)",
+			"type": "shell",
+			"command": "pio run"
+		},
+		{
+			"label": "Rebuild with Reverted Settings and Clean Config",
+			"type": "shell",
+			"command": "pio run"
 		}
 	]
 }

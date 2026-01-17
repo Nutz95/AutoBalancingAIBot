@@ -13,10 +13,12 @@ void LegacyPidStrategy::init() {
     loadConfig();
 }
 
-float LegacyPidStrategy::compute(float pitch_rad, float pitch_rate_rads, float dt_s,
+IBalancingStrategy::Result LegacyPidStrategy::compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
                                int32_t /*enc_l*/, int32_t /*enc_r*/, float /*v_enc*/) {
+    (void)yaw_rate_rads;
     // Legacy PID tuned for DEGREES
-    return pid_.update(pitch_rad * (180.0f / M_PI), pitch_rate_rads * (180.0f / M_PI), dt_s);
+    float cmd = pid_.update(pitch_rad * (180.0f / M_PI), pitch_rate_rads * (180.0f / M_PI), dt_s);
+    return {cmd, 0.0f, pid_.getIntegrator(), 0.0f, 0.0f, 0.0f, 0.0f};
 }
 
 void LegacyPidStrategy::reset(float initial_pitch_rad) {

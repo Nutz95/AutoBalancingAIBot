@@ -83,8 +83,9 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_BAUD 256000
 #endif
 
-// If both motors are on separate RS485 buses (Serial1 and Serial2), 
-// they can both have different IDs.
+// NOTE: Both motors are on SEPARATE RS485 buses (Left=Serial2, Right=Serial1).
+// Each bus has dedicated bandwidth. IDs can be different or identical - doesn't matter
+// since buses are independent. DO NOT CHANGE these IDs without user authorization.
 #ifndef LEFT_MOTOR_ID
 #define LEFT_MOTOR_ID 0x01
 #endif
@@ -95,6 +96,11 @@ enum class MksServoHoldCurrent : uint8_t {
 
 // =============================================================================
 // MOTOR PARAMETERS
+// =============================================================================
+
+// =============================================================================
+// MOTOR PARAMETERS (!!! DO NOT CHANGE INVERSION SETTINGS WITHOUT NOTIFYING USER !!!)
+// These are calibrated for physical wiring.
 // =============================================================================
 
 // Default operating mode (SR_vFOC recommended)
@@ -136,9 +142,20 @@ enum class MksServoHoldCurrent : uint8_t {
 #define VELOCITY_MAX_SPEED 1200
 #endif
 
+// Encoder update frequency (Hz). 
+// High values (100-250) improve LQR/speed estimation but increase bus traffic.
+#ifndef MKS_SERVO_ENCODER_UPDATE_HZ
+#define MKS_SERVO_ENCODER_UPDATE_HZ 100
+#endif
+
 // Default acceleration for speed commands (0-255)
 #ifndef MKS_SERVO_ACCEL
 #define MKS_SERVO_ACCEL 255
+#endif
+
+// Timeout for logging diagnostic errors (ms) to avoid console spam
+#ifndef MKS_SERVO_DIAG_LOG_ms
+#define MKS_SERVO_DIAG_LOG_ms 2000
 #endif
 
 // Read encoder interval (ms) - Throttled to keep bus clear for commands
@@ -166,18 +183,18 @@ enum class MksServoHoldCurrent : uint8_t {
 // Telemetry/Data timeout (e.g. reading position)
 // Position reads can take longer to process internally on MKS drivers
 #ifndef MKS_SERVO_TIMEOUT_DATA_US
-#define MKS_SERVO_TIMEOUT_DATA_US 2500
+#define MKS_SERVO_TIMEOUT_DATA_US 10000  // Safe timeout for position reads
 #endif
 
 // Heavy request timeout (e.g. scanning or register dump)
 #ifndef MKS_SERVO_TIMEOUT_HEAVY_US
-#define MKS_SERVO_TIMEOUT_HEAVY_US 5000
+#define MKS_SERVO_TIMEOUT_HEAVY_US 10000
 #endif
 
 // Bus quiet time between consecutive reads/writes to different IDs
-// Increased to 200us to allow RS485 transceivers to switch directions and bus to settle
+// Increased to ensure no collisions when sending speed + encoder requests
 #ifndef MKS_SERVO_BUS_QUIET_US
-#define MKS_SERVO_BUS_QUIET_US 200
+#define MKS_SERVO_BUS_QUIET_US 500
 #endif
 
 // Wait time after sending a telemetry request before trying to read the response.

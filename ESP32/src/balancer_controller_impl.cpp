@@ -64,6 +64,11 @@ struct TelemetryState {
   uint32_t last_update_us = 0;
   float vel_l_ticks_s = 0.0f;
   float vel_r_ticks_s = 0.0f;
+  float pid_iterm = 0.0f;
+  float lqr_angle = 0.0f;
+  float lqr_gyro = 0.0f;
+  float lqr_dist = 0.0f;
+  float lqr_speed = 0.0f;
   bool is_init = false;
 };
 
@@ -83,8 +88,13 @@ static void pollEncoders(float /*dt_sec*/) {
         if (g_telemetry_state.is_init) {
             float dt = (float)(now_us - g_telemetry_state.last_update_us) / 1000000.0f;
             if (dt > 0.0001f) {
-                g_telemetry_state.vel_l_ticks_s = (float)(l - g_telemetry_state.last_enc_l) / dt;
-                g_telemetry_state.vel_r_ticks_s = (float)(r - g_telemetry_state.last_enc_r) / dt;
+                float inst_vel_l = (float)(l - g_telemetry_state.last_enc_l) / dt;
+                float inst_vel_r = (float)(r - g_telemetry_state.last_enc_r) / dt;
+                
+                // Low-pass filter the velocities to reduce encoder quantization noise
+                // especially when loop_rate > encoder_update_rate
+                g_telemetry_state.vel_l_ticks_s = g_telemetry_state.vel_l_ticks_s * 0.7f + inst_vel_l * 0.3f;
+                g_telemetry_state.vel_r_ticks_s = g_telemetry_state.vel_r_ticks_s * 0.7f + inst_vel_r * 0.3f;
             }
         }
         g_telemetry_state.last_enc_l = l;
@@ -97,7 +107,11 @@ static void pollEncoders(float /*dt_sec*/) {
 
 static void telemetryTask(void *pv) {
     while (true) {
-        pollEncoders(0.0f);
+        // Skip background polling if balancing is active to avoid UART contention
+        // with the high-priority control loop.
+        if (!g_active) {
+            pollEncoders(0.0f);
+        }
         vTaskDelay(pdMS_TO_TICKS(BALANCER_ENCODER_UPDATE_MS > 0 ? BALANCER_ENCODER_UPDATE_MS : 20));
     }
 }
@@ -159,7 +173,18 @@ void start(float pitch_rad) {
 
   g_last_cmd = 0.0f;
   abbot::reinitFilterFromAccel();
-  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: started (%s)\n", manager.getActiveStrategy()->getName());
+
+  // Print gains for telemetry capture analysis
+  if (manager.getActiveType() == abbot::balancing::StrategyType::CASCADED_LQR) {
+      abbot::balancer::controller::CascadedGains g;
+      abbot::balancer::controller::getCascadedGains(g);
+      LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: started (LQR) (Kp=%.6f Kg=%.6f Kd=%.6f Ks=%.6f)\n", 
+                 (double)g.k_pitch, (double)g.k_gyro, (double)g.k_dist, (double)g.k_speed);
+  } else {
+      float kp, ki, kd;
+      getGains(kp, ki, kd);
+      LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: started (PID) (Kp=%.4f Ki=%.4f Kd=%.4f)\n", (double)kp, (double)ki, (double)kd);
+  }
 }
 
 void stop() {
@@ -237,6 +262,10 @@ float processCycle(float pitch, float pitch_rate, float dt) {
     return 0.0f;
   }
 
+  // Refresh encoder data immediately before control computation.
+  // This ensures the LQR/PID sees the most recent wheel positions.
+  pollEncoders(dt);
+
   // Auto-enable
   if (g_auto_enable_ts > 0 && (int32_t)(millis() - g_auto_enable_ts) >= 0) {
     if (auto d = abbot::motor::getActiveMotorDriver()) d->enableMotors();
@@ -253,7 +282,15 @@ float processCycle(float pitch, float pitch_rate, float dt) {
     xSemaphoreGive(g_telemetry_mutex);
   }
 
-  float cmd = abbot::balancing::BalancingManager::getInstance().compute(pitch, pitch_rate, dt, el, er, v_enc);
+  auto res = abbot::balancing::BalancingManager::getInstance().compute(pitch, pitch_rate, g_latest_gyro[2], dt, el, er, v_enc);
+  float cmd = res.command;
+  float steer = res.steer;
+  
+  g_telemetry_state.pid_iterm = res.iterm; // Store for diagnostics
+  g_telemetry_state.lqr_angle = res.lqr_angle;
+  g_telemetry_state.lqr_gyro = res.lqr_gyro;
+  g_telemetry_state.lqr_dist = res.lqr_dist;
+  g_telemetry_state.lqr_speed = res.lqr_speed;
 
   // Slew
   float max_d = g_command_slew_rate * dt;
@@ -270,7 +307,14 @@ float processCycle(float pitch, float pitch_rate, float dt) {
 
   if (auto d = abbot::motor::getActiveMotorDriver()) {
     if (d->areMotorsEnabled()) {
-      d->setMotorCommandBoth(cmd * g_left_motor_scale, cmd * g_right_motor_scale);
+      float left = (cmd + steer) * g_left_motor_scale;
+      float right = (cmd - steer) * g_right_motor_scale;
+      
+      // Final clamp to +/- 1.0
+      left = std::max(-1.0f, std::min(1.0f, left));
+      right = std::max(-1.0f, std::min(1.0f, right));
+      
+      d->setMotorCommandBoth(left, right);
     }
   }
 
@@ -300,6 +344,22 @@ void setMotorGains(float l, float r) {
     if (g_prefs_ready) { g_preferences_helper.putFloat("mg_L", l); g_preferences_helper.putFloat("mg_R", r); }
 }
 void getMotorGains(float &l, float &r) { l = g_left_motor_scale; r = g_right_motor_scale; }
+
+void getDiagnostics(Diagnostics &d) {
+    if (g_telemetry_mutex && xSemaphoreTake(g_telemetry_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+        d.enc_l = g_telemetry_state.last_enc_l;
+        d.enc_r = g_telemetry_state.last_enc_r;
+        d.iterm = g_telemetry_state.pid_iterm;
+        d.lqr_angle = g_telemetry_state.lqr_angle;
+        d.lqr_gyro = g_telemetry_state.lqr_gyro;
+        d.lqr_dist = g_telemetry_state.lqr_dist;
+        d.lqr_speed = g_telemetry_state.lqr_speed;
+        xSemaphoreGive(g_telemetry_mutex);
+    } else {
+        d.enc_l = 0; d.enc_r = 0; d.iterm = 0.0f;
+        d.lqr_angle = 0.0f; d.lqr_gyro = 0.0f; d.lqr_dist = 0.0f; d.lqr_speed = 0.0f;
+    }
+}
 
 void setMode(ControllerMode m) { 
     abbot::balancing::BalancingManager::getInstance().setStrategy((abbot::balancing::StrategyType)m); 

@@ -110,7 +110,7 @@ private:
         std::atomic<int32_t> encoder_value{0};
         std::atomic<bool> encoder_dirty{false};
         std::atomic<uint32_t> last_latency_us{0};
-        std::atomic<bool> last_reported_enabled{false};
+        std::atomic<bool> last_reported_enabled{true}; // Init to true to force torque sync at boot
         TaskHandle_t task_handle = nullptr;
         uint32_t last_telemetry_ms = 0;
     };
@@ -122,7 +122,7 @@ private:
     void runMotorTask(MotorSide side);
 
     // Protocol helpers
-    void sendSpeedCommand(uint8_t id, float normalized_speed, bool invert);
+    void sendSpeedCommand(uint8_t id, float normalized_speed, bool invert, bool wait_for_ack = false);
     void sendFunctionCommand(uint8_t id, uint8_t function_code, const uint8_t* data, size_t length);
     void setMode(uint8_t id, MksServoMode mode);
     void setMStep(uint8_t id, MksServoMicrostep mstep);

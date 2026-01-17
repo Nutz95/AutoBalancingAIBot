@@ -74,22 +74,25 @@ static bool updateEncoderPosition(int id, int16_t raw_pos) {
 }
 
 // Read encoder and update accumulated position
-static bool readAndUpdateEncoder(int id) {
+bool refreshEncoder(int id) {
 #if MOTOR_DRIVER_REAL
   if (!s_servoInitialized)
     return false;
 
   int fb = s_servoBus.FeedBack(id);
   if (fb <= 0) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-               "motor_driver: FeedBack failed id=%d fb=%d\n", id, fb);
+    // Throttled logging to avoid spamming the console on comms error
+    static uint32_t last_err_ms = 0;
+    if (millis() - last_err_ms >= 500) {
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                   "motor_driver: FeedBack failed id=%d fb=%d\n", id, fb);
+        last_err_ms = millis();
+    }
     return false;
   }
 
   int raw_pos = s_servoBus.ReadPos(-1);
   if (raw_pos < 0) {
-    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-               "motor_driver: ReadPos failed id=%d\n", id);
     return false;
   }
 
@@ -98,6 +101,7 @@ static bool readAndUpdateEncoder(int id) {
 
   return updateEncoderPosition(id, (int16_t)raw_pos);
 #else
+  (void)id;
   return false;
 #endif
 }
@@ -375,14 +379,12 @@ void setMotorCommandBoth(float left_command, float right_command) {
   // Use standard WriteSpe to ensure compatibility and correct register usage
   // (Reverted optimization to rule out register addressing issues)
   s_servoBus.WriteSpe(LEFT_MOTOR_ID, vel_left, 0);
-  // Small delay to prevent bus collision
+  //Small delay to prevent bus collision
   delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
   s_servoBus.WriteSpe(RIGHT_MOTOR_ID, vel_right, 0);
 
-  // Read encoders for telemetry (optional, can be skipped if too slow)
-  // We do this AFTER writing to ensure minimum latency for control
-  readAndUpdateEncoder(LEFT_MOTOR_ID);
-  readAndUpdateEncoder(RIGHT_MOTOR_ID);
+  // Read encoders for telemetry moved to explicit readEncodersBoth or readEncoder calls
+  // to avoid redundant bus traffic during high-frequency control loops.
 #endif
 }
 
@@ -732,7 +734,7 @@ bool processSerialCommand(const String &line) {
     // command was issued via the direct VEL console path.
     // A small inter-command delay helps the servo update its registers first.
     delayMicroseconds(MOTOR_INTER_COMMAND_DELAY_US);
-    (void)readAndUpdateEncoder(id);
+    (void)refreshEncoder(id);
     return true;
   }
 

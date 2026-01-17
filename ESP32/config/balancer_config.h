@@ -127,9 +127,9 @@
 
 // Smoothing factor for pitch rate (D-term input). 
 // 1.0 = no filtering, lower = more smoothing.
-// If robot vibrates/buzzes, lower this value (e.g. 0.1 to 0.2).
+// If robot vibrates/buzzes, lower this value (e.g. 0.05 to 0.1).
 #ifndef BALANCER_PITCH_RATE_ALPHA
-#define BALANCER_PITCH_RATE_ALPHA 0.15f // (au lieu de 0.4f)
+#define BALANCER_PITCH_RATE_ALPHA 0.08f // (au lieu de 0.15f)
 #endif
 
 // --- Controller Strategy ---
@@ -141,16 +141,35 @@
 
 // Default gains for Cascaded/LQR mode
 #ifndef BALANCER_DEFAULT_K_PITCH
-#define BALANCER_DEFAULT_K_PITCH 0.02f
+#define BALANCER_DEFAULT_K_PITCH 0.04f  // Positive: Lean Forward -> Move Forward
 #endif
 #ifndef BALANCER_DEFAULT_K_GYRO
-#define BALANCER_DEFAULT_K_GYRO 0.002f
+#define BALANCER_DEFAULT_K_GYRO 0.003f  // Positive: Falling Forward -> Move Forward
 #endif
 #ifndef BALANCER_DEFAULT_K_DIST
-#define BALANCER_DEFAULT_K_DIST 0.0001f
+#define BALANCER_DEFAULT_K_DIST 0.00002f
+#endif
+#ifndef BALANCER_DEFAULT_K_SPEED
+#define BALANCER_DEFAULT_K_SPEED 0.00001f
+#endif
+
+// Adaptive trim defaults
+#ifndef BALANCER_ENABLE_ADAPTIVE_TRIM
+#define BALANCER_ENABLE_ADAPTIVE_TRIM 1
+#endif
+#ifndef BALANCER_ADAPTIVE_TRIM_ALPHA
+#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.005f
 #endif
 #ifndef BALANCER_DEFAULT_K_SPEED
 #define BALANCER_DEFAULT_K_SPEED 0.0005f
+#endif
+
+// Default gains for Yaw (Heading Hold / Steering)
+#ifndef BALANCER_DEFAULT_K_YAW
+#define BALANCER_DEFAULT_K_YAW 0.4f
+#endif
+#ifndef BALANCER_DEFAULT_K_YAW_RATE
+#define BALANCER_DEFAULT_K_YAW_RATE 0.1f
 #endif
 
 // Adaptive Trim (Center of Gravity Adaptation)

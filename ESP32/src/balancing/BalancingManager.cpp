@@ -24,6 +24,7 @@ void BalancingManager::init() {
         }
     }
     loadActiveStrategy();
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "STRATEGY: Active at boot: %s\n", getActiveStrategy()->getName());
 }
 
 void BalancingManager::setStrategy(StrategyType type) {
@@ -44,14 +45,14 @@ IBalancingStrategy* BalancingManager::getStrategy(StrategyType type) {
     return strategies_[static_cast<int>(type)].get();
 }
 
-float BalancingManager::compute(float pitch_rad, float pitch_rate_rads, float dt_s,
+IBalancingStrategy::Result BalancingManager::compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
                               int32_t enc_l_ticks, int32_t enc_r_ticks,
                               float v_enc_ticks_s) {
     auto* active = getActiveStrategy();
     if (!active) {
-        return 0.0f;
+        return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
-    return active->compute(pitch_rad, pitch_rate_rads, dt_s, enc_l_ticks, enc_r_ticks, v_enc_ticks_s);
+    return active->compute(pitch_rad, pitch_rate_rads, yaw_rate_rads, dt_s, enc_l_ticks, enc_r_ticks, v_enc_ticks_s);
 }
 
 void BalancingManager::reset(float initial_pitch_rad) {

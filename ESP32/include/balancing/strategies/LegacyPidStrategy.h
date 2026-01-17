@@ -16,9 +16,9 @@ public:
     void init() override;
     void reset(float initial_pitch_rad) override;
 
-    float compute(float pitch_rad, float pitch_rate_rads, float dt_s,
-                int32_t enc_l_ticks, int32_t enc_r_ticks,
-                float v_enc_ticks_s) override;
+    IBalancingStrategy::Result compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
+                                     int32_t enc_l_ticks, int32_t enc_r_ticks,
+                                     float v_enc_ticks_s) override;
 
     void setDriveSetpoints(float v_norm, float w_norm) override;
 

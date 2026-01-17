@@ -45,7 +45,7 @@ static QueueHandle_t calibQueue = nullptr;
 static fusion::FusionConfig g_fusion_cfg;
 // Store sample rate (Hz) in one place so dt fallback uses the configured value
 // Sample rate (Hz) used by the selected filter
-static float g_filter_sample_rate_hz = 1000.0f;
+static float g_filter_sample_rate_hz = 500.0f;
 // Fused outputs (units: radians, radians/sec)
 static float g_fused_pitch_rad = 0.0f;
 static float g_fused_pitch_rate_rads = 0.0f;
@@ -296,9 +296,16 @@ static void imuConsumerTask(void *pvParameters) {
         g_consumer, sample, fused_pitch_local, fused_pitch_rate_local,
         accel_robot, gyro_robot, left_cmd, right_cmd);
 
+    // Get motor bus latency for diagnostics
+    uint32_t bus_lat = 0;
+    if (auto d = abbot::motor::getActiveMotorDriver()) {
+        bus_lat = d->getLastBusLatencyUs();
+    }
+    float inst_freq = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
+
     abbot::imu_consumer::emitDiagnosticsIfEnabled(
         sample.ts_ms, fused_pitch_local, fused_pitch_rate_local,
-        left_cmd, right_cmd, accel_robot, gyro_robot);
+        left_cmd, right_cmd, accel_robot, gyro_robot, inst_freq, bus_lat);
 
     // Emit raw IMU debug logs (throttled)
     abbot::imu_consumer::emitImuDebugLogsIfEnabled(sample, last_debug_print_ms);
