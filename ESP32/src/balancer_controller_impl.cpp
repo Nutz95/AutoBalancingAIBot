@@ -85,18 +85,11 @@ static void pollEncoders(float /*dt_sec*/) {
     driver->readEncodersBoth(l, r);
     
     if (g_telemetry_mutex && xSemaphoreTake(g_telemetry_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-        if (g_telemetry_state.is_init) {
-            float dt = (float)(now_us - g_telemetry_state.last_update_us) / 1000000.0f;
-            if (dt > 0.0001f) {
-                float inst_vel_l = (float)(l - g_telemetry_state.last_enc_l) / dt;
-                float inst_vel_r = (float)(r - g_telemetry_state.last_enc_r) / dt;
-                
-                // Low-pass filter the velocities to reduce encoder quantization noise
-                // especially when loop_rate > encoder_update_rate
-                g_telemetry_state.vel_l_ticks_s = g_telemetry_state.vel_l_ticks_s * 0.7f + inst_vel_l * 0.3f;
-                g_telemetry_state.vel_r_ticks_s = g_telemetry_state.vel_r_ticks_s * 0.7f + inst_vel_r * 0.3f;
-            }
-        }
+        // Use the driver's own filtered speed estimation which is updated by the background 
+        // motor tasks at a stable rate (~50-100Hz), avoiding 1000Hz quantization noise.
+        g_telemetry_state.vel_l_ticks_s = driver->readSpeed(abbot::motor::IMotorDriver::MotorSide::LEFT);
+        g_telemetry_state.vel_r_ticks_s = driver->readSpeed(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+
         g_telemetry_state.last_enc_l = l;
         g_telemetry_state.last_enc_r = r;
         g_telemetry_state.last_update_us = now_us;

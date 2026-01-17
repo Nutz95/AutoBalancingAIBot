@@ -8,8 +8,8 @@ namespace abbot {
 namespace motor {
 
 MksServoMotorDriver::MksServoMotorDriver()
-    : m_left{LEFT_MOTOR_ID, LEFT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(0.1f)},
-      m_right{RIGHT_MOTOR_ID, RIGHT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(0.1f)},
+    : m_left{LEFT_MOTOR_ID, LEFT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(0.4f)},
+      m_right{RIGHT_MOTOR_ID, RIGHT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(0.4f)},
       m_enabled(false),
       m_leftBusMutex(xSemaphoreCreateRecursiveMutex()),
       m_rightBusMutex(xSemaphoreCreateRecursiveMutex()) {}
@@ -145,6 +145,14 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     
                     int32_t corrected_p = state.invert ? -p : p;
                     
+                    // Update the speed estimator used for damping (LQR/PID)
+                    // We use the absolute timestamp from esp_timer for better dt consistency
+                    float s = state.speedEstimator.update(corrected_p, esp_timer_get_time());
+
+                    if (MKS_SERVO_ENCODER_UPDATE_HZ > 100 && (now % 500 == 0)) {
+                         LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: speed_dbg ID 0x%02X L=%ld v=%.1f\n", state.id, (long)corrected_p, s);
+                    }
+
                     async.encoder_value.store(corrected_p);
                     async.encoder_dirty.store(true);
                     async.last_telemetry_ms = now;
@@ -280,6 +288,7 @@ float MksServoMotorDriver::readSpeed(MotorSide side) {
 void MksServoMotorDriver::resetSpeedEstimator() {
     m_left.speedEstimator.reset();
     m_right.speedEstimator.reset();
+    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: speed estimators reset");
 }
 
 void MksServoMotorDriver::resetPositionTracking() {

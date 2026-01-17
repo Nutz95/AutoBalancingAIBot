@@ -53,7 +53,7 @@ private:
     float v_target_speed_ = 0.0f;
     float w_target_yaw_req_ = 0.0f;
 
-    void updateAdaptiveTrim(float dist_err, float dt);
+    void updateAdaptiveTrim(float pitch_rad, float dist_err, float dt);
 };
 
 } // namespace balancing

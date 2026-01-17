@@ -10,32 +10,6 @@
 #define BALANCER_MIN_CMD 0.0f
 #endif
 
-// Default PID gains (units: pitch in degrees)
-// Adjusted for NEMA FOC: lower gains to handle high motor bandwidth
-#ifndef BALANCER_DEFAULT_KP
-#define BALANCER_DEFAULT_KP 0.04f
-#endif
-
-#ifndef BALANCER_DEFAULT_KI
-#define BALANCER_DEFAULT_KI 0.08f
-#endif
-
-#ifndef BALANCER_DEFAULT_KD
-#define BALANCER_DEFAULT_KD 0.006f
-#endif
-
-// Integrator anti-windup clamp (absolute limit applied to integrator state)
-#ifndef BALANCER_INTEGRATOR_LIMIT
-#define BALANCER_INTEGRATOR_LIMIT 1.0f
-#endif
-
-// Coeff d'atténuation de l'intégrateur (Leaky Integrator)
-// 1.0 = pas d'atténuation. 0.9998 = ~8% de perte par seconde à 400Hz.
-// Aide à prévenir la dérive à long terme et les blocages de l'intégrateur.
-#ifndef BALANCER_INTEGRATOR_LEAK_COEFF
-#define BALANCER_INTEGRATOR_LEAK_COEFF 0.9998f
-#endif
-
 // Whether to enable the balancer by default on startup (false recommended)
 #ifndef BALANCER_ENABLE_BY_DEFAULT
 #define BALANCER_ENABLE_BY_DEFAULT 0
@@ -136,49 +110,11 @@
 // 0: LEGACY_PID (Basic pitch PID)
 // 1: CASCADED_LQR (Navbot-style: Angle + Gyro + Distance + Speed)
 #ifndef BALANCER_CONTROLLER_MODE
-#define BALANCER_CONTROLLER_MODE 0
+#define BALANCER_CONTROLLER_MODE 1
 #endif
 
-// Default gains for Cascaded/LQR mode
-#ifndef BALANCER_DEFAULT_K_PITCH
-#define BALANCER_DEFAULT_K_PITCH 0.04f  // Positive: Lean Forward -> Move Forward
-#endif
-#ifndef BALANCER_DEFAULT_K_GYRO
-#define BALANCER_DEFAULT_K_GYRO 0.003f  // Positive: Falling Forward -> Move Forward
-#endif
-#ifndef BALANCER_DEFAULT_K_DIST
-#define BALANCER_DEFAULT_K_DIST 0.00002f
-#endif
-#ifndef BALANCER_DEFAULT_K_SPEED
-#define BALANCER_DEFAULT_K_SPEED 0.00001f
-#endif
-
-// Adaptive trim defaults
-#ifndef BALANCER_ENABLE_ADAPTIVE_TRIM
-#define BALANCER_ENABLE_ADAPTIVE_TRIM 1
-#endif
-#ifndef BALANCER_ADAPTIVE_TRIM_ALPHA
-#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.005f
-#endif
-#ifndef BALANCER_DEFAULT_K_SPEED
-#define BALANCER_DEFAULT_K_SPEED 0.0005f
-#endif
-
-// Default gains for Yaw (Heading Hold / Steering)
-#ifndef BALANCER_DEFAULT_K_YAW
-#define BALANCER_DEFAULT_K_YAW 0.4f
-#endif
-#ifndef BALANCER_DEFAULT_K_YAW_RATE
-#define BALANCER_DEFAULT_K_YAW_RATE 0.1f
-#endif
-
-// Adaptive Trim (Center of Gravity Adaptation)
-#ifndef BALANCER_ENABLE_ADAPTIVE_TRIM
-#define BALANCER_ENABLE_ADAPTIVE_TRIM 0
-#endif
-#ifndef BALANCER_ADAPTIVE_TRIM_ALPHA
-#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.0001f // Very slow adaptation
-#endif
+#include "balancing/pid_config.h"
+#include "balancing/lqr_config.h"
 
 // Motor command gain scaling factors (to compensate for asymmetric motor response)
 // Initialized from motor characterization ratios if available, else 1.0

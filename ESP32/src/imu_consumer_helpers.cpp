@@ -369,7 +369,7 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
   abbot::balancer::controller::getDiagnostics(diag);
   
   LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
-             "BALANCER_DBG t=%lums pitch=%.3fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.3f cmd=%.3f steer=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f lp_hz=%.1f encL=%ld encR=%ld termA=%.4f termG=%.4f termD=%.4f termS=%.4f\n",
+             "BALANCER_DBG t=%lums pitch=%.3fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.3f cmd=%.3f steer=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f lp_hz=%.1f encL=%ld encR=%ld termA=%.6f termG=%.6f termD=%.6f termS=%.6f\n",
              (unsigned long)ts_ms, pitch_deg, pitch_deg, avg_cmd, diag.iterm, avg_cmd, steer,
              (unsigned long)lat_us, accel_robot[0], accel_robot[1], accel_robot[2], 
              gyro_robot[0], gyro_robot[1], gyro_robot[2], freq_hz, (long)diag.enc_l, (long)diag.enc_r,

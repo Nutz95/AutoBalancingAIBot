@@ -45,7 +45,7 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
 
     // 3. Adaptive Trim (Navbot Pillar)
     if (cfg_.adaptive_trim_enabled) {
-        updateAdaptiveTrim(dist_err, dt_s);
+        updateAdaptiveTrim(pitch_rad, dist_err, dt_s);
     }
 
     // Convert to degrees for gain application (standard for this project)
@@ -57,6 +57,11 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
     float term_gyro  = cfg_.k_gyro  * pitch_rate_deg;
     float term_dist  = -cfg_.k_dist  * dist_err;
     float term_speed = -cfg_.k_speed * (v_enc_ticks_s - v_target_speed_);
+
+    // Safety: Limit the influence of position/speed terms to prevent them
+    // from overpowering the pitch stability during a fall.
+    term_dist = std::max(-0.2f, std::min(0.2f, term_dist));
+    term_speed = std::max(-0.3f, std::min(0.3f, term_speed));
 
     float u = term_angle + term_gyro + term_dist + term_speed;
 
@@ -71,9 +76,25 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
     }; 
 }
 
-void CascadedLqrStrategy::updateAdaptiveTrim(float dist_err, float dt) {
-    // If robot is forward of origin (dist_err > 0), it's leaning forward too much.
-    // Decrease pitch_trim_rad_ (lean back) to return.
+void CascadedLqrStrategy::updateAdaptiveTrim(float pitch_rad, float dist_err, float dt) {
+    // Navbot Approach: Only adapt when the robot is stable and passive.
+    // Enhanced safety: Must be very close to vertical and not under major correction.
+    float pitch_deg = (pitch_rad - pitch_trim_rad_) * (180.0f / M_PI);
+    if (fabsf(pitch_deg) > 1.0f) { // Stricter: 1 degree instead of 2
+        return;
+    }
+
+    // Must be stationary (no user command)
+    if (fabsf(v_target_speed_) > 1.0f) {
+        return;
+    }
+
+    // Must not be in a huge recovery (dist err small)
+    if (fabsf(dist_err) > 500.0f) {
+        return;
+    }
+
+    // Integrated error logic: Adjust trim to zero-out the position drift over time.
     pitch_trim_rad_ -= cfg_.adaptive_trim_alpha * dist_err * dt;
     
     // Clamp to +/- 15 degrees (0.26 rad)

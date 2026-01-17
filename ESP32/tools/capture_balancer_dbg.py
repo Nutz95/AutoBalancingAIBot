@@ -420,11 +420,13 @@ def main():
         ax3_twin = ax3.twinx()
         if 'lat' in df.columns:
             ax3_twin.plot(t_axis, df['lat'] / 1000.0, 'b-', label='Bus Latency (ms)', alpha=0.3)
-            ax3_twin.set_ylim(0, 5)
+            # Auto-scale latency axis: at least 0.5 to 2ms
+            max_lat_ms = (df['lat'].max() / 1000.0) if not df['lat'].empty else 1.0
+            ax3_twin.set_ylim(0.5, max(2.0, max_lat_ms * 1.2))
         
         ax3.set_ylabel('Frequency (Hz)', color='r')
         ax3_twin.set_ylabel('Latency (ms)', color='b')
-        ax3.set_title('Timing Stability (Target: 500Hz / 2.0ms)')
+        ax3.set_title(f'Timing Stability (Target: {int(target_hz)}Hz / {1000.0/target_hz:.1f}ms)')
         ax3.grid(True)
 
         # Subplot 4: Total PID and Motor Command
@@ -450,18 +452,25 @@ def main():
         ax5.legend(loc='upper right')
         ax5.grid(True)
 
-        # Subplot 6: Yaw Stability (Heading Hold)
+        # Subplot 6: Yaw Stability and Heading Hold
         ax6 = plt.subplot(7, 1, 6, sharex=ax1)
         if 'gz' in df.columns:
             ax6.plot(t_axis, np.degrees(df['gz']), 'r-', label='Yaw Rate (deg/s)', alpha=0.8)
         if 'steer' in df.columns:
             ax6_twin = ax6.twinx()
-            ax6_twin.plot(t_axis, df['steer'], 'b-', label='Steer (Heading Hold)', alpha=0.5)
+            ax6_twin.plot(t_axis, df['steer'], 'b-', label='Steer Output (Heading Hold)', alpha=0.5)
             ax6_twin.set_ylabel('Steer Output', color='b')
             ax6_twin.set_ylim(-1.0, 1.0)
+            
+            # Combine legends
+            lines, labels = ax6.get_legend_handles_labels()
+            lines2, labels2 = ax6_twin.get_legend_handles_labels()
+            ax6.legend(lines + lines2, labels + labels2, loc='upper left')
+        else:
+            ax6.legend(loc='upper left')
+            
         ax6.set_ylabel('Rate (deg/s)', color='r')
         ax6.set_title('Yaw Stability and Heading Hold')
-        ax6.legend(loc='upper left')
         ax6.grid(True)
 
         # Subplot 7: IMU Raw Pitch-Axis
