@@ -358,7 +358,7 @@ def main():
                     gyro_pitch.append(val)
             df['gyro_pitch_est'] = gyro_pitch
 
-        plt.figure(figsize=(12, 24))
+        plt.figure(figsize=(18, 24))
         
         # Subplot 1: Pitch
         ax1 = plt.subplot(7, 1, 1)

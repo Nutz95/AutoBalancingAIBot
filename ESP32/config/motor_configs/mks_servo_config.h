@@ -153,6 +153,12 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_ACCEL 255
 #endif
 
+// Velocity estimator alpha (Smoothing). 
+// 0.05 at 100Hz = very smooth. Lowering this stops LQR "chatter".
+#ifndef MKS_SERVO_SPEED_ALPHA
+#define MKS_SERVO_SPEED_ALPHA 0.15f      // Increased from 0.05 to reduce phase lag (lag caused slow sway)
+#endif
+
 // Timeout for logging diagnostic errors (ms) to avoid console spam
 #ifndef MKS_SERVO_DIAG_LOG_ms
 #define MKS_SERVO_DIAG_LOG_ms 2000

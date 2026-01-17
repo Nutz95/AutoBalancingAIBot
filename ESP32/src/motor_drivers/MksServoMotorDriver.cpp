@@ -8,8 +8,8 @@ namespace abbot {
 namespace motor {
 
 MksServoMotorDriver::MksServoMotorDriver()
-    : m_left{LEFT_MOTOR_ID, LEFT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(0.4f)},
-      m_right{RIGHT_MOTOR_ID, RIGHT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(0.4f)},
+    : m_left{LEFT_MOTOR_ID, LEFT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(MKS_SERVO_SPEED_ALPHA)},
+      m_right{RIGHT_MOTOR_ID, RIGHT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(MKS_SERVO_SPEED_ALPHA)},
       m_enabled(false),
       m_leftBusMutex(xSemaphoreCreateRecursiveMutex()),
       m_rightBusMutex(xSemaphoreCreateRecursiveMutex()) {}

@@ -9,24 +9,24 @@
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_ALPHA
-#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.001f  // Faster adaptation (10x from previous)
+#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.002f  // Doubled again to reach center faster
 #endif
 
 // --- Cascaded LQR Gains ---
 #ifndef BALANCER_DEFAULT_K_PITCH
-#define BALANCER_DEFAULT_K_PITCH 0.04f      // Kp: Pitch error (rad) -> Command
+#define BALANCER_DEFAULT_K_PITCH 0.08f      // Stiffened (0.06 -> 0.08) to reduce sway
 #endif
 
 #ifndef BALANCER_DEFAULT_K_GYRO
-#define BALANCER_DEFAULT_K_GYRO 0.005f      // Kg: Pitch rate (rad/s) -> Command (Damping)
+#define BALANCER_DEFAULT_K_GYRO 0.008f      // Keep good damping
 #endif
 
 #ifndef BALANCER_DEFAULT_K_DIST
-#define BALANCER_DEFAULT_K_DIST 0.00002f   // Doubled to anchor more firmly
+#define BALANCER_DEFAULT_K_DIST 0.00001f   // Reduced (2e-5 -> 1e-5) to stop "hunting" oscillation
 #endif
 
 #ifndef BALANCER_DEFAULT_K_SPEED
-#define BALANCER_DEFAULT_K_SPEED 0.0002f    // Doubled for better damping
+#define BALANCER_DEFAULT_K_SPEED 0.00008f   // Reduced (2e-4 -> 0.8e-4) to stop slow oscillation
 #endif
 
 // --- Yaw / Heading Control ---
@@ -58,7 +58,7 @@
 
 // Yaw rate noise gate (rad/s)
 #ifndef BALANCER_YAW_DEADBAND
-#define BALANCER_YAW_DEADBAND 0.01f
+#define BALANCER_YAW_DEADBAND 0.05f  // Increased (0.01 -> 0.05) to stop 3D twitching
 #endif
 
 // --- Control Saturation Limits ---

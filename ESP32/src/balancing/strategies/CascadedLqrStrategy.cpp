@@ -87,9 +87,9 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
 
 void CascadedLqrStrategy::updateAdaptiveTrim(float pitch_rad, float dist_err, float dt) {
     // Navbot Approach: Only adapt when the robot is stable and passive.
-    // Enhanced safety: Must be very close to vertical and not under major correction.
+    // Enhanced safety: Must be reasonably close to vertical and not under major correction.
     float pitch_deg = (pitch_rad - pitch_trim_rad_) * (180.0f / M_PI);
-    if (fabsf(pitch_deg) > 1.0f) { // Stricter: 1 degree instead of 2
+    if (fabsf(pitch_deg) > 5.0f) { // Increased from 1.0 to allow adaptation from initial lean
         return;
     }
 
