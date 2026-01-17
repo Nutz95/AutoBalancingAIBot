@@ -127,8 +127,16 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     
                     // Respect inversion logic for odometry consistency
                     int32_t corrected_p = state.invert ? -p : p;
-                    async.encoder_value.store(corrected_p);
-                    async.encoder_dirty.store(true);
+                    
+                    // Outlier rejection: if p is 0 but previous value was significantly non-zero,
+                    // ignore this sample as it's likely a telemetry glitch.
+                    int32_t prev_p = async.encoder_value.load();
+                    if (p == 0 && abs(prev_p) > BALANCER_ENCODER_GLITCH_THRESHOLD) {
+                        // Skip update
+                    } else {
+                        async.encoder_value.store(corrected_p);
+                        async.encoder_dirty.store(true);
+                    }
                     async.last_telemetry_ms = now;
                 }
             }

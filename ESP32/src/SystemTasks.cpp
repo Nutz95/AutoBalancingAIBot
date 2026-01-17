@@ -45,7 +45,7 @@ static QueueHandle_t calibQueue = nullptr;
 static fusion::FusionConfig g_fusion_cfg;
 // Store sample rate (Hz) in one place so dt fallback uses the configured value
 // Sample rate (Hz) used by the selected filter
-static float g_filter_sample_rate_hz = 500.0f;
+static float g_filter_sample_rate_hz = 1000.0f;
 // Fused outputs (units: radians, radians/sec)
 static float g_fused_pitch_rad = 0.0f;
 static float g_fused_pitch_rate_rads = 0.0f;
@@ -159,8 +159,7 @@ static void imuProducerTask(void *pvParameters) {
 
     // Yield to let other tasks (like IMUConsumer) run on Core 1.
     // We wait 1 tick (1ms) regardless of success/fail. 
-    // This provides a 1kHz polling rhythm which is perfect for catching 500Hz samples
-    // without starving the lower-priority PID consumer task.
+    // This provides a 1kHz polling rhythm.
     vTaskDelay(xFrequency);
 
     // Log drops periodically
@@ -171,12 +170,6 @@ static void imuProducerTask(void *pvParameters) {
       drop_count = 0;
       last_drop_log = now;
     }
-
-    // Use 1 tick delay (~1ms) to yield CPU and prevent busy-loop.
-    // This achieves ~333Hz effective rate (limited by tick granularity),
-    // which is sufficient for control. The driver throttles reads to the
-    // configured interval (2500µs = 400Hz target) using micros().
-    vTaskDelay(1);
   }
 }
 
@@ -303,11 +296,9 @@ static void imuConsumerTask(void *pvParameters) {
         g_consumer, sample, fused_pitch_local, fused_pitch_rate_local,
         accel_robot, gyro_robot, left_cmd, right_cmd);
 
-#if defined(ENABLE_IMU_DEBUG_LOGS)
     abbot::imu_consumer::emitDiagnosticsIfEnabled(
         sample.ts_ms, fused_pitch_local, fused_pitch_rate_local,
-        left_cmd, right_cmd);
-#endif
+        left_cmd, right_cmd, accel_robot, gyro_robot);
 
     // Emit raw IMU debug logs (throttled)
     abbot::imu_consumer::emitImuDebugLogsIfEnabled(sample, last_debug_print_ms);

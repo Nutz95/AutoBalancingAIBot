@@ -27,8 +27,7 @@ struct BMI160Config {
 
   // Sampling frequency in Hz (BMI160 can do 100, 200, 400, 800, 1600 Hz)
   // Higher frequency allows better PID performance.
-  // Set to 500 to allow 1000/2 ticks (500Hz) and avoid the 333Hz trap of 400Hz.
-  uint16_t sampling_hz = 500;
+  uint16_t sampling_hz = 1000;
 
   // Sensor axis signs: +1 or -1 to correct for physical mounting orientation.
   // Note: BMI160 directions adjusted for balancing logic (Forward = Positive Pitch).

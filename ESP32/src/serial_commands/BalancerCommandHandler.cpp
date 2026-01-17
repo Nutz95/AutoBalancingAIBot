@@ -1,3 +1,4 @@
+#include "units.h"
 #include "serial_commands/BalancerCommandHandler.h"
 #include "balancer_controller.h"
 #include "logging.h"
@@ -12,74 +13,122 @@ namespace serialcmds {
 
 BalancerCommandHandler::BalancerCommandHandler(IFusionService* fusionService)
     : m_fusionService(fusionService) {
-    m_menu.reset(new SerialMenu("Balancer (PID)"));
-    m_menu->addEntry(1, "BALANCE START",
+    m_menu.reset(new SerialMenu("Balancer Control"));
+    
+    // Core commands
+    m_menu->addEntry(1, "BALANCE START [FORCE]",
                   [this](const String &p) { balancerStartHandler(p); });
     m_menu->addEntry(2, "BALANCE STOP",
                   [](const String &) { abbot::balancer::controller::stop(); });
-    m_menu->addEntry(3, "BALANCE GET_GAINS", [](const String &) {
-      float kp, ki, kd;
-      abbot::balancer::controller::getGains(kp, ki, kd);
-      char buf[128];
-      snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f", (double)kp,
-               (double)ki, (double)kd);
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+    
+    // Strategy selection
+    m_menu->addEntry(3, "BALANCE STRATEGY <PID|LQR>", [](const String &p) {
+        String s = p; s.trim(); s.toUpperCase();
+        if (s == "PID") {
+            abbot::balancer::controller::setMode(abbot::balancer::controller::ControllerMode::LEGACY_PID);
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "STRATEGY: switched to LEGACY_PID");
+        } else if (s == "LQR") {
+            abbot::balancer::controller::setMode(abbot::balancer::controller::ControllerMode::CASCADED_LQR);
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "STRATEGY: switched to CASCADED_LQR");
+        } else {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE STRATEGY <PID|LQR>");
+        }
     });
-    // Group: gains
-    m_menu->addEntry(4, "BALANCE SET GAINS <kp> <ki> <kd>",
-                  [](const String &p) { balancerSetGainsHandler(p); });
-    m_menu->addEntry(5, "BALANCE RESET GAINS", [](const String &) {
-      abbot::balancer::controller::resetGainsToDefaults();
+
+    // Submenu: LEGACY_PID settings
+    m_menu->addEntry(10, "BALANCE PID GAINS [<kp> <ki> <kd>]", [](const String &p) {
+        String s = p; s.trim();
+        if (s.length() == 0) {
+            float kp, ki, kd;
+            abbot::balancer::controller::getGains(kp, ki, kd);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "PID: Kp=%.6f Ki=%.6f Kd=%.6f\n", (double)kp, (double)ki, (double)kd);
+        } else {
+            float kp, ki, kd;
+            if (sscanf(s.c_str(), "%f %f %f", &kp, &ki, &kd) == 3) {
+                abbot::balancer::controller::setGains(kp, ki, kd);
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "PID: gains updated");
+            }
+        }
     });
-    // Group: deadband
-    m_menu->addEntry(6, "BALANCE DEADBAND GET", [](const String &) {
-      float db = abbot::balancer::controller::getDeadband();
-      char buf[128];
-      snprintf(buf, sizeof(buf), "BALANCER: deadband=%.6f", (double)db);
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+
+    // Submenu: CASCADED_LQR settings
+    m_menu->addEntry(20, "BALANCE LQR GAINS [<kp> <kg> <kd> <ks>]", [](const String &p) {
+        String s = p; s.trim();
+        if (s.length() == 0) {
+            abbot::balancer::controller::CascadedGains g;
+            abbot::balancer::controller::getCascadedGains(g);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: Kp_pitch=%.6f Kg_gyro=%.6f Kd_dist=%.6f Ks_speed=%.6f\n", 
+                       (double)g.k_pitch, (double)g.k_gyro, (double)g.k_dist, (double)g.k_speed);
+        } else {
+            float kp, kg, kd, ks;
+            if (sscanf(s.c_str(), "%f %f %f %f", &kp, &kg, &kd, &ks) == 4) {
+                abbot::balancer::controller::CascadedGains g = {kp, kg, kd, ks};
+                abbot::balancer::controller::setCascadedGains(g);
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: gains updated");
+            }
+        }
     });
-    m_menu->addEntry(7, "BALANCE DEADBAND SET <v>",
-                  [](const String &p) { balancerDeadbandSetHandler(p); });
-    m_menu->addEntry(8, "BALANCE DEADBAND CALIBRATE", [](const String &) {
-      abbot::balancer::controller::calibrateDeadband();
+    m_menu->addEntry(21, "BALANCE LQR TRIM <ON|OFF>", [](const String &p) {
+        String s = p; s.trim(); s.toUpperCase();
+        if (s.length() > 0) {
+            bool en = (s == "ON");
+            abbot::balancer::controller::setAdaptiveTrimEnabled(en);
+        }
+        bool current = abbot::balancer::controller::isAdaptiveTrimEnabled();
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: adaptive trim is %s\n", current ? "ON" : "OFF");
     });
-    // Group: min command applied when outside deadband
-    m_menu->addEntry(21, "BALANCE MIN_CMD GET", [](const String &) {
-      float v = abbot::balancer::controller::getMinCmd();
-      char buf[128];
-      snprintf(buf, sizeof(buf), "BALANCER: min_cmd=%.6f", (double)v);
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+
+    // Shared settings (Motors, Trim, Deadband)
+    m_menu->addEntry(30, "BALANCE DEADBAND <GET|SET <v>|CALIBRATE>", [](const String &p) {
+        String s = p; s.trim(); s.toUpperCase();
+        if (s == "GET") {
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: deadband=%.6f\n", (double)abbot::balancer::controller::getDeadband());
+        } else if (s.startsWith("SET")) {
+            float v;
+            if (sscanf(s.c_str(), "SET %f", &v) == 1) abbot::balancer::controller::setDeadband(v);
+        } else if (s == "CALIBRATE") {
+            abbot::balancer::controller::calibrateDeadband();
+        }
     });
-    m_menu->addEntry(22, "BALANCE MIN_CMD SET <v>",
-                  [](const String &p) { balancerMinCmdSetHandler(p); });
-    m_menu->addEntry(16, "BALANCE MOTOR_GAINS GET", [](const String &) {
-      float left, right;
-      abbot::balancer::controller::getMotorGains(left, right);
-      char buf[128];
-      snprintf(buf, sizeof(buf), "BALANCER: motor gains L=%.3f R=%.3f",
-               (double)left, (double)right);
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+    m_menu->addEntry(31, "BALANCE MIN_CMD <GET|SET <v>>", [](const String &p) {
+        String s = p; s.trim(); s.toUpperCase();
+        if (s == "GET") {
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: min_cmd=%.6f\n", (double)abbot::balancer::controller::getMinCmd());
+        } else if (s.startsWith("SET")) {
+            float v;
+            if (sscanf(s.c_str(), "SET %f", &v) == 1) abbot::balancer::controller::setMinCmd(v);
+        }
     });
-    m_menu->addEntry(17, "BALANCE MOTOR_GAINS SET <left> <right>",
-                  [](const String &p) { balancerMotorGainsSetHandler(p); });
-    // Group: calibrated trim
-    m_menu->addEntry(18, "BALANCE TRIM CALIBRATE", [](const String &) {
-      abbot::balancer::controller::calibrateTrim();
+    m_menu->addEntry(32, "BALANCE MOTOR_GAINS <GET|SET <L> <R>>", [](const String &p) {
+        String s = p; s.trim(); s.toUpperCase();
+        if (s == "GET") {
+            float l, r; abbot::balancer::controller::getMotorGains(l, r);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "MOTOR_GAINS: L=%.3f R=%.3f\n", (double)l, (double)r);
+        } else if (s.startsWith("SET")) {
+            float l, r;
+            if (sscanf(s.c_str(), "SET %f %f", &l, &r) == 2) abbot::balancer::controller::setMotorGains(l, r);
+        }
     });
-    m_menu->addEntry(19, "BALANCE TRIM SHOW", [](const String &) {
-      abbot::balancer::controller::showTrim();
+
+    m_menu->addEntry(40, "BALANCE TRIM <CALIBRATE|SHOW|RESET>", [](const String &p) {
+        String s = p; s.trim(); s.toUpperCase();
+        if (s == "CALIBRATE") abbot::balancer::controller::calibrateTrim();
+        else if (s == "SHOW") abbot::balancer::controller::showTrim();
+        else if (s == "RESET") abbot::balancer::controller::resetTrim();
     });
-    m_menu->addEntry(20, "BALANCE TRIM RESET", [](const String &) {
-      abbot::balancer::controller::resetTrim();
+
+    m_menu->addEntry(50, "BALANCE START_THR <CALIBRATE|STATUS>", [](const String &p) {
+        String s = p; s.trim(); s.toUpperCase();
+        if (s == "CALIBRATE") abbot::balancer::controller::calibrateStartThresholds();
+        else if (s == "STATUS") {
+            bool en = abbot::balancer::controller::getAdaptiveStart();
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "START_THR: adaptive is %s\n", en ? "ON" : "OFF");
+        }
     });
-    // Group: adaptive start
-    m_menu->addEntry(23, "BALANCE ADAPTIVE <ON|OFF>",
-                  [](const String &p) { balancerAdaptiveSetHandler(p); });
-    m_menu->addEntry(24, "BALANCE CALIBRATE_START",
-                  [](const String &p) { balancerCalibrateStartHandler(p); });
 }
 
 bool BalancerCommandHandler::handleCommand(const String& line, const String& up) {
+    // Use the BALANCE prefix handling logic for all balancer-related commands.
     if (up.startsWith("BALANCE")) {
         return handleBalance(line, up);
     }
@@ -91,17 +140,11 @@ SerialMenu* BalancerCommandHandler::buildMenu() {
 }
 
 bool BalancerCommandHandler::handleBalance(const String& line, const String& up) {
-    char buf[128];
-    char *tok[8];
-    // We need a way to tokenize. For now I'll use a local copy of tokenizeUpper or similar.
-    // Actually, I can just use String methods for simplicity if I don't want to duplicate tokenizeUpper.
-    
     String s = up;
     s.trim();
     if (s == "BALANCE") {
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-            "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> "
-            "<ki> <kd>] | BALANCE RESET | BALANCE GET_GAINS | BALANCE DEADBAND GET|SET|CALIBRATE | BALANCE MIN_CMD GET|SET | BALANCE ADAPTIVE ON|OFF | BALANCE CALIBRATE_START");
+            "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> <kd>] | BALANCE DEADBAND GET|SET | BALANCE STRATEGY <PID|LQR>");
         return true;
     }
 
@@ -111,107 +154,50 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
     } else if (s == "BALANCE STOP") {
         abbot::balancer::controller::stop();
         return true;
-    } else if (s == "BALANCE RESET") {
-        abbot::balancer::controller::resetGainsToDefaults();
+    } else if (s.startsWith("BALANCE DEADBAND SET ")) {
+        balancerDeadbandSetHandler(line.substring(21));
         return true;
-    } else if (s.startsWith("BALANCE GAINS") || s.startsWith("BALANCE SET GAINS") || 
-               s.startsWith("BALANCE SET_GAINS") || s.startsWith("BALANCE SET ")) {
-        String args;
-        if (s.startsWith("BALANCE SET GAINS") || s.startsWith("BALANCE SET_GAINS")) {
-            args = s.substring(17);
-        } else if (s.startsWith("BALANCE SET ")) {
-            args = s.substring(12);
-        } else {
-            args = s.substring(13);
+    } else if (s.startsWith("BALANCE MIN_CMD SET ")) {
+        balancerMinCmdSetHandler(line.substring(20));
+        return true;
+    } else if (s.startsWith("BALANCE MOTOR_GAINS SET ")) {
+        balancerMotorGainsSetHandler(line.substring(24));
+        return true;
+    } else if (s.startsWith("BALANCE STRATEGY ")) {
+        String mode = s.substring(17); mode.trim();
+        if (mode == "PID") {
+            abbot::balancer::controller::setMode(abbot::balancer::controller::ControllerMode::LEGACY_PID);
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "STRATEGY: switched to LEGACY_PID");
+        } else if (mode == "LQR") {
+            abbot::balancer::controller::setMode(abbot::balancer::controller::ControllerMode::CASCADED_LQR);
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "STRATEGY: switched to CASCADED_LQR");
         }
-        args.trim();
-        if (args.length() == 0) {
-            float kp, ki, kd;
-            abbot::balancer::controller::getGains(kp, ki, kd);
-            char buf[128];
-            snprintf(buf, sizeof(buf),
-                     "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f (persisted for FILTER=%s)",
-                     (double)kp, (double)ki, (double)kd,
-                     abbot::filter::getCurrentFilterName());
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+        return true;
+    } else if (s.startsWith("BALANCE LQR GAINS")) {
+        String p = line.substring(17); p.trim();
+        if (p.length() == 0) {
+            abbot::balancer::controller::CascadedGains g;
+            abbot::balancer::controller::getCascadedGains(g);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: Kp_pitch=%.6f Kg_gyro=%.6f Kd_dist=%.6f Ks_speed=%.6f\n", 
+                       (double)g.k_pitch, (double)g.k_gyro, (double)g.k_dist, (double)g.k_speed);
         } else {
-            float kp, ki, kd;
-            if (sscanf(args.c_str(), "%f %f %f", &kp, &ki, &kd) == 3) {
-                abbot::balancer::controller::setGains(kp, ki, kd);
-                char msg[128];
-                snprintf(msg, sizeof(msg), "BALANCE: gains saved for FILTER=%s",
-                         abbot::filter::getCurrentFilterName());
-                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, msg);
+            float kp, kg, kd, ks;
+            if (sscanf(p.c_str(), "%f %f %f %f", &kp, &kg, &kd, &ks) == 4) {
+                abbot::balancer::controller::CascadedGains g = {kp, kg, kd, ks};
+                abbot::balancer::controller::setCascadedGains(g);
+                LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: gains updated");
             }
         }
         return true;
-    } else if (s == "BALANCE GET_GAINS") {
-        float kp, ki, kd;
-        abbot::balancer::controller::getGains(kp, ki, kd);
-        char buf[128];
-        snprintf(buf, sizeof(buf), "BALANCER: Kp=%.6f Ki=%.6f Kd=%.6f", (double)kp,
-                 (double)ki, (double)kd);
-        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+    } else if (s.startsWith("BALANCE LQR TRIM ")) {
+        String p = s.substring(17); p.trim();
+        bool en = (p == "ON");
+        abbot::balancer::controller::setAdaptiveTrimEnabled(en);
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: adaptive trim is %s\n", en ? "ON" : "OFF");
         return true;
-    } else if (s.startsWith("BALANCE DEADBAND")) {
-        String sub = s.substring(16);
-        sub.trim();
-        if (sub == "GET") {
-            float db = abbot::balancer::controller::getDeadband();
-            char buf[128];
-            snprintf(buf, sizeof(buf), "BALANCER: deadband=%.6f", (double)db);
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
-        } else if (sub.startsWith("SET")) {
-            balancerDeadbandSetHandler(line.substring(20));
-        } else if (sub == "CALIBRATE") {
-            abbot::balancer::controller::calibrateDeadband();
-        } else {
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                      "BALANCE DEADBAND usage: DEADBAND GET | DEADBAND SET <v> | DEADBAND CALIBRATE");
-        }
-        return true;
-    } else if (s.startsWith("BALANCE MIN_CMD")) {
-        String sub = s.substring(15);
-        sub.trim();
-        if (sub == "GET") {
-            float v = abbot::balancer::controller::getMinCmd();
-            char buf[128];
-            snprintf(buf, sizeof(buf), "BALANCER: min_cmd=%.6f", (double)v);
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
-        } else if (sub.startsWith("SET")) {
-            balancerMinCmdSetHandler(line.substring(19));
-        } else {
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                      "BALANCE MIN_CMD usage: MIN_CMD GET | MIN_CMD SET <v>");
-        }
-        return true;
-    } else if (s.startsWith("BALANCE MOTOR_GAINS")) {
-        String sub = s.substring(19);
-        sub.trim();
-        if (sub == "GET") {
-            float left, right;
-            abbot::balancer::controller::getMotorGains(left, right);
-            char buf[128];
-            snprintf(buf, sizeof(buf), "BALANCER: motor_gains left=%.3f right=%.3f", 
-                     (double)left, (double)right);
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
-        } else if (sub.startsWith("SET")) {
-            balancerMotorGainsSetHandler(line.substring(23));
-        } else {
-            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                      "BALANCE MOTOR_GAINS usage: MOTOR_GAINS GET | MOTOR_GAINS SET <left> <right>");
-        }
-        return true;
-    } else if (s.startsWith("BALANCE TRIM")) {
-        String sub = s.substring(12);
-        sub.trim();
-        if (sub == "CALIBRATE") {
-            abbot::balancer::controller::calibrateTrim();
-        } else if (sub == "SHOW") {
-            abbot::balancer::controller::showTrim();
-        } else if (sub == "RESET") {
-            abbot::balancer::controller::resetTrim();
-        }
+    } else if (s == "BALANCE LQR TRIM") {
+        bool current = abbot::balancer::controller::isAdaptiveTrimEnabled();
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: adaptive trim is %s\n", current ? "ON" : "OFF");
         return true;
     }
 
@@ -219,97 +205,48 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
 }
 
 void BalancerCommandHandler::balancerStartHandler(const String &p) {
-  String s = p;
-  s.trim();
-  s.toUpperCase();
-  bool force = false;
-  if (s.length() > 0) {
-    if (s.indexOf("FORCE") != -1)
-      force = true;
+  bool force = (p.indexOf("FORCE") >= 0);
+  float start_pitch = 0.0f;
+  if (m_fusionService) {
+    start_pitch = m_fusionService->getPitch();
   }
   
-  if (m_fusionService) {
-    m_fusionService->printDiagnostics();
-    if (!force && !m_fusionService->isReady()) {
-      unsigned long rem = m_fusionService->getWarmupRemaining();
-      char buf[256];
-      snprintf(buf, sizeof(buf),
-               "BALANCE: fusion not ready (warmup remaining=%lu). Use 'BALANCE "
-               "START FORCE' to override.",
-               rem);
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
+  if (!force && fabsf(radToDeg(start_pitch)) > 45.0f) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "ERROR: Pitch too high to start safely. Use 'BALANCE START FORCE' if needed.");
       return;
-    }
-    abbot::balancer::controller::start(m_fusionService->getPitch());
   }
+  
+  abbot::balancer::controller::start(start_pitch);
 }
 
 void BalancerCommandHandler::balancerSetGainsHandler(const String &p) {
-  String s = p;
-  s.trim();
   float kp = 0, ki = 0, kd = 0;
-  int matched = sscanf(s.c_str(), "%f %f %f", &kp, &ki, &kd);
-  (void)matched;
-  abbot::balancer::controller::setGains(kp, ki, kd);
+  if (sscanf(p.c_str(), "%f %f %f", &kp, &ki, &kd) == 3) {
+      abbot::balancer::controller::setGains(kp, ki, kd);
+  }
 }
 
 void BalancerCommandHandler::balancerDeadbandSetHandler(const String &p) {
-  String s = p;
-  s.trim();
-  if (s.length() == 0) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                "Usage: BALANCE DEADBAND SET <value>");
-    return;
-  }
-  float v = s.toFloat();
-  abbot::balancer::controller::setDeadband(v);
+  abbot::balancer::controller::setDeadband(p.toFloat());
 }
 
 void BalancerCommandHandler::balancerMinCmdSetHandler(const String &p) {
-  String s = p;
-  s.trim();
-  if (s.length() == 0) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                "Usage: BALANCE MIN_CMD SET <value>");
-    return;
-  }
-  float v = s.toFloat();
-  abbot::balancer::controller::setMinCmd(v);
+  abbot::balancer::controller::setMinCmd(p.toFloat());
 }
 
 void BalancerCommandHandler::balancerMotorGainsSetHandler(const String &p) {
-  String s = p;
-  s.trim();
-  float left = 1.0f, right = 1.0f;
-  int matched = sscanf(s.c_str(), "%f %f", &left, &right);
-  if (matched < 2) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                "Usage: BALANCE MOTOR_GAINS <left> <right>");
-    return;
+  float left, right;
+  if (sscanf(p.c_str(), "%f %f", &left, &right) == 2) {
+      abbot::balancer::controller::setMotorGains(left, right);
   }
-  if (left < 0.1f || left > 2.0f || right < 0.1f || right > 2.0f) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-                "ERROR: motor gains must be in range [0.1, 2.0]");
-    return;
-  }
-  abbot::balancer::controller::setMotorGains(left, right);
 }
 
 void BalancerCommandHandler::balancerAdaptiveSetHandler(const String &p) {
-  String s = p;
-  s.trim();
-  s.toUpperCase();
-  if (s == "ON") {
-    abbot::balancer::controller::setAdaptiveStart(true);
-  } else if (s == "OFF") {
-    abbot::balancer::controller::setAdaptiveStart(false);
-  } else {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE ADAPTIVE ON|OFF");
-  }
+  String s = p; s.trim(); s.toUpperCase();
+  abbot::balancer::controller::setAdaptiveStart(s == "ON");
 }
 
 void BalancerCommandHandler::balancerCalibrateStartHandler(const String &p) {
-  (void)p;
   abbot::balancer::controller::calibrateStartThresholds();
 }
 

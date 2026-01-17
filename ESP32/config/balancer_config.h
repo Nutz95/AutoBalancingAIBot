@@ -111,19 +111,55 @@
 
 // Interval for encoder updates (ms). Throttles bus traffic.
 // Only used if BALANCER_ENABLE_ENCODER_UPDATES is 1.
-// Increased to 100ms to reduce loop jitter and improve pitch stability.
+// Reduced to 25ms (40Hz) to allow for a future velocity control loop.
 #ifndef BALANCER_ENCODER_UPDATE_MS
-#define BALANCER_ENCODER_UPDATE_MS 100
+#define BALANCER_ENCODER_UPDATE_MS 25
+#endif
+
+// Encoder Outlier Rejection
+// Threshold for detecting impossible jumps in encoder values (telemetry glitches)
+#ifndef BALANCER_ENCODER_GLITCH_THRESHOLD
+#define BALANCER_ENCODER_GLITCH_THRESHOLD 1000
+#endif
+#ifndef BALANCER_VELOCITY_GLITCH_THRESHOLD
+#define BALANCER_VELOCITY_GLITCH_THRESHOLD 50000
 #endif
 
 // Smoothing factor for pitch rate (D-term input). 
 // 1.0 = no filtering, lower = more smoothing.
-// Recommended: 0.2 to 0.5 to reduce motor jitter from raw gyro noise.
+// If robot vibrates/buzzes, lower this value (e.g. 0.1 to 0.2).
 #ifndef BALANCER_PITCH_RATE_ALPHA
-#define BALANCER_PITCH_RATE_ALPHA 0.4f
+#define BALANCER_PITCH_RATE_ALPHA 0.15f // (au lieu de 0.4f)
 #endif
 
-// (Duplicate flag removed)
+// --- Controller Strategy ---
+// 0: LEGACY_PID (Basic pitch PID)
+// 1: CASCADED_LQR (Navbot-style: Angle + Gyro + Distance + Speed)
+#ifndef BALANCER_CONTROLLER_MODE
+#define BALANCER_CONTROLLER_MODE 0
+#endif
+
+// Default gains for Cascaded/LQR mode
+#ifndef BALANCER_DEFAULT_K_PITCH
+#define BALANCER_DEFAULT_K_PITCH 0.02f
+#endif
+#ifndef BALANCER_DEFAULT_K_GYRO
+#define BALANCER_DEFAULT_K_GYRO 0.002f
+#endif
+#ifndef BALANCER_DEFAULT_K_DIST
+#define BALANCER_DEFAULT_K_DIST 0.0001f
+#endif
+#ifndef BALANCER_DEFAULT_K_SPEED
+#define BALANCER_DEFAULT_K_SPEED 0.0005f
+#endif
+
+// Adaptive Trim (Center of Gravity Adaptation)
+#ifndef BALANCER_ENABLE_ADAPTIVE_TRIM
+#define BALANCER_ENABLE_ADAPTIVE_TRIM 0
+#endif
+#ifndef BALANCER_ADAPTIVE_TRIM_ALPHA
+#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.0001f // Very slow adaptation
+#endif
 
 // Motor command gain scaling factors (to compensate for asymmetric motor response)
 // Initialized from motor characterization ratios if available, else 1.0

@@ -341,16 +341,23 @@ void requestWarmup(ConsumerState &state, float seconds, float sample_rate_hz) {
 
 void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               float fused_pitch_rate_local, float left_cmd,
-                              float right_cmd) {
+                              float right_cmd, const float accel_robot[3], 
+                              const float gyro_robot[3]) {
   if (!abbot::log::isChannelEnabled(abbot::log::CHANNEL_BALANCER)) {
     return;
   }
   float pitch_deg = radToDeg(fused_pitch_local);
   float pitch_rate_deg = radToDeg(fused_pitch_rate_local);
+  
+  // Format compatible with capture_balancer_dbg.py
+  // We map: pid_in -> pitch, pid_out -> cmd, iterm -> 0 (or adaptive trim)
+  float avg_cmd = (left_cmd + right_cmd) / 2.0f;
+  
   LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
-             "%lu,pitch_deg=%.3f,pitch_rate_deg=%.3f,left=%.3f,right=%.3f\n",
-             (unsigned long)ts_ms, pitch_deg, pitch_rate_deg, left_cmd,
-             right_cmd);
+             "BALANCER_DBG t=%lums pitch=%.3fdeg pid_in=%.3fdeg pid_out=%.3f iterm=0.000 cmd=%.3f lat=1000us ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f\n",
+             (unsigned long)ts_ms, pitch_deg, pitch_deg, avg_cmd, avg_cmd,
+             accel_robot[0], accel_robot[1], accel_robot[2], 
+             gyro_robot[0], gyro_robot[1], gyro_robot[2]);
 }
 
 bool measureAndLogImuFrequency(ImuFrequencyMeasurement &freq_state,

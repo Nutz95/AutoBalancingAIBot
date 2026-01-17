@@ -22,6 +22,28 @@ void setGains(float kp, float ki, float kd);
 void getGains(float &kp, float &ki, float &kd);
 void resetGainsToDefaults(); // Reset gains to compile-time defaults from
                              // balancer_config.h
+
+enum class ControllerMode {
+    LEGACY_PID = 0,
+    CASCADED_LQR = 1
+};
+void setMode(ControllerMode mode);
+ControllerMode getMode();
+
+// Cascaded/LQR gains
+struct CascadedGains {
+    float k_pitch;
+    float k_gyro;
+    float k_dist;
+    float k_speed;
+};
+void setCascadedGains(const CascadedGains &g);
+void getCascadedGains(CascadedGains &g);
+
+// Adaptive Trim
+void setAdaptiveTrimEnabled(bool enable);
+bool isAdaptiveTrimEnabled();
+
 void setDeadband(float db);
 float getDeadband();
 void calibrateDeadband();

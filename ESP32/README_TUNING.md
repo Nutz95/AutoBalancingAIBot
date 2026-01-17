@@ -1,6 +1,48 @@
-# Tuning Telemetry (TUNING) — Quick Start
+# Tuning Telemetry (TUNING) & Balancer Control
 
-This short README explains how to use the `TUNING` CSV telemetry mode implemented in firmware.
+This README explains how to use the built-in telemetry and the new modular balancing strategies.
+
+## 1. Capture Tools
+We recommend using the advanced Python tool for diagnostics:
+```bash
+python tools/capture_balancer_dbg.py COMx --duration 10 --plot
+```
+This tool:
+- Automatically enables the `BALANCER` log channel.
+- Captures high-frequency diagnostics (Pitch, Rate, Encoders, Speed).
+- Performs FFT analysis to identify oscillation frequencies (e.g., limit cycles).
+- Calculates stability statistics (Standard Deviation, Peak-to-Peak).
+
+## 2. Balancer Commands
+The balancing system now supports multiple algorithms through a Strategy pattern.
+
+### Strategy Selection
+- `BALANCE STRATEGY PID`: Standard cascaded PID (Pitch -> Tilt).
+- `BALANCE STRATEGY LQR`: State-space style control with 4 states (Angle, Gyro, Distance, Speed).
+
+### PID Configuration (`LEGACY_PID`)
+- `BALANCE PID GAINS`: Show current gains.
+- `BALANCE PID GAINS <kp> <ki> <kd>`: Update gains.
+
+### LQR Configuration (`CASCADED_LQR`)
+- `BALANCE LQR GAINS`: Show gains (K_pitch, K_gyro, K_dist, K_speed).
+- `BALANCE LQR GAINS <kp> <kg> <kd> <ks>`: Update gains.
+- `BALANCE LQR TRIM <ON|OFF>`: Toggle Adaptive Trim (automatic COG compensation).
+
+### Global Settings
+- `BALANCE TRIM CALIBRATE`: Recalibrate the robot's zero-pitch angle.
+- `BALANCE MOTOR_GAINS SET <L> <R>`: Adjust individual motor strength (useful for correcting drift).
+- `BALANCE DEADBAND CALIBRATE`: Automatically find motor starting voltages.
+
+## 3. High-Frequency Control (1kHz)
+The system now runs at **1000Hz**.
+- IMU Sampling: 1000Hz via SPI (BMI160).
+- Fusion Filter (Madgwick): 1000Hz.
+- Control Loop: 1000Hz.
+
+This high frequency is critical for damping the ~8-9Hz oscillations observed in previous tests.
+
+# Old Tuning Info (Legacy)
 
 Purpose
 - Provide a clean, machine-readable CSV stream with fused IMU outputs (pitch + pitch rate) and motor commands.

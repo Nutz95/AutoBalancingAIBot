@@ -45,7 +45,7 @@ def parse_line(line, rows):
         return
     m = BAL_RE.search(line)
     if m:
-        d = {k: float(v) for k, v in m.groupdict().items()}
+        d = {k: float(v) if v is not None else 0.0 for k, v in m.groupdict().items()}
         t = int(float(d.pop('t')))
         rows['bal'][t].update(d)
         return
@@ -220,6 +220,32 @@ def main():
     df.to_csv(args.csv, index=False)
     print(f"Wrote CSV: {args.csv}")
 
+    # Extra stats calculation for display
+    stats_text = ""
+    try:
+        valid_pitch = df['pitch'].dropna()
+        if not valid_pitch.empty:
+            mean_p = valid_pitch.mean()
+            std_p = valid_pitch.std()
+            stats_text += f"Pitch: Mean={mean_p:.2f}°, Std={std_p:.2f}°\n"
+            
+            # Dominant frequency estimation using zero crossings
+            pitch_vals = valid_pitch.values
+            pitch_centered = pitch_vals - np.mean(pitch_vals)
+            crossings = np.where(np.diff(np.sign(pitch_centered)))[0]
+            duration = (df['time_ms'].iloc[-1] - df['time_ms'].iloc[0]) / 1000.0
+            if duration > 0:
+                freq = len(crossings) / (2 * duration)
+                stats_text += f"Est. Oscillation Freq: {freq:.2f} Hz\n"
+
+        if 'encL' in df.columns and 'encR' in df.columns:
+            start_enc = (df['encL'].iloc[0] + df['encR'].iloc[0]) / 2
+            end_enc = (df['encL'].iloc[-1] + df['encR'].iloc[-1]) / 2
+            drift = end_enc - start_enc
+            stats_text += f"Avg Encoder Drift: {drift:.1f} ticks"
+    except Exception as e:
+        print(f"Stats calculation failed: {e}")
+
     # Plot
     try:
         import matplotlib.pyplot as plt
@@ -232,7 +258,7 @@ def main():
                 df[c] = pd.to_numeric(df[c], errors='coerce')
 
         if args.ffill:
-            df = df.fillna(method='ffill', limit=10)
+            df = df.ffill(limit=10)
 
         # Calculate PID components if gains are known
         if 'pid_in' in df.columns and 'iterm' in df.columns and 'pid_out' in df.columns:
@@ -274,6 +300,11 @@ def main():
         if 'gyro_pitch_est' in df.columns:
             ax1.plot(t_axis, df['gyro_pitch_est'], 'c--', label='Gyro Integration (No-Lag Ref)', alpha=0.6)
         
+        # Display stats overlay
+        if stats_text:
+            ax1.text(0.02, 0.95, stats_text, transform=ax1.transAxes, verticalalignment='top', 
+                     bbox=dict(boxstyle='round', facecolor='white', alpha=0.8), fontsize=10)
+
         # Display trim info
         if trim_info['detected']:
              color = 'gray' if trim_info['type'] == 'calibrated' else 'red'

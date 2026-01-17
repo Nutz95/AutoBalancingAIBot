@@ -118,11 +118,11 @@ bool BMI160Driver::begin() {
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI160: PMU_STATUS = 0x%02X (Expected 0x14)\n", pmu_status);
 
     // Configuration des registres (ODR et Plages)
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: Configuring 800Hz ODR...");
-    // 0x40 (ACC_CONF): 0x2B = normal filter, ODR 800Hz
-    // 0x42 (GYR_CONF): 0x2B = normal filter, ODR 800Hz
-    manual_write(0x40, 0x2B); 
-    manual_write(0x42, 0x2B);
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: Configuring 1600Hz ODR...");
+    // 0x40 (ACC_CONF): 0x2C = normal filter (OSR4), ODR 1600Hz
+    // 0x42 (GYR_CONF): 0x2C = normal filter (OSR4), ODR 1600Hz
+    manual_write(0x40, 0x2C); 
+    manual_write(0x42, 0x2C);
     manual_write(0x41, 0x03); // ±2g 
     manual_write(0x43, 0x00); // ±2000 deg/s
 
