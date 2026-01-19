@@ -34,7 +34,7 @@ public:
     // Compute pitch using robot-frame X axis (positive when tilting forward)
     float accel_pitch = atan2f(ax, sqrtf(ay * ay + az * az));
     // integrate gyro (assume gyro y is pitch rate for rotation in the X-Z plane)
-    float gyro_rate = -gy; // rad/s (inverted to match accel_pitch sign)
+    float gyro_rate = gy; // Corrected sign for v46 (Forward = Positive)
 
     // Estimate gyro bias using accel-correction error (simple PI-like form)
     float error = accel_pitch - angle_;

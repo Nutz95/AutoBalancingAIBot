@@ -45,7 +45,7 @@ static QueueHandle_t calibQueue = nullptr;
 static fusion::FusionConfig g_fusion_cfg;
 // Store sample rate (Hz) in one place so dt fallback uses the configured value
 // Sample rate (Hz) used by the selected filter
-static float g_filter_sample_rate_hz = 500.0f;
+static float g_filter_sample_rate_hz = 1000.0f;
 // Fused outputs (units: radians, radians/sec)
 static float g_fused_pitch_rad = 0.0f;
 static float g_fused_pitch_rate_rads = 0.0f;
@@ -124,7 +124,7 @@ static void imuProducerTask(void *pvParameters) {
   static uint32_t last_drop_log = 0;
   static uint32_t consecutive_errors = 0;
 
-  const TickType_t xFrequency = pdMS_TO_TICKS(1); // Check every tick
+  const TickType_t xFrequency = pdMS_TO_TICKS(1); // 1000Hz (Oversampling for cleaner gyro)
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
   for (;;) {
@@ -286,10 +286,14 @@ static void imuConsumerTask(void *pvParameters) {
     float right_cmd = 0.0f;
     abbot::imu_consumer::getLastMotorCommands(left_cmd, right_cmd);
 
-    // Run balancer control cycle if active
-    abbot::imu_consumer::runBalancerCycleIfActive(
-      fused_pitch_local, fused_pitch_rate_local, dt, accel_robot,
-      gyro_robot, left_cmd, right_cmd);
+    // Run balancer control cycle if active (Throttled relative to IMU frequency)
+    static uint8_t balancer_divider = 0;
+    if (++balancer_divider >= BALANCER_CONTROL_DIVIDER) {
+      balancer_divider = 0;
+      abbot::imu_consumer::runBalancerCycleIfActive(
+        fused_pitch_local, fused_pitch_rate_local, dt, accel_robot,
+        gyro_robot, left_cmd, right_cmd);
+    }
 
     // Emit tuning stream or capture outputs
     abbot::imu_consumer::emitTuningOrStream(

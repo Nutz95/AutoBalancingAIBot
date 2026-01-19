@@ -5,7 +5,11 @@
 
 // Available options: IMU_FILTER_MADGWICK, IMU_FILTER_COMPLEMENTARY, IMU_FILTER_KALMAN1D
 #ifndef IMU_FILTER_MADGWICK
-#define IMU_FILTER_MADGWICK 1
+#define IMU_FILTER_MADGWICK 0
+#endif
+
+#ifndef IMU_FILTER_COMPLEMENTARY
+#define IMU_FILTER_COMPLEMENTARY 1
 #endif
 
 // Recommended warmup durations (milliseconds) per filter implementation.

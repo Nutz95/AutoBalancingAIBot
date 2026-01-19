@@ -358,10 +358,10 @@ def main():
                     gyro_pitch.append(val)
             df['gyro_pitch_est'] = gyro_pitch
 
-        plt.figure(figsize=(18, 24))
+        plt.figure(figsize=(18, 28))
         
         # Subplot 1: Pitch
-        ax1 = plt.subplot(7, 1, 1)
+        ax1 = plt.subplot(8, 1, 1)
         ax1.plot(t_axis, df['pitch_setpoint'], 'r--', label='Target (User)', alpha=0.7)
         ax1.plot(t_axis, df['pitch'], 'b-', label='Filtered Pitch (deg)', linewidth=2)
         
@@ -388,7 +388,7 @@ def main():
         ax1.set_title(f'Balancer Pitch stability ({filter_info} | {gain_info})')
 
         # Subplot 2: PID Components (Decomposition)
-        ax2 = plt.subplot(7, 1, 2, sharex=ax1)
+        ax2 = plt.subplot(8, 1, 2, sharex=ax1)
         if strategy_mode == 'PID':
             if 'p_term' in df.columns:
                 ax2.plot(t_axis, df['p_term'], label='P contribution (Kp*err)', alpha=0.8)
@@ -413,7 +413,7 @@ def main():
         ax2.grid(True)
 
         # Subplot 3: Loop Frequency and Latency
-        ax3 = plt.subplot(7, 1, 3, sharex=ax1)
+        ax3 = plt.subplot(8, 1, 3, sharex=ax1)
         if 'lp_hz' in df.columns:
             ax3.plot(t_axis, df['lp_hz'], 'r-', label='Loop Freq (Hz)', alpha=0.7)
             # Adapt target line to data
@@ -435,7 +435,7 @@ def main():
         ax3.grid(True)
 
         # Subplot 4: Total PID and Motor Command
-        ax4 = plt.subplot(7, 1, 4, sharex=ax1)
+        ax4 = plt.subplot(8, 1, 4, sharex=ax1)
         if 'pid_out' in df.columns:
             ax4.plot(t_axis, df['pid_out'], 'g-', label='Total PID/LQR Out', linewidth=1.5)
         if 'cmd' in df.columns:
@@ -447,7 +447,7 @@ def main():
         ax4.grid(True)
 
         # Subplot 5: Navigation Analysis (Linear Distance & Rotation)
-        ax5 = plt.subplot(7, 1, 5, sharex=ax1)
+        ax5 = plt.subplot(8, 1, 5, sharex=ax1)
         if 'encL' in df.columns and 'encR' in df.columns:
             linear_pos = (df['encL'] + df['encR']) / 2.0
             rotation = (df['encL'] - df['encR']) / 2.0  # Proxy for heading
@@ -483,7 +483,7 @@ def main():
         ax5.grid(True)
 
         # Subplot 6: Yaw Stability and Heading Hold
-        ax6 = plt.subplot(7, 1, 6, sharex=ax1)
+        ax6 = plt.subplot(8, 1, 6, sharex=ax1)
         if 'gz' in df.columns:
             ax6.plot(t_axis, np.degrees(df['gz']), 'r-', label='Yaw Rate (deg/s)', alpha=0.8)
         if 'steer' in df.columns:
@@ -504,14 +504,51 @@ def main():
         ax6.grid(True)
 
         # Subplot 7: IMU Raw Pitch-Axis
-        ax7 = plt.subplot(7, 1, 7, sharex=ax1)
+        ax7 = plt.subplot(8, 1, 7, sharex=ax1)
         ax7.plot(t_axis, df['gx'], label='Gyro X (Roll)', alpha=0.3)
         ax7.plot(t_axis, df['gy'], label='Gyro Y (Pitch)', alpha=0.8)
         ax7.plot(t_axis, df['ax'], label='Accel X (Linear)', alpha=0.6)
         ax7.set_ylabel('IMU Raw')
-        ax7.set_xlabel('Time (s)')
         ax7.legend(loc='upper right')
         ax7.grid(True)
+
+        # Subplot 8: FFT Analysis (Pitch)
+        ax8 = plt.subplot(8, 1, 8)
+        pitch_vals = df['pitch'].dropna().values
+        if len(pitch_vals) > 32: # Lowered requirement (from 64)
+            # Estimate sample rate from time_ms
+            dt_series = df['time_ms'].diff().dropna()
+            if not dt_series.empty:
+                dt_avg = dt_series.mean() / 1000.0
+                fs = 1.0 / dt_avg
+                n = len(pitch_vals)
+                # Remove DC and Window
+                pitch_detrend = pitch_vals - np.mean(pitch_vals)
+                # Apply Hanning window to reduce leakage
+                window = np.hanning(n)
+                yf = np.fft.rfft(pitch_detrend * window)
+                xf = np.fft.rfftfreq(n, d=1.0/fs)
+                
+                mag = np.abs(yf)
+                ax8.plot(xf, mag, 'r-', linewidth=1.5)
+                
+                # Find peak frequency (ignore DC and very low frequencies < 0.5Hz)
+                mask = xf > 0.5
+                if np.any(mask):
+                    peak_idx = np.argmax(mag[mask])
+                    peak_freq = xf[mask][peak_idx]
+                    ax8.set_title(f"Pitch FFT Analysis (Dominant Frequency: {peak_freq:.2f} Hz)")
+                else:
+                    ax8.set_title("Pitch FFT Analysis")
+                
+                ax8.set_xlim(0, fs/2.0 if fs > 20 else 20)
+                ax8.set_ylim(0, mag.max() * 1.1 if len(mag) > 0 else 1.0)
+        else:
+            ax8.set_title(f"Pitch FFT Analysis (Not enough data: {len(pitch_vals)} samples)")
+            
+        ax8.set_ylabel('Magnitude')
+        ax8.set_xlabel('Frequency (Hz)')
+        ax8.grid(True)
 
         plt.tight_layout()
         plt.savefig(args.png)

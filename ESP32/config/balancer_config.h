@@ -50,6 +50,12 @@
 #define BALANCER_START_STABLE_PITCH_RATE_DEG_S 3.0f
 #endif
 
+// Logic divider for control loop frequency (relative to IMU sampling rate)
+// If IMU is at 1000Hz, a divider of 1 runs the balancer at 1000Hz.
+#ifndef BALANCER_CONTROL_DIVIDER
+#define BALANCER_CONTROL_DIVIDER 1
+#endif
+
 // Maximum absolute trim applied at start (degrees). The controller will capture
 // the current fused pitch at BALANCE START, clamp it to this value, and subtract
 // it from subsequent control to compensate for minor floor tilt or sensor bias.

@@ -53,6 +53,9 @@ private:
     float v_target_speed_ = 0.0f;
     float w_target_yaw_req_ = 0.0f;
 
+    float lp_pitch_rate_ = 0.0f;
+    float lp_v_speed_ = 0.0f;
+
     void updateAdaptiveTrim(float pitch_rad, float dist_err, float dt);
 };
 

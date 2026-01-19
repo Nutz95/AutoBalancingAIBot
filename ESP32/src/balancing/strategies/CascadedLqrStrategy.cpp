@@ -21,6 +21,8 @@ void CascadedLqrStrategy::reset(float initial_pitch_rad) {
     v_target_speed_ = 0.0f;
     w_target_yaw_req_ = 0.0f;
     yaw_error_accum_rad_ = 0.0f;
+    lp_pitch_rate_ = 0.0f;
+    lp_v_speed_ = 0.0f;
     needs_reset_enc_ = true;
 }
 
@@ -29,19 +31,24 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
                                  float v_enc_ticks_s) {
     
     // Low-pass filter the pitch rate to reduce high-frequency vibrations in motor commands
-    // Alpha BALANCER_PITCH_RATE_LPF_ALPHA at 1000Hz gives a cutoff of approx 35Hz (much smoother for mechanical stability).
-    static float lp_pitch_rate = 0.0f;
-    const float alpha = BALANCER_PITCH_RATE_LPF_ALPHA;
-    lp_pitch_rate = (lp_pitch_rate * (1.0f - alpha)) + (pitch_rate_rads * alpha);
+    const float alpha_pitch = BALANCER_PITCH_RATE_LPF_ALPHA;
+    lp_pitch_rate_ = (lp_pitch_rate_ * (1.0f - alpha_pitch)) + (pitch_rate_rads * alpha_pitch);
+
+    // Filter noisy velocity from high-resolution encoders
+    const float alpha_speed = BALANCER_SPEED_LPF_ALPHA; 
+    lp_v_speed_ = (lp_v_speed_ * (1.0f - alpha_speed)) + (v_enc_ticks_s * alpha_speed);
 
     // 1. Position tracking (LQR state x)
+    // Applying the "divide by 10" suggestion to handle high-resolution encoder noise/scaling
     int32_t avg_enc = (enc_l_ticks + enc_r_ticks) / 2;
     if (needs_reset_enc_) {
         enc_dist_zeropoint_ = avg_enc;
         needs_reset_enc_ = false;
-        lp_pitch_rate = pitch_rate_rads;
+        lp_pitch_rate_ = pitch_rate_rads;
+        lp_v_speed_ = v_enc_ticks_s;
     }
-    float dist_err = (float)(avg_enc - enc_dist_zeropoint_);
+    float dist_err = (float)(avg_enc - enc_dist_zeropoint_) / BALANCER_ENCODER_DOWNSCALE;
+    float v_enc_scaled = lp_v_speed_ / BALANCER_ENCODER_DOWNSCALE;
 
     // 2. Yaw Tracking (Heading Hold)
     // Integrate yaw rate to get relative heading error from start
@@ -59,13 +66,13 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
 
     // Convert to degrees for gain application (standard for this project)
     float theta_err_deg = (pitch_rad - pitch_trim_rad_) * (180.0f / M_PI);
-    float pitch_rate_deg = lp_pitch_rate * (180.0f / M_PI);
+    float pitch_rate_deg = lp_pitch_rate_ * (180.0f / M_PI);
     
     // 4. Control Law: u = Kp*theta + Kg*gyro - Kd*dist - Ks*speed
     float term_angle = cfg_.k_pitch * theta_err_deg;
     float term_gyro  = cfg_.k_gyro  * pitch_rate_deg;
     float term_dist  = -cfg_.k_dist  * dist_err;
-    float term_speed = -cfg_.k_speed * (v_enc_ticks_s - v_target_speed_);
+    float term_speed = -cfg_.k_speed * (v_enc_scaled - v_target_speed_);
 
     // Safety: Increase limits to allow the robot to fight back more strongly against drift.
     // Limits are now defined in lqr_config.h to avoid "magic numbers".
@@ -89,7 +96,7 @@ void CascadedLqrStrategy::updateAdaptiveTrim(float pitch_rad, float dist_err, fl
     // Navbot Approach: Only adapt when the robot is stable and passive.
     // Enhanced safety: Must be reasonably close to vertical and not under major correction.
     float pitch_deg = (pitch_rad - pitch_trim_rad_) * (180.0f / M_PI);
-    if (fabsf(pitch_deg) > 5.0f) { // Increased from 1.0 to allow adaptation from initial lean
+    if (fabsf(pitch_deg) > BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG) {
         return;
     }
 
@@ -99,15 +106,15 @@ void CascadedLqrStrategy::updateAdaptiveTrim(float pitch_rad, float dist_err, fl
     }
 
     // Must not be in a huge recovery (dist err small)
-    if (fabsf(dist_err) > 500.0f) {
+    if (fabsf(dist_err) > BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS) {
         return;
     }
 
     // Integrated error logic: Adjust trim to zero-out the position drift over time.
-    pitch_trim_rad_ -= cfg_.adaptive_trim_alpha * dist_err * dt;
+    pitch_trim_rad_ += cfg_.adaptive_trim_alpha * dist_err * dt;
     
-    // Clamp to +/- 15 degrees (0.26 rad)
-    const float limit = 0.26f;
+    // Clamp to configured limit
+    const float limit = BALANCER_ADAPTIVE_TRIM_LIMIT_RAD;
     if (pitch_trim_rad_ > limit) {
         pitch_trim_rad_ = limit;
     }
@@ -117,7 +124,7 @@ void CascadedLqrStrategy::updateAdaptiveTrim(float pitch_rad, float dist_err, fl
 }
 
 void CascadedLqrStrategy::setDriveSetpoints(float v_norm, float w_norm) {
-    v_target_speed_ = v_norm * 2000.0f; // Scale to ticks/s
+    v_target_speed_ = (v_norm * BALANCER_VELOCITY_TARGET_SCALE) / BALANCER_ENCODER_DOWNSCALE;
     w_target_yaw_req_ = w_norm;
 }
 
