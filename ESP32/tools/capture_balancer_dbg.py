@@ -38,6 +38,8 @@ import pandas as pd
 #     float loop_freq_hz;          // 4
 #     int32_t enc_l, enc_r;        // 2*4=8
 #     uint32_t bus_latency_us;     // 4
+#     uint32_t ack_pending_left_us;// 4
+#     uint32_t ack_pending_right_us;// 4
 #     float lqr_angle;             // 4
 #     float lqr_gyro;              // 4
 #     float lqr_dist;              // 4
@@ -49,8 +51,10 @@ import pandas as pd
 #     uint32_t prof_t;             // 4
 #     uint32_t prof_log;           // 4
 # };
-TELEMETRY_FMT = "<2I6f3f3ff2iI6f4I"
+TELEMETRY_FMT = "<2I6f3f3ff2i3I6f4I"
+TELEMETRY_FMT_LEGACY_ACK = "<2I6f3f3ff2i2I6f4I"
 TELEMETRY_SIZE = struct.calcsize(TELEMETRY_FMT)
+TELEMETRY_SIZE_LEGACY_ACK = struct.calcsize(TELEMETRY_FMT_LEGACY_ACK)
 UDP_PORT = 8888
 
 
@@ -188,9 +192,18 @@ def parse_line(line, rows, motor_sync):
 
 
 def parse_binary(data, rows, motor_sync):
-    if len(data) != TELEMETRY_SIZE:
+    if len(data) == TELEMETRY_SIZE:
+        v = struct.unpack(TELEMETRY_FMT, data)
+        ack_left = v[18]
+        ack_right = v[19]
+        lqr_index = 20
+    elif len(data) == TELEMETRY_SIZE_LEGACY_ACK:
+        v = struct.unpack(TELEMETRY_FMT_LEGACY_ACK, data)
+        ack_left = v[18]
+        ack_right = 0
+        lqr_index = 19
+    else:
         return False
-    v = struct.unpack(TELEMETRY_FMT, data)
     if v[0] != 0xABBA0001:
         return False
     
@@ -209,16 +222,18 @@ def parse_binary(data, rows, motor_sync):
         'lp_hz': v[14],
         'encL': v[15], 'encR': v[16],
         'lat': v[17],
-        'lqr_angle': v[18],
-        'lqr_gyro': v[19],
-        'lqr_dist': v[20],
-        'lqr_speed': v[21],
-        'cpu_core0_pct': v[22],
-        'cpu_core1_pct': v[23],
-        'prof_f': v[24],
-        'prof_l': v[25],
-        'prof_t': v[26],
-        'prof_log': v[27]
+        'ack_pending_l_us': ack_left,
+        'ack_pending_r_us': ack_right,
+        'lqr_angle': v[lqr_index],
+        'lqr_gyro': v[lqr_index + 1],
+        'lqr_dist': v[lqr_index + 2],
+        'lqr_speed': v[lqr_index + 3],
+        'cpu_core0_pct': v[lqr_index + 4],
+        'cpu_core1_pct': v[lqr_index + 5],
+        'prof_f': v[lqr_index + 6],
+        'prof_l': v[lqr_index + 7],
+        'prof_t': v[lqr_index + 8],
+        'prof_log': v[lqr_index + 9]
     }
     rows['bal'][t].update(d)
     return True
@@ -238,6 +253,8 @@ def main():
                    help='If >0, send "MOTOR TELEMETRY ALL <ms>" at capture start and stop it at capture end.')
     p.add_argument('--motor-accel', type=int, default=None,
                    help='If set, send "MOTOR ACCEL <0-255>" at capture start (requires new firmware).')
+    p.add_argument('--mks-baud', type=int, default=256000,
+                   help='MKS RS485 baud rate (used to estimate transfer time).')
     p.add_argument('--cpu-telemetry-ms', type=int, default=0,
                    help='If >0, send "SYS CPU STREAM <ms>" at capture start and stop it at capture end.')
     p.add_argument('--no-ffill', dest='ffill', action='store_false', help='Disable forward-fill')
@@ -717,6 +734,22 @@ def main():
         if 'lat' in df.columns:
             ax3_twin.plot(t_axis, df['lat'] / 1000.0, 'b-', label='Bus Latency (ms)', alpha=0.2)
 
+        # Estimated transfer time for speed command + ACK (7 bytes TX + 5 bytes RX)
+        transfer_us = (12.0 * 10.0 * 1e6) / float(args.mks_baud)
+
+        if 'ack_pending_l_us' in df.columns:
+            val = df['ack_pending_l_us'].rolling(window=20, min_periods=1).mean() / 1000.0
+            ax3_twin.plot(t_axis, val, 'c-', label='ACK Pending L (ms, avg)', alpha=0.6)
+            proc = (df['ack_pending_l_us'] - transfer_us).clip(lower=0.0)
+            proc = proc.rolling(window=20, min_periods=1).mean() / 1000.0
+            ax3_twin.plot(t_axis, proc, 'c:', label='ACK Proc L (ms, avg)', alpha=0.6)
+        if 'ack_pending_r_us' in df.columns:
+            val = df['ack_pending_r_us'].rolling(window=20, min_periods=1).mean() / 1000.0
+            ax3_twin.plot(t_axis, val, 'c--', label='ACK Pending R (ms, avg)', alpha=0.6)
+            proc = (df['ack_pending_r_us'] - transfer_us).clip(lower=0.0)
+            proc = proc.rolling(window=20, min_periods=1).mean() / 1000.0
+            ax3_twin.plot(t_axis, proc, 'c-.', label='ACK Proc R (ms, avg)', alpha=0.6)
+
         if 'prof_f' in df.columns:
             val = df['prof_f'].rolling(window=20, min_periods=1).mean() / 1000.0
             ax3_twin.plot(t_axis, val, 'g-', label='Fusion (ms, avg)', alpha=0.7)
@@ -729,6 +762,10 @@ def main():
 
         # Auto-scale latency axis: at least 1.5ms
         max_lat_ms = (df['lat'].max() / 1000.0) if ('lat' in df.columns and not df['lat'].empty) else 1.0
+        if 'ack_pending_l_us' in df.columns and not df['ack_pending_l_us'].empty:
+            max_lat_ms = max(max_lat_ms, (df['ack_pending_l_us'].max() / 1000.0))
+        if 'ack_pending_r_us' in df.columns and not df['ack_pending_r_us'].empty:
+            max_lat_ms = max(max_lat_ms, (df['ack_pending_r_us'].max() / 1000.0))
         if 'prof_t' in df.columns and not df['prof_t'].empty:
             max_lat_ms = max(max_lat_ms, (df['prof_t'].max() / 1000.0))
         ax3_twin.set_ylim(0.0, max(1.5, max_lat_ms * 1.1))

@@ -148,3 +148,16 @@
 #define BALANCER_RIGHT_MOTOR_GAIN 1.0f
 #endif
 #endif
+
+// --- High-Speed Binary Telemetry Optimization ---
+// Binary telemetry is sent via UDP at a fraction of the IMU loop rate.
+// 1000Hz Loop / 5 = 200Hz Telemetry. This keeps Core 0 load manageable.
+#ifndef TELEMETRY_BINARY_DIVIDER
+#define TELEMETRY_BINARY_DIVIDER 5
+#endif
+
+// Throttles text diagnostics logging to serial/console (ms).
+// Set to a high value (e.g. 1000) when high-speed binary is active.
+#ifndef TELEMETRY_TEXT_THROTTLE_MS
+#define TELEMETRY_TEXT_THROTTLE_MS 1000
+#endif

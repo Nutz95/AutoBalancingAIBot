@@ -223,6 +223,10 @@ static void imuConsumerTask(void *pvParameters) {
     float dt = abbot::imu_consumer::computeDt(g_consumer, sample,
                                               g_filter_sample_rate_hz);
 
+    // Profiling for telemetry (microseconds)
+    abbot::imu_consumer::ProfileData prof = {};
+    uint32_t loop_start_us = micros();
+
     // Accumulate warmup samples (gyro raw values)
     abbot::imu_consumer::accumulateWarmup(g_consumer, sample,
                                           sample.gx, sample.gy, sample.gz);
@@ -240,6 +244,7 @@ static void imuConsumerTask(void *pvParameters) {
     g_last_accel_robot[2] = accel_robot[2];
 
     // Update active filter with mapped data
+    uint32_t fusion_start_us = micros();
     {
       auto active = abbot::filter::getActiveFilter();
       if (active) {
@@ -248,6 +253,7 @@ static void imuConsumerTask(void *pvParameters) {
                        sample.fused_pitch, sample.fused_roll, sample.fused_yaw);
       }
     }
+    prof.t_fusion = micros() - fusion_start_us;
 
     // Process warmup phase (decrement counter, finalize if done)
     if (g_consumer.warmup_samples_remaining > 0) {
@@ -288,28 +294,38 @@ static void imuConsumerTask(void *pvParameters) {
 
     // Run balancer control cycle if active (Throttled relative to IMU frequency)
     static uint8_t balancer_divider = 0;
+    uint32_t lqr_start_us = micros();
     if (++balancer_divider >= BALANCER_CONTROL_DIVIDER) {
       balancer_divider = 0;
       abbot::imu_consumer::runBalancerCycleIfActive(
         fused_pitch_local, fused_pitch_rate_local, dt, accel_robot,
         gyro_robot, left_cmd, right_cmd);
     }
+    prof.t_lqr = micros() - lqr_start_us;
 
     // Emit tuning stream or capture outputs
+    uint32_t log_start_us = micros();
     abbot::imu_consumer::emitTuningOrStream(
         g_consumer, sample, fused_pitch_local, fused_pitch_rate_local,
         accel_robot, gyro_robot, left_cmd, right_cmd);
+    prof.t_logging = micros() - log_start_us;
 
     // Get motor bus latency for diagnostics
     uint32_t bus_lat = 0;
+    uint32_t ack_pending_left_us = 0;
+    uint32_t ack_pending_right_us = 0;
     if (auto d = abbot::motor::getActiveMotorDriver()) {
         bus_lat = d->getLastBusLatencyUs();
+        ack_pending_left_us = d->getAckPendingTimeUs(abbot::motor::IMotorDriver::MotorSide::LEFT);
+        ack_pending_right_us = d->getAckPendingTimeUs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
     }
     float inst_freq = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
 
+    prof.t_total = micros() - loop_start_us;
     abbot::imu_consumer::emitDiagnosticsIfEnabled(
         sample.ts_ms, fused_pitch_local, fused_pitch_rate_local,
-        left_cmd, right_cmd, accel_robot, gyro_robot, inst_freq, bus_lat);
+        left_cmd, right_cmd, accel_robot, gyro_robot, inst_freq, bus_lat,
+        ack_pending_left_us, ack_pending_right_us, prof);
 
     // Emit raw IMU debug logs (throttled)
     abbot::imu_consumer::emitImuDebugLogsIfEnabled(sample, last_debug_print_ms);

@@ -1,0 +1,5 @@
+# Enable FreeRTOS runtime statistics (required for per-core CPU load telemetry)
+CONFIG_FREERTOS_USE_TRACE_FACILITY=y
+CONFIG_FREERTOS_GENERATE_RUN_TIME_STATS=y
+# Use esp_timer (microsecond resolution) as the runtime stats clock
+CONFIG_FREERTOS_RUN_TIME_STATS_USING_ESP_TIMER=y

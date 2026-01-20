@@ -121,6 +121,17 @@ public:
   }
 
   /**
+   * @brief Return the current time spent waiting for a command ACK.
+   *
+   * For serial bus drivers with non-blocking ACK handling, this returns the
+   * elapsed time (microseconds) since the last command was sent and is still
+   * awaiting its ACK. Returns 0 when no ACK is pending.
+   */
+  virtual uint32_t getAckPendingTimeUs() const {
+    return 0;
+  }
+
+  /**
    * @brief Return the acceleration value used for speed commands (0-255).
    *
    * For bus-based motor drivers, this may correspond to a protocol field

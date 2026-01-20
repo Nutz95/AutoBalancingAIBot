@@ -83,6 +83,35 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_BAUD 256000
 #endif
 
+// FreeRTOS task priority for each motor bus task.
+// Keep this high to preserve command latency during balancing.
+#ifndef MKS_SERVO_TASK_PRIORITY
+#define MKS_SERVO_TASK_PRIORITY 21
+#endif
+
+// Divider applied to the IMU consumer notification rate (typically 1000Hz)
+// to reduce motor bus packet rate. Example: 2 => 500Hz.
+#ifndef MKS_SERVO_CONTROL_SEND_DIVIDER
+#define MKS_SERVO_CONTROL_SEND_DIVIDER 2
+#endif
+
+// Minimum time between two frames on the same serial bus.
+// Implemented as a non-blocking guard (no busy-wait): the task skips sending
+// new frames until this interval has elapsed.
+#ifndef MKS_SERVO_MIN_INTERFRAME_US
+#define MKS_SERVO_MIN_INTERFRAME_US 500
+#endif
+
+// Enable non-blocking ACK handling by default (1 = on, 0 = off).
+#ifndef MKS_SERVO_DEFAULT_WAIT_FOR_ACK
+#define MKS_SERVO_DEFAULT_WAIT_FOR_ACK 1
+#endif
+
+// Queue depth for function commands (mode, current, hold, etc.).
+#ifndef MKS_SERVO_FUNCTION_QUEUE_LEN
+#define MKS_SERVO_FUNCTION_QUEUE_LEN 8
+#endif
+
 // NOTE: Both motors are on SEPARATE RS485 buses (Left=Serial2, Right=Serial1).
 // Each bus has dedicated bandwidth. IDs can be different or identical - doesn't matter
 // since buses are independent. DO NOT CHANGE these IDs without user authorization.
@@ -180,16 +209,16 @@ enum class MksServoHoldCurrent : uint8_t {
 // Motor response delay (internal processing) is typically 200-500us.
 
 // Critical command timeout (e.g. speed command)
-// Reduced to 1500us to ensure we don't break the 500Hz (2ms) loop budget
-// if a motor response is delayed.
+// Reduced to 1000us to ensure we don't break the 500Hz budget.
 #ifndef MKS_SERVO_TIMEOUT_CONTROL_US
-#define MKS_SERVO_TIMEOUT_CONTROL_US 1500
+#define MKS_SERVO_TIMEOUT_CONTROL_US 1000
 #endif
 
 // Telemetry/Data timeout (e.g. reading position)
-// Position reads can take longer to process internally on MKS drivers
+// Position reads can take longer to process internally on MKS drivers.
+// Reduced to 2000us because 10000us (10ms) busy-waits freeze the system/Bluetooth.
 #ifndef MKS_SERVO_TIMEOUT_DATA_US
-#define MKS_SERVO_TIMEOUT_DATA_US 10000  // Safe timeout for position reads
+#define MKS_SERVO_TIMEOUT_DATA_US 2000 
 #endif
 
 // Heavy request timeout (e.g. scanning or register dump)

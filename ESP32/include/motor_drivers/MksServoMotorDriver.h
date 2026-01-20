@@ -11,9 +11,11 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/semphr.h>
 #include <freertos/task.h>
+#include <freertos/queue.h>
 #else
 // Minimal stubs for host-native unit tests
 typedef void* SemaphoreHandle_t;
+typedef void* QueueHandle_t;
 class HardwareSerial {
 public:
     void write(const uint8_t* buf, size_t len) {
@@ -76,6 +78,11 @@ public:
         uint32_t r = m_right_async.last_latency_us.load();
         return (l > r) ? l : r;
     }
+    uint32_t getAckPendingTimeUs() const override {
+        uint32_t l = m_left_async.ack_pending_time_us.load();
+        uint32_t r = m_right_async.ack_pending_time_us.load();
+        return (l > r) ? l : r;
+    }
 
     uint32_t getSpeedCommandAccel() const override {
         return (uint32_t)m_speed_accel.load();
@@ -101,12 +108,20 @@ private:
         bool enabled;
         SpeedEstimator speedEstimator;
     };
+    struct FunctionCommandItem {
+        uint8_t id = 0;
+        uint8_t function_code = 0;
+        uint8_t data[8] = {0};
+        uint8_t length = 0;
+    };
 
     MotorState m_left;
     MotorState m_right;
     bool m_enabled;
     SemaphoreHandle_t m_leftBusMutex;
     SemaphoreHandle_t m_rightBusMutex;
+    QueueHandle_t m_leftCommandQueue = nullptr;
+    QueueHandle_t m_rightCommandQueue = nullptr;
 
     // Async control state for background tasks
     struct AsyncState {
@@ -116,6 +131,7 @@ private:
         std::atomic<float> speed_value{0.0f};
         std::atomic<bool> encoder_dirty{false};
         std::atomic<uint32_t> last_latency_us{0};
+        std::atomic<uint32_t> ack_pending_time_us{0};
         std::atomic<bool> last_reported_enabled{true}; // Init to true to force torque sync at boot
 
         // Time when a speed frame was last written to the motor (microseconds).
@@ -142,7 +158,7 @@ private:
     AsyncState m_right_async;
 
     // When enabled, each speed write waits for an ACK (adds latency).
-    std::atomic<bool> m_wait_for_ack{false};
+    std::atomic<bool> m_wait_for_ack{(MKS_SERVO_DEFAULT_WAIT_FOR_ACK != 0)};
 
     // Acceleration byte (0-255) included in MKS 0xF6 speed frames.
     // Default comes from config (MKS_SERVO_ACCEL).
@@ -159,6 +175,7 @@ private:
     void setHoldCurrent(uint8_t id, MksServoHoldCurrent hold_pct);
     void setEnable(uint8_t id, bool enable);
     bool verifyConfig(uint8_t id, uint8_t function_code, uint8_t expected_value, const char* label);
+    QueueHandle_t getQueueForMotor(uint8_t id);
     
     // Telemetry
     uint32_t last_bus_latency_us_ = 0;

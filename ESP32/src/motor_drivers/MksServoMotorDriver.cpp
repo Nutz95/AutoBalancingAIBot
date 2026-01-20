@@ -7,12 +7,112 @@
 namespace abbot {
 namespace motor {
 
+namespace {
+
+struct AckParser {
+    uint8_t buffer[5] = {0, 0, 0, 0, 0};
+    uint8_t received = 0;
+};
+
+uint8_t computeChecksum(const uint8_t *data, size_t length) {
+    uint8_t checksum = 0;
+    for (size_t index = 0; index < length; ++index) {
+        checksum = (uint8_t)(checksum + data[index]);
+    }
+    return checksum;
+}
+
+bool tryConsumeAckNonBlocking(MksServoMotorDriver &driver,
+                              HardwareSerial &serial,
+                              uint8_t expected_id,
+                              uint8_t expected_function,
+                              AckParser &parser,
+                              uint8_t &status_out) {
+    int available_bytes = serial.available();
+    if (available_bytes <= 0) {
+        return false;
+    }
+
+    // Bound work per tick to avoid spending too long in this task.
+    int bytes_to_read = (available_bytes > 16) ? 16 : available_bytes;
+    while (bytes_to_read-- > 0) {
+        int v = serial.read();
+        if (v < 0) {
+            break;
+        }
+        uint8_t byteRead = (uint8_t)v;
+
+        if (parser.received == 0) {
+            if (byteRead == 0xFB) {
+                parser.buffer[0] = byteRead;
+                parser.received = 1;
+            }
+            continue;
+        }
+
+        if (parser.received == 1) {
+            if (byteRead != expected_id) {
+                parser.received = 0;
+                if (byteRead == 0xFB) {
+                    parser.buffer[0] = 0xFB;
+                    parser.received = 1;
+                }
+                continue;
+            }
+            parser.buffer[1] = byteRead;
+            parser.received = 2;
+            continue;
+        }
+
+        if (parser.received == 2) {
+            if (byteRead != expected_function) {
+                parser.received = 0;
+                if (byteRead == 0xFB) {
+                    parser.buffer[0] = 0xFB;
+                    parser.received = 1;
+                }
+                continue;
+            }
+            parser.buffer[2] = byteRead;
+            parser.received = 3;
+            continue;
+        }
+
+        parser.buffer[parser.received++] = byteRead;
+        if (parser.received >= 5) {
+            uint8_t expectedChecksum = computeChecksum(parser.buffer, 4);
+            uint8_t gotChecksum = parser.buffer[4];
+            if (expectedChecksum == gotChecksum) {
+                status_out = parser.buffer[3];
+                parser.received = 0;
+                return true;
+            }
+
+            // Bad checksum, resync.
+            parser.received = 0;
+            if (byteRead == 0xFB) {
+                parser.buffer[0] = 0xFB;
+                parser.received = 1;
+            }
+        }
+    }
+
+    return false;
+}
+
+} // namespace
+
 MksServoMotorDriver::MksServoMotorDriver()
     : m_left{LEFT_MOTOR_ID, LEFT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(MKS_SERVO_SPEED_ALPHA)},
       m_right{RIGHT_MOTOR_ID, RIGHT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(MKS_SERVO_SPEED_ALPHA)},
       m_enabled(false),
       m_leftBusMutex(xSemaphoreCreateRecursiveMutex()),
-      m_rightBusMutex(xSemaphoreCreateRecursiveMutex()) {}
+      m_rightBusMutex(xSemaphoreCreateRecursiveMutex()) {
+#if !defined(UNIT_TEST_HOST)
+    m_leftCommandQueue = xQueueCreate(MKS_SERVO_FUNCTION_QUEUE_LEN, sizeof(FunctionCommandItem));
+    m_rightCommandQueue = xQueueCreate(MKS_SERVO_FUNCTION_QUEUE_LEN, sizeof(FunctionCommandItem));
+#endif
+}
 
 void MksServoMotorDriver::initMotorDriver() {
     // Initialize both serial ports at the configured baud rate
@@ -29,6 +129,11 @@ void MksServoMotorDriver::initMotorDriver() {
 
     // Give drivers time to boot
     delay(100);
+
+    // Create background tasks for each motor bus on Core 0.
+    // Keep priority high for balancing, but make it configurable.
+    xTaskCreatePinnedToCore(motorTaskEntry, "motorL_task", 4096, new std::pair<MksServoMotorDriver*, MotorSide>(this, MotorSide::LEFT), MKS_SERVO_TASK_PRIORITY, &m_left_async.task_handle, 0);
+    xTaskCreatePinnedToCore(motorTaskEntry, "motorR_task", 4096, new std::pair<MksServoMotorDriver*, MotorSide>(this, MotorSide::RIGHT), MKS_SERVO_TASK_PRIORITY, &m_right_async.task_handle, 0);
 
     // Initial configuration for both motors
     uint8_t ids[] = {(uint8_t)m_left.id, (uint8_t)m_right.id};
@@ -51,12 +156,6 @@ void MksServoMotorDriver::initMotorDriver() {
     // Ensure motors are initially disabled and stopped for safety
     // This will now trigger an explicit Torque OFF packet because last_reported_enabled=true initially.
     disableMotors();
-
-    // Create background tasks for each motor bus on Core 0.
-    // Pinned to Core 0 (PRO_CPU) and use high priority to ensure low command latency,
-    // separated from the IMU/PID loop on Core 1 to avoid jitter interference.
-    xTaskCreatePinnedToCore(motorTaskEntry, "motorL_task", 4096, new std::pair<MksServoMotorDriver*, MotorSide>(this, MotorSide::LEFT), 21, &m_left_async.task_handle, 0);
-    xTaskCreatePinnedToCore(motorTaskEntry, "motorR_task", 4096, new std::pair<MksServoMotorDriver*, MotorSide>(this, MotorSide::RIGHT), 21, &m_right_async.task_handle, 0);
 }
 
 void MksServoMotorDriver::motorTaskEntry(void* pvParameters) {
@@ -75,22 +174,132 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
     SemaphoreHandle_t mutex = (side == MotorSide::LEFT) ? m_leftBusMutex : m_rightBusMutex;
 
     const uint32_t telemetry_interval_ms = (MKS_SERVO_ENCODER_UPDATE_HZ > 0) ? (1000 / MKS_SERVO_ENCODER_UPDATE_HZ) : 10;
+    uint8_t loop_divider = 0;
+    uint32_t next_tx_allowed_us = 0;
+    bool ack_pending = false;
+    uint32_t ack_deadline_us = 0;
+    uint32_t ack_start_us = 0;
+    uint8_t ack_expected_function = 0xF6;
+    AckParser ack_parser;
+    bool function_pending = false;
+    FunctionCommandItem pending_function;
+
+    auto canTransmitNow = [&]() -> bool {
+        uint32_t now_us = micros();
+        return (int32_t)(now_us - next_tx_allowed_us) >= 0;
+    };
+
+    auto markTransmitted = [&]() {
+        uint32_t now_us = micros();
+        if (MKS_SERVO_MIN_INTERFRAME_US > 0) {
+            next_tx_allowed_us = now_us + (uint32_t)MKS_SERVO_MIN_INTERFRAME_US;
+        } else {
+            next_tx_allowed_us = now_us;
+        }
+    };
     
     while (true) {
-        // High reactivity wait (1ms)
+        // High reactivity wait (notified by IMU consumer at 1000Hz)
         ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1)); 
 
+        // Throttle motor packet frequency relative to the IMU notification rate.
+        // Example: 1000Hz / 2 => 500Hz.
+        if (++loop_divider < (uint8_t)MKS_SERVO_CONTROL_SEND_DIVIDER) {
+            continue;
+        }
+        loop_divider = 0;
+
         if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
+            // Non-blocking ACK processing (per-bus). When ACK is enabled, do not
+            // interleave encoder reads/other frames until the motor confirms.
+            if (ack_pending) {
+                uint8_t ack_status = 0;
+                if (tryConsumeAckNonBlocking(*this, serial, (uint8_t)state.id, ack_expected_function, ack_parser, ack_status)) {
+                    uint32_t now_us = micros();
+                    async.ack_pending_time_us.store((uint32_t)(now_us - ack_start_us));
+                    async.last_latency_us.store((uint32_t)(now_us - ack_start_us));
+                    if (ack_status != 0x01) {
+                        async.speed_ack_error.fetch_add(1);
+                        if ((millis() - state.last_ack_log_ms >= 1000)) {
+                            LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                                       "mks_servo: ID 0x%02X command error status=0x%02X\n",
+                                       state.id, ack_status);
+                            state.last_ack_log_ms = millis();
+                        }
+                    }
+                    ack_pending = false;
+                    async.ack_pending_time_us.store(0);
+                } else {
+                    uint32_t now_us = micros();
+                    async.ack_pending_time_us.store((uint32_t)(now_us - ack_start_us));
+                    if ((int32_t)(now_us - ack_deadline_us) >= 0) {
+                        async.speed_ack_timeout.fetch_add(1);
+                        async.last_latency_us.store((uint32_t)(now_us - ack_start_us));
+                        ack_pending = false;
+                        ack_parser.received = 0;
+                        async.ack_pending_time_us.store(0);
+                    }
+                }
+
+                xSemaphoreGiveRecursive(mutex);
+                continue;
+            }
+
+            // Function command queue (non-blocking). Prioritize configuration frames.
+            if (!function_pending) {
+                QueueHandle_t queue = getQueueForMotor((uint8_t)state.id);
+                if (queue) {
+                    if (xQueueReceive(queue, &pending_function, 0) == pdTRUE) {
+                        function_pending = true;
+                    }
+                }
+            }
+
+            if (function_pending) {
+                if (canTransmitNow()) {
+                    uint8_t frame[16];
+                    frame[0] = 0xFA;
+                    frame[1] = pending_function.id;
+                    frame[2] = pending_function.function_code;
+                    for (uint8_t i = 0; i < pending_function.length; ++i) {
+                        frame[3 + i] = pending_function.data[i];
+                    }
+                    size_t total_len = 3 + pending_function.length + 1;
+                    frame[total_len - 1] = computeChecksum(frame, total_len - 1);
+                    writeFrame(serial, frame, total_len);
+                    markTransmitted();
+
+                    if (m_wait_for_ack.load()) {
+                        uint32_t tx_start_us = micros();
+                        ack_pending = true;
+                        ack_expected_function = pending_function.function_code;
+                        ack_start_us = tx_start_us;
+                        ack_deadline_us = tx_start_us + (uint32_t)MKS_SERVO_TIMEOUT_CONTROL_US;
+                        ack_parser.received = 0;
+                        async.ack_pending_time_us.store(0);
+                    }
+                    function_pending = false;
+                }
+
+                xSemaphoreGiveRecursive(mutex);
+                continue;
+            }
+
             bool current_enabled = m_enabled;
             bool enabled_changed = (current_enabled != async.last_reported_enabled.load());
             bool speed_dirty = async.speed_dirty.exchange(false);
             
             // 1. Handle Torque State Changes
             if (enabled_changed) {
-                uint8_t data = current_enabled ? 0x01 : 0x00;
-                sendFunctionCommand(state.id, 0xF3, &data, 1);
-                async.last_reported_enabled.store(current_enabled);
-                speed_dirty = true;
+                if (canTransmitNow()) {
+                    uint8_t data = current_enabled ? 0x01 : 0x00;
+                    sendFunctionCommand(state.id, 0xF3, &data, 1);
+                    markTransmitted();
+                    async.last_reported_enabled.store(current_enabled);
+                    speed_dirty = true;
+                } else {
+                    // Try again on next tick; keep last_reported_enabled unchanged.
+                }
             }
 
             // 2. Send Speed Command
@@ -99,19 +308,33 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                 // SPEED ACK: keep disabled during balancing; enable only for diagnostics.
                 // Waiting for ACK adds latency and can reduce effective control bandwidth.
                 bool waitAck = m_wait_for_ack.load();
-                sendSpeedCommand(state.id, cmd, state.invert, waitAck);
-                
-                // Fixed delay after command to ensure it's processed and clear the bus
-                // before any subsequent encoder reads.
-                if (MKS_SERVO_BUS_QUIET_US > 0) {
-                    delayMicroseconds(MKS_SERVO_BUS_QUIET_US);
+                if (canTransmitNow()) {
+                    uint32_t tx_start_us = micros();
+                    sendSpeedCommand(state.id, cmd, state.invert, waitAck);
+                    markTransmitted();
+
+                    if (waitAck) {
+                        ack_pending = true;
+                        ack_expected_function = 0xF6;
+                        ack_start_us = tx_start_us;
+                        ack_deadline_us = tx_start_us + (uint32_t)MKS_SERVO_TIMEOUT_CONTROL_US;
+                        ack_parser.received = 0;
+                    } else {
+                        async.last_latency_us.store((uint32_t)(micros() - tx_start_us));
+                    }
+                } else {
+                    // Could not transmit yet; keep the command pending.
+                    async.speed_dirty.store(true);
                 }
             } else if (!current_enabled) {
                 // Occasional safety zeroing
                 uint32_t now_ms = millis();
                 if (now_ms - async.last_zero_ms > 200) {
-                    sendSpeedCommand(state.id, 0.0f, state.invert, m_wait_for_ack.load());
-                    async.last_zero_ms = now_ms;
+                    if (canTransmitNow()) {
+                        sendSpeedCommand(state.id, 0.0f, state.invert, m_wait_for_ack.load());
+                        markTransmitted();
+                        async.last_zero_ms = now_ms;
+                    }
                 }
             }
 
@@ -119,7 +342,14 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
             uint32_t now = millis();
             if (now - async.last_telemetry_ms >= telemetry_interval_ms) {
                 // Clear any leftover ACKs from the speed commands
-                while (serial.available() > 0) { serial.read(); }
+                while (serial.available() > 0) {
+                    serial.read();
+                }
+
+                if (!canTransmitNow()) {
+                    xSemaphoreGiveRecursive(mutex);
+                    continue;
+                }
 
                 uint8_t readFrame[4];
                 readFrame[0] = 0xFA;
@@ -127,6 +357,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                 readFrame[2] = 0x31;
                 readFrame[3] = calculateChecksum(readFrame, 3);
                 writeFrame(serial, readFrame, 4);
+                markTransmitted();
 
                 uint8_t response[10]; 
                 bool got_response = readResponse(serial, state.id, 0x31, response, 10, MKS_SERVO_TIMEOUT_DATA_US);
@@ -627,14 +858,8 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
     }
     uint16_t speedValueUint = (uint16_t)speedValueCalc;
 
-    MotorState& state = (id == m_left.id) ? m_left : m_right;
     AsyncState& async = (id == m_left.id) ? m_left_async : m_right_async;
-    unsigned long start_us = micros();
-
-    SemaphoreHandle_t mutex = getMutexForMotor(id);
-    if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
-        return;
-    }
+    (void)wait_for_ack;
 
     // 3. Construct 0xF6 Frame (7 bytes)
     uint8_t frame[7];
@@ -651,32 +876,6 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
 
     async.last_cmd_send_time_us.store((uint64_t)esp_timer_get_time());
     async.speed_cmd_sent.fetch_add(1);
-    
-    bool ackOk = true;
-    if (wait_for_ack) {
-        // Consume ACK: 0xFB [ID] 0xF6 [Status] [Checksum] (5 bytes)
-        uint8_t ackBuffer[5];
-        ackOk = readResponse(serial, id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
-        
-        if (!ackOk) {
-            async.speed_ack_timeout.fetch_add(1);
-        } else if (ackBuffer[3] != 0x01) {
-            async.speed_ack_error.fetch_add(1);
-            if ((millis() - state.last_ack_log_ms >= 1000)) {
-                LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-                           "mks_servo: ID 0x%02X command error status=0x%02X\n",
-                           id, ackBuffer[3]);
-                state.last_ack_log_ms = millis();
-            }
-        }
-    }
-
-    unsigned long duration_us = micros() - start_us;
-    
-    // Update per-motor latency atomic (includes ACK time when enabled)
-    async.last_latency_us.store((uint32_t)duration_us);
-
-    xSemaphoreGiveRecursive(mutex);
 }
 
 
@@ -716,6 +915,31 @@ void MksServoMotorDriver::setEnable(uint8_t id, bool enable) {
 }
 
 void MksServoMotorDriver::sendFunctionCommand(uint8_t id, uint8_t function_code, const uint8_t* data, size_t length) {
+    QueueHandle_t queue = getQueueForMotor(id);
+    if (queue) {
+        FunctionCommandItem item;
+        item.id = id;
+        item.function_code = function_code;
+        item.length = (length > sizeof(item.data)) ? (uint8_t)sizeof(item.data) : (uint8_t)length;
+        for (uint8_t i = 0; i < item.length; ++i) {
+            item.data[i] = data[i];
+        }
+        if (xQueueSend(queue, &item, 0) != pdTRUE) {
+            LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                       "mks_servo: WARN: func queue full (ID=0x%02X FUNC=0x%02X)\n",
+                       id, function_code);
+        } else {
+            // Notify task to process queued command promptly
+            if (id == m_left.id && m_left_async.task_handle) {
+                xTaskNotifyGive(m_left_async.task_handle);
+            }
+            if (id == m_right.id && m_right_async.task_handle) {
+                xTaskNotifyGive(m_right_async.task_handle);
+            }
+        }
+        return;
+    }
+
     SemaphoreHandle_t mutex = getMutexForMotor(id);
     if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(100)) != pdTRUE) {
         return;
@@ -779,6 +1003,13 @@ SemaphoreHandle_t MksServoMotorDriver::getMutexForMotor(uint8_t id) {
         return m_leftBusMutex;
     }
     return m_rightBusMutex;
+}
+
+QueueHandle_t MksServoMotorDriver::getQueueForMotor(uint8_t id) {
+    if (id == LEFT_MOTOR_ID) {
+        return m_leftCommandQueue;
+    }
+    return m_rightCommandQueue;
 }
 
 void MksServoMotorDriver::writeFrame(HardwareSerial& serial, const uint8_t* frame, size_t length) {
