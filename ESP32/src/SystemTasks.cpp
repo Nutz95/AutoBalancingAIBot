@@ -314,10 +314,18 @@ static void imuConsumerTask(void *pvParameters) {
     uint32_t bus_lat = 0;
     uint32_t ack_pending_left_us = 0;
     uint32_t ack_pending_right_us = 0;
+    uint32_t bus_latency_left_us = 0;
+    uint32_t bus_latency_right_us = 0;
+    uint32_t bus_latency_left_age_ms = 0;
+    uint32_t bus_latency_right_age_ms = 0;
     if (auto d = abbot::motor::getActiveMotorDriver()) {
         bus_lat = d->getLastBusLatencyUs();
         ack_pending_left_us = d->getAckPendingTimeUs(abbot::motor::IMotorDriver::MotorSide::LEFT);
         ack_pending_right_us = d->getAckPendingTimeUs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+      bus_latency_left_us = d->getLastBusLatencyUs(abbot::motor::IMotorDriver::MotorSide::LEFT);
+      bus_latency_right_us = d->getLastBusLatencyUs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+      bus_latency_left_age_ms = d->getLastBusLatencyAgeMs(abbot::motor::IMotorDriver::MotorSide::LEFT);
+      bus_latency_right_age_ms = d->getLastBusLatencyAgeMs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
     }
     float inst_freq = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
 
@@ -325,7 +333,9 @@ static void imuConsumerTask(void *pvParameters) {
     abbot::imu_consumer::emitDiagnosticsIfEnabled(
         sample.ts_ms, fused_pitch_local, fused_pitch_rate_local,
         left_cmd, right_cmd, accel_robot, gyro_robot, inst_freq, bus_lat,
-        ack_pending_left_us, ack_pending_right_us, prof);
+      ack_pending_left_us, ack_pending_right_us,
+      bus_latency_left_us, bus_latency_right_us,
+      bus_latency_left_age_ms, bus_latency_right_age_ms, prof);
 
     // Emit raw IMU debug logs (throttled)
     abbot::imu_consumer::emitImuDebugLogsIfEnabled(sample, last_debug_print_ms);

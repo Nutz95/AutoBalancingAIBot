@@ -70,7 +70,11 @@ public:
     float getVelocityPositionKp() const override;
 
     const char *getDriverName() const override {
+#if MKS_SERVO_USE_STEP_DIR
+        return "mks_servo_hybrid";
+#else
         return "mks_servo";
+#endif
     }
 
     uint32_t getLastBusLatencyUs() const override {
@@ -78,11 +82,32 @@ public:
         uint32_t r = m_right_async.last_latency_us.load();
         return (l > r) ? l : r;
     }
+
+    uint32_t getLastBusLatencyUs(MotorSide side) const override {
+        if (side == MotorSide::LEFT) {
+            return m_left_async.last_latency_us.load();
+        }
+        return m_right_async.last_latency_us.load();
+    }
+
+    uint32_t getLastBusLatencyAgeMs(MotorSide side) const override {
+        if (side == MotorSide::LEFT) {
+            return m_left_async.last_latency_age_ms.load();
+        }
+        return m_right_async.last_latency_age_ms.load();
+    }
     uint32_t getAckPendingTimeUs() const override {
         uint32_t l = m_left_async.ack_pending_time_us.load();
         uint32_t r = m_right_async.ack_pending_time_us.load();
         return (l > r) ? l : r;
     }
+
+        uint32_t getAckPendingTimeUs(MotorSide side) const override {
+            if (side == MotorSide::LEFT) {
+                return m_left_async.ack_pending_time_us.load();
+            }
+            return m_right_async.ack_pending_time_us.load();
+        }
 
     uint32_t getSpeedCommandAccel() const override {
         return (uint32_t)m_speed_accel.load();
@@ -131,6 +156,7 @@ private:
         std::atomic<float> speed_value{0.0f};
         std::atomic<bool> encoder_dirty{false};
         std::atomic<uint32_t> last_latency_us{0};
+        std::atomic<uint32_t> last_latency_age_ms{0};
         std::atomic<uint32_t> ack_pending_time_us{0};
         std::atomic<bool> last_reported_enabled{true}; // Init to true to force torque sync at boot
 
@@ -149,6 +175,7 @@ private:
         // Per-task safety zeroing timer (milliseconds). Only accessed by the
         // corresponding motor task, so no atomic needed.
         uint32_t last_zero_ms = 0;
+        uint32_t last_ledc_freq = 0;
 
         TaskHandle_t task_handle = nullptr;
         uint32_t last_telemetry_ms = 0;

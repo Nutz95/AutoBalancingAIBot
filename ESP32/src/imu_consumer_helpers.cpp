@@ -351,6 +351,10 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               const float gyro_robot[3], float freq_hz, uint32_t lat_us,
                               uint32_t ack_pending_left_us,
                               uint32_t ack_pending_right_us,
+                              uint32_t bus_latency_left_us,
+                              uint32_t bus_latency_right_us,
+                              uint32_t bus_latency_left_age_ms,
+                              uint32_t bus_latency_right_age_ms,
                               const ProfileData &profiler) {
   static uint32_t last_log_ms = 0;
   static uint8_t telemetry_divider = 0;
@@ -384,6 +388,10 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
       pkt.bus_latency_us = lat_us;
       pkt.ack_pending_left_us = ack_pending_left_us;
       pkt.ack_pending_right_us = ack_pending_right_us;
+      pkt.bus_latency_left_us = bus_latency_left_us;
+      pkt.bus_latency_right_us = bus_latency_right_us;
+      pkt.bus_latency_left_age_ms = bus_latency_left_age_ms;
+      pkt.bus_latency_right_age_ms = bus_latency_right_age_ms;
       pkt.lqr_angle = diag.lqr_angle;
       pkt.lqr_gyro = diag.lqr_gyro;
       pkt.lqr_dist = diag.lqr_dist;

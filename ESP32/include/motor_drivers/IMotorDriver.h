@@ -121,6 +121,22 @@ public:
   }
 
   /**
+   * @brief Return the last measured bus latency for a specific motor side.
+   * Returns 0 if not available.
+   */
+  virtual uint32_t getLastBusLatencyUs(MotorSide /*side*/) const {
+    return 0;
+  }
+
+  /**
+   * @brief Return age (ms) since last bus latency update for a motor side.
+   * Returns 0 if not available.
+   */
+  virtual uint32_t getLastBusLatencyAgeMs(MotorSide /*side*/) const {
+    return 0;
+  }
+
+  /**
    * @brief Return the current time spent waiting for a command ACK.
    *
    * For serial bus drivers with non-blocking ACK handling, this returns the
@@ -128,6 +144,17 @@ public:
    * awaiting its ACK. Returns 0 when no ACK is pending.
    */
   virtual uint32_t getAckPendingTimeUs() const {
+    return 0;
+  }
+
+  /**
+   * @brief Return the current ACK pending time for a specific motor side.
+   *
+   * For serial bus drivers with non-blocking ACK handling, this returns the
+   * elapsed time (microseconds) since the last command was sent on that bus
+   * and is still awaiting its ACK. Returns 0 when no ACK is pending.
+   */
+  virtual uint32_t getAckPendingTimeUs(MotorSide /*side*/) const {
     return 0;
   }
 

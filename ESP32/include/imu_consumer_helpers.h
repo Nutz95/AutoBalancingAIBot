@@ -120,7 +120,12 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               float fused_pitch_rate_local, float left_cmd,
                               float right_cmd, const float accel_robot[3], 
                               const float gyro_robot[3], float freq_hz, uint32_t lat_us,
-                              uint32_t ack_pending_us,
+                              uint32_t ack_pending_left_us,
+                              uint32_t ack_pending_right_us,
+                              uint32_t bus_latency_left_us,
+                              uint32_t bus_latency_right_us,
+                              uint32_t bus_latency_left_age_ms,
+                              uint32_t bus_latency_right_age_ms,
                               const ProfileData &profiler);
 
 /**
