@@ -2,6 +2,7 @@
 #include "serial_commands/BalancerCommandHandler.h"
 #include "balancer_controller.h"
 #include "balancing/BalancingManager.h"
+#include "balancing/strategies/CascadedLqrStrategy.h"
 #include "logging.h"
 #include "imu_fusion.h"
 #include "filter_manager.h"
@@ -88,6 +89,51 @@ BalancerCommandHandler::BalancerCommandHandler(IFusionService* fusionService)
         }
         bool current = abbot::balancer::controller::isAdaptiveTrimEnabled();
         LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: adaptive trim is %s\n", current ? "ON" : "OFF");
+    });
+
+    m_menu->addEntry(22, "BALANCE LQR FILTER [SHOW|SET <pitch_rate_hz> <cmd_hz>|RESET]", [](const String &p) {
+        auto* strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
+        if (!strategy) {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: Error - Strategy not found");
+            return;
+        }
+        auto* lqr = static_cast<abbot::balancing::CascadedLqrStrategy*>(strategy);
+
+        String s = p;
+        s.trim();
+        String s_upper = s;
+        s_upper.toUpperCase();
+        if (s_upper.length() == 0 || s_upper == "SHOW") {
+            auto cfg = lqr->getConfig();
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: filters pitch_rate_lpf_hz=%.2f cmd_lpf_hz=%.2f\n",
+                       (double)cfg.pitch_rate_lpf_hz, (double)cfg.cmd_lpf_hz);
+            return;
+        }
+
+        if (s_upper == "RESET") {
+            auto cfg = lqr->getConfig();
+            cfg.pitch_rate_lpf_hz = 0.0f;
+            cfg.cmd_lpf_hz = 0.0f;
+            lqr->setConfig(cfg);
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: filters reset (disabled)");
+            return;
+        }
+
+        if (s_upper.startsWith("SET")) {
+            float pr_hz = 0.0f;
+            float cmd_hz = 0.0f;
+            if (sscanf(s_upper.c_str(), "SET %f %f", &pr_hz, &cmd_hz) == 2) {
+                auto cfg = lqr->getConfig();
+                cfg.pitch_rate_lpf_hz = pr_hz;
+                cfg.cmd_lpf_hz = cmd_hz;
+                lqr->setConfig(cfg);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: filters updated (pitch_rate_lpf_hz=%.2f cmd_lpf_hz=%.2f)\n",
+                           (double)pr_hz, (double)cmd_hz);
+                return;
+            }
+        }
+
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE LQR FILTER [SHOW|SET <pitch_rate_hz> <cmd_hz>|RESET]");
     });
 
     // Shared settings (Motors, Trim, Deadband)
@@ -224,6 +270,52 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
     } else if (s == "BALANCE LQR TRIM") {
         bool current = abbot::balancer::controller::isAdaptiveTrimEnabled();
         LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: adaptive trim is %s\n", current ? "ON" : "OFF");
+        return true;
+    } else if (s.startsWith("BALANCE LQR FILTER")) {
+        String p = line.substring(19);
+        p.trim();
+
+        auto* strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
+        if (!strategy) {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: Error - Strategy not found");
+            return true;
+        }
+        auto* lqr = static_cast<abbot::balancing::CascadedLqrStrategy*>(strategy);
+
+        String p_upper = p;
+        p_upper.toUpperCase();
+
+        if (p_upper.length() == 0 || p_upper == "SHOW") {
+            auto cfg = lqr->getConfig();
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: filters pitch_rate_lpf_hz=%.2f cmd_lpf_hz=%.2f\n",
+                       (double)cfg.pitch_rate_lpf_hz, (double)cfg.cmd_lpf_hz);
+            return true;
+        }
+
+        if (p_upper == "RESET") {
+            auto cfg = lqr->getConfig();
+            cfg.pitch_rate_lpf_hz = 0.0f;
+            cfg.cmd_lpf_hz = 0.0f;
+            lqr->setConfig(cfg);
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: filters reset (disabled)");
+            return true;
+        }
+
+        if (p_upper.startsWith("SET ")) {
+            float pr_hz = 0.0f;
+            float cmd_hz = 0.0f;
+            if (sscanf(p_upper.c_str(), "SET %f %f", &pr_hz, &cmd_hz) == 2) {
+                auto cfg = lqr->getConfig();
+                cfg.pitch_rate_lpf_hz = pr_hz;
+                cfg.cmd_lpf_hz = cmd_hz;
+                lqr->setConfig(cfg);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: filters updated (pitch_rate_lpf_hz=%.2f cmd_lpf_hz=%.2f)\n",
+                           (double)pr_hz, (double)cmd_hz);
+                return true;
+            }
+        }
+
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE LQR FILTER [SHOW|SET <pitch_rate_hz> <cmd_hz>|RESET]");
         return true;
     }
 

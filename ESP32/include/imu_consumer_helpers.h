@@ -20,6 +20,18 @@ struct ImuFrequencyMeasurement {
   static constexpr uint32_t kLogIntervalMs = 2000;  // Log every 2 seconds
 };
 
+/**
+ * Profiling data for the control loop
+ * Units: microseconds (us)
+ */
+struct ProfileData {
+    uint32_t t_fusion = 0;
+    uint32_t t_lqr = 0;
+    uint32_t t_motors = 0;
+    uint32_t t_logging = 0;
+    uint32_t t_total = 0;
+};
+
 // Mutable state used by the consumer helpers. Designed to be passed by
 // reference so helpers do not directly depend on SystemTasks globals.
 struct ConsumerState {
@@ -107,7 +119,8 @@ void requestWarmup(ConsumerState &state, float seconds, float sample_rate_hz);
 void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               float fused_pitch_rate_local, float left_cmd,
                               float right_cmd, const float accel_robot[3], 
-                              const float gyro_robot[3], float freq_hz, uint32_t lat_us);
+                              const float gyro_robot[3], float freq_hz, uint32_t lat_us,
+                              const ProfileData &profiler);
 
 /**
  * Measure and log IMU frequency.

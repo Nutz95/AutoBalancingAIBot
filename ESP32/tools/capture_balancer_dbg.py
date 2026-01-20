@@ -13,6 +13,8 @@ Usage:
 import argparse
 import re
 import socket
+import select
+import struct
 import sys
 import time
 import math
@@ -21,12 +23,54 @@ from collections import defaultdict
 import numpy as np
 import pandas as pd
 
+# TelemetryPacket in include/binary_telemetry.h
+# struct TelemetryPacket {
+#     uint32_t magic = 0xABBA0001; // 4
+#     uint32_t timestamp_ms;       // 4
+#     float pitch_deg;             // 4
+#     float pid_in_deg;            // 4
+#     float pid_out;               // 4
+#     float iterm;                 // 4
+#     float cmd;                   // 4
+#     float steer;                 // 4
+#     float ax, ay, az;            // 3*4=12
+#     float gx, gy, gz;            // 3*4=12
+#     float loop_freq_hz;          // 4
+#     int32_t enc_l, enc_r;        // 2*4=8
+#     uint32_t bus_latency_us;     // 4
+#     float lqr_angle;             // 4
+#     float lqr_gyro;              // 4
+#     float lqr_dist;              // 4
+#     float lqr_speed;             // 4
+#     float cpu0_pct;              // 4
+#     float cpu1_pct;              // 4
+#     uint32_t prof_f;             // 4
+#     uint32_t prof_l;             // 4
+#     uint32_t prof_t;             // 4
+#     uint32_t prof_log;           // 4
+# };
+TELEMETRY_FMT = "<2I6f3f3ff2iI6f4I"
+TELEMETRY_SIZE = struct.calcsize(TELEMETRY_FMT)
+UDP_PORT = 8888
+
 
 DRIVE_RE = re.compile(r"DRIVE DBG t=(?P<t>\d+)ms.*?tgtV=(?P<tgtV>[-0-9.eE]+).*?filtV=(?P<filtV>[-0-9.eE]+).*?pitch_setpoint=(?P<pitch_setpoint>[-0-9.eE]+)deg.*?pitch_setpoint_rate=(?P<pitch_setpoint_rate>[-0-9.eE]+)deg/s.*?pid_in=(?P<pid_in_drive>[-0-9.eE]+)deg.*?pid_rate=(?P<pid_rate_drive>[-0-9.eE]+)deg/s.*?pid_out=(?P<pid_out_drive>[-0-9.eE]+)")
 SETDRIVE_RE = re.compile(r"SETDRIVE: t=(?P<t>\d+)ms v_req=(?P<v_req>[-0-9.eE]+) w_req=(?P<w_req>[-0-9.eE]+)")
 BAL_RE = re.compile(
-    r"BALANCER_DBG t=(?P<t>\d+)ms.*?pitch=(?P<pitch>[-0-9.eE]+)deg.*?pid_in=(?P<pid_in>[-0-9.eE]+)deg.*?pid_out=(?P<pid_out>[-0-9.eE]+).*?iterm=(?P<iterm>[-0-9.eE]+).*?cmd=(?P<cmd>[-0-9.eE]+)(?:.*?steer=(?P<steer>[-0-9.eE]+))?.*?lat=(?P<lat>\d+)us.*?ax=(?P<ax>[-0-9.eE]+).*?ay=(?P<ay>[-0-9.eE]+).*?az=(?P<az>[-0-9.eE]+).*?gx=(?P<gx>[-0-9.eE]+).*?gy=(?P<gy>[-0-9.eE]+).*?gz=(?P<gz>[-0-9.eE]+)(?:.*?lp_hz=(?P<lp_hz>[-0-9.eE]+))?(?:.*?encL=(?P<encL>[-0-9.eE]+))?(?:.*?encR=(?P<encR>[-0-9.eE]+))?(?:.*?termA=(?P<lqr_angle>[-0-9.eE]+))?(?:.*?termG=(?P<lqr_gyro>[-0-9.eE]+))?(?:.*?termD=(?P<lqr_dist>[-0-9.eE]+))?(?:.*?termS=(?P<lqr_speed>[-0-9.eE]+))?"
+    r"BALANCER_DBG t=(?P<t>\d+)ms.*?pitch=(?P<pitch>[-0-9.eE]+)deg.*?pid_in=(?P<pid_in>[-0-9.eE]+)deg.*?pid_out=(?P<pid_out>[-0-9.eE]+).*?iterm=(?P<iterm>[-0-9.eE]+).*?cmd=(?P<cmd>[-0-9.eE]+)(?:.*?steer=(?P<steer>[-0-9.eE]+))?.*?lat=(?P<lat>\d+)us.*?ax=(?P<ax>[-0-9.eE]+).*?ay=(?P<ay>[-0-9.eE]+).*?az=(?P<az>[-0-9.eE]+).*?gx=(?P<gx>[-0-9.eE]+).*?gy=(?P<gy>[-0-9.eE]+).*?gz=(?P<gz>[-0-9.eE]+)(?:.*?lp_hz=(?P<lp_hz>[-0-9.eE]+))?(?:.*?encL=(?P<encL>[-0-9.eE]+))?(?:.*?encR=(?P<encR>[-0-9.eE]+))?(?:.*?termA=(?P<lqr_angle>[-0-9.eE]+))?(?:.*?termG=(?P<lqr_gyro>[-0-9.eE]+))?(?:.*?termD=(?P<lqr_dist>[-0-9.eE]+))?(?:.*?termS=(?P<lqr_speed>[-0-9.eE]+))?(?:.*?prof_f=(?P<prof_f>\d+))?(?:.*?prof_l=(?P<prof_l>\d+))?(?:.*?prof_t=(?P<prof_t>\d+))?"
 )
+
+# Motor telemetry (produced by src/motor_telemetry_manager.cpp)
+MOTOR_TLM_BOTH_RE = re.compile(
+    r"MOTOR: telemetry\s+drv=(?P<drv>\S+)\s+ts_us=(?P<ts_us>\d+)\s+interval=(?P<interval_ms>\d+)ms\s+bus_lat_us=(?P<bus_lat_us>\d+)(?:\s+accel=(?P<accel>\d+))?\s+"
+    r"L\(id=(?P<lid>-?\d+)\)\s+enc=(?P<lenc>[-0-9.eE]+)\s+sp=(?P<lsp>[-0-9.eE]+)\s+cmd_age_ms=(?P<lage>-?\d+)\s+"
+    r"R\(id=(?P<rid>-?\d+)\)\s+enc=(?P<renc>[-0-9.eE]+)\s+sp=(?P<rsp>[-0-9.eE]+)\s+cmd_age_ms=(?P<rage>-?\d+)"
+)
+MOTOR_TLM_ONE_RE = re.compile(
+    r"MOTOR: telemetry\s+drv=(?P<drv>\S+)\s+ts_us=(?P<ts_us>\d+)\s+interval=(?P<interval_ms>\d+)ms\s+bus_lat_us=(?P<bus_lat_us>\d+)(?:\s+accel=(?P<accel>\d+))?\s+"
+    r"id=(?P<id>-?\d+)\s+enc=(?P<enc>[-0-9.eE]+)\s+sp=(?P<sp>[-0-9.eE]+)\s+cmd_age_ms=(?P<age>-?\d+)"
+)
+CPU_RE = re.compile(r"CPU:\s+t=(?P<t>\d+)ms\s+core0=(?P<cpu0>[-0-9.eE]+)%\s+core1=(?P<cpu1>[-0-9.eE]+)%")
 GAIN_RE_PID = re.compile(r"BALANCER: started \(PID\) \(Kp=(?P<kp>[-0-9.eE]+) Ki=(?P<ki>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+)\)")
 GAIN_RE_LQR = re.compile(r"BALANCER: started \(LQR\) \(Kp=(?P<kp>[-0-9.eE]+) Kg=(?P<kg>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+) Ks=(?P<ks>[-0-9.eE]+)\)")
 FILTER_RE = re.compile(r"FUSION: active filter=(?P<filter>[A-Za-z0-9_]+)|\[Filter: (?P<filter2>[A-Za-z0-9_]+)\]")
@@ -40,7 +84,20 @@ def safe_float(v):
     except ValueError:
         return 0.0
 
-def parse_line(line, rows):
+def _maybe_update_motor_sync(motor_sync, bal_t_ms=None, motor_ts_us=None):
+    if bal_t_ms is not None and motor_sync.get('first_bal_t_ms') is None:
+        motor_sync['first_bal_t_ms'] = int(bal_t_ms)
+    if motor_ts_us is not None and motor_sync.get('first_motor_ts_us') is None:
+        motor_sync['first_motor_ts_us'] = int(motor_ts_us)
+
+    if motor_sync.get('offset_ms') is None:
+        fb = motor_sync.get('first_bal_t_ms')
+        fm = motor_sync.get('first_motor_ts_us')
+        if fb is not None and fm is not None:
+            motor_sync['offset_ms'] = int(fb - (fm / 1000.0))
+
+
+def parse_line(line, rows, motor_sync):
     m = DRIVE_RE.search(line)
     if m:
         d = {k: safe_float(v) for k, v in m.groupdict().items()}
@@ -57,7 +114,59 @@ def parse_line(line, rows):
     if m:
         d = {k: safe_float(v) for k, v in m.groupdict().items()}
         t = int(float(d.pop('t')))
+        _maybe_update_motor_sync(motor_sync, bal_t_ms=t)
         rows['bal'][t].update(d)
+        return
+
+    # Motor telemetry (driver status/health)
+    m = MOTOR_TLM_BOTH_RE.search(line)
+    if m:
+        gd = m.groupdict()
+        ts_us = int(gd['ts_us'])
+        _maybe_update_motor_sync(motor_sync, motor_ts_us=ts_us)
+        off = motor_sync.get('offset_ms')
+        t = int(ts_us / 1000.0 + (off if off is not None else 0))
+        rows['motor'][t].update({
+            'motor_bus_lat_us': safe_float(gd['bus_lat_us']),
+            'motor_l_sp': safe_float(gd['lsp']),
+            'motor_r_sp': safe_float(gd['rsp']),
+            'motor_l_enc': safe_float(gd['lenc']),
+            'motor_r_enc': safe_float(gd['renc']),
+            'motor_l_cmd_age_ms': safe_float(gd['lage']),
+            'motor_r_cmd_age_ms': safe_float(gd['rage']),
+        })
+        if gd.get('accel') is not None:
+            rows['motor'][t].update({'motor_accel': safe_float(gd['accel'])})
+        return
+
+    m = MOTOR_TLM_ONE_RE.search(line)
+    if m:
+        gd = m.groupdict()
+        ts_us = int(gd['ts_us'])
+        _maybe_update_motor_sync(motor_sync, motor_ts_us=ts_us)
+        off = motor_sync.get('offset_ms')
+        t = int(ts_us / 1000.0 + (off if off is not None else 0))
+        mid = int(gd['id'])
+        # Keep generic single-side fields; plots mainly use BOTH mode.
+        rows['motor'][t].update({
+            'motor_bus_lat_us': safe_float(gd['bus_lat_us']),
+            f'motor_{mid}_sp': safe_float(gd['sp']),
+            f'motor_{mid}_enc': safe_float(gd['enc']),
+            f'motor_{mid}_cmd_age_ms': safe_float(gd['age']),
+        })
+        if gd.get('accel') is not None:
+            rows['motor'][t].update({'motor_accel': safe_float(gd['accel'])})
+        return
+
+    # CPU load telemetry
+    m = CPU_RE.search(line)
+    if m:
+        gd = m.groupdict()
+        t = int(safe_float(gd['t']))
+        rows['cpu'][t].update({
+            'cpu_core0_pct': safe_float(gd['cpu0']),
+            'cpu_core1_pct': safe_float(gd['cpu1']),
+        })
         return
     # try simple CSV-style imu line (legacy TUNING), detect by commas and numeric start
     if ',' in line:
@@ -78,6 +187,43 @@ def parse_line(line, rows):
             pass
 
 
+def parse_binary(data, rows, motor_sync):
+    if len(data) != TELEMETRY_SIZE:
+        return False
+    v = struct.unpack(TELEMETRY_FMT, data)
+    if v[0] != 0xABBA0001:
+        return False
+    
+    t = int(v[1])
+    _maybe_update_motor_sync(motor_sync, bal_t_ms=t)
+    
+    d = {
+        'pitch': v[2],
+        'pid_in': v[3],
+        'pid_out': v[4],
+        'iterm': v[5],
+        'cmd': v[6],
+        'steer': v[7],
+        'ax': v[8], 'ay': v[9], 'az': v[10],
+        'gx': v[11], 'gy': v[12], 'gz': v[13],
+        'lp_hz': v[14],
+        'encL': v[15], 'encR': v[16],
+        'lat': v[17],
+        'lqr_angle': v[18],
+        'lqr_gyro': v[19],
+        'lqr_dist': v[20],
+        'lqr_speed': v[21],
+        'cpu_core0_pct': v[22],
+        'cpu_core1_pct': v[23],
+        'prof_f': v[24],
+        'prof_l': v[25],
+        'prof_t': v[26],
+        'prof_log': v[27]
+    }
+    rows['bal'][t].update(d)
+    return True
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--host')
@@ -88,6 +234,12 @@ def main():
     p.add_argument('--png', default='balancer_capture.png')
     p.add_argument('--timeout', type=int, default=10, help='seconds to wait for connection')
     p.add_argument('--from-log', help='Parse an existing log file')
+    p.add_argument('--motor-telemetry-ms', type=int, default=0,
+                   help='If >0, send "MOTOR TELEMETRY ALL <ms>" at capture start and stop it at capture end.')
+    p.add_argument('--motor-accel', type=int, default=None,
+                   help='If set, send "MOTOR ACCEL <0-255>" at capture start (requires new firmware).')
+    p.add_argument('--cpu-telemetry-ms', type=int, default=0,
+                   help='If >0, send "SYS CPU STREAM <ms>" at capture start and stop it at capture end.')
     p.add_argument('--no-ffill', dest='ffill', action='store_false', help='Disable forward-fill')
     p.set_defaults(ffill=True)
     args = p.parse_args()
@@ -97,7 +249,8 @@ def main():
         args.csv = f"{args.name}.csv"
         args.png = f"{args.name}.png"
 
-    rows = {'drive': defaultdict(dict), 'bal': defaultdict(dict), 'setdrive': defaultdict(dict), 'imu': dict()}
+    rows = {'drive': defaultdict(dict), 'bal': defaultdict(dict), 'setdrive': defaultdict(dict), 'imu': dict(), 'motor': defaultdict(dict), 'cpu': defaultdict(dict)}
+    motor_sync = {'first_bal_t_ms': None, 'first_motor_ts_us': None, 'offset_ms': None}
     gain_info = "Unknown Gains"
     gains = {'kp': 0.0, 'ki': 0.0, 'kd': 0.0}
     strategy_mode = 'PID' # Default
@@ -133,33 +286,128 @@ def main():
                     if m:
                         trim_info = {"val": float(m.group(1)), "type": "dynamic", "detected": True}
 
-                parse_line(line, rows)
+                parse_line(line, rows, motor_sync)
     else:
         if not args.host:
             print("Error: --host required for live capture.")
             return
 
         sock = None
+        udp_sock = None
         try:
             print(f"Connecting to {args.host}:{args.port}...")
             sock = socket.create_connection((args.host, args.port), timeout=args.timeout)
             sock.settimeout(0.5) # Small timeout to allow KeyboardInterrupt to fire
+
+            # Setup UDP socket for binary telemetry
+            try:
+                udp_sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+                # Use SO_REUSEADDR to avoid "Port already in use" if we restart quickly
+                udp_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+                udp_sock.bind(("0.0.0.0", UDP_PORT))
+                udp_sock.setblocking(False)
+                print(f">>> Prepared UDP listener on port {UDP_PORT}")
+            except Exception as e:
+                print(f">>> ERROR: Could not bind UDP port {UDP_PORT}: {e}")
+                print(">>> Continuing with TCP text logs only.")
+                udp_sock = None
+
+            # Automatically enable UDP telemetry first to reduce CPU load from text logs
+            sock.sendall(b"SYS TELEM UDP AUTO\n")
+            time.sleep(0.1)
+            # We no longer enable text logs by default as binary telemetry is much faster.
+            # sock.sendall(b"LOG ENABLE BALANCER\n")
+            print(">>> Sent SYS TELEM UDP AUTO (Binary telemetry)")
+
+            if args.motor_telemetry_ms and args.motor_telemetry_ms > 0:
+                try:
+                    # Motor telemetry logs are gated by the MOTOR channel.
+                    sock.sendall(b"LOG ENABLE MOTOR\n")
+                    time.sleep(0.02)
+
+                    if args.motor_accel is not None:
+                        cmd = f"MOTOR ACCEL {int(args.motor_accel)}\n"
+                        sock.sendall(cmd.encode('utf8'))
+                        time.sleep(0.02)
+                        sock.sendall(b"MOTOR STATUS\n")
+                        time.sleep(0.02)
+
+                    cmd = f"MOTOR TELEMETRY ALL {args.motor_telemetry_ms}\n"
+                    sock.sendall(cmd.encode('utf8'))
+                    print(f">>> Enabled MOTOR TELEMETRY ALL {args.motor_telemetry_ms}ms")
+                except Exception as e:
+                    print(f"WARN: failed to enable motor telemetry: {e}")
+
+            if args.cpu_telemetry_ms and args.cpu_telemetry_ms > 0:
+                try:
+                    cmd = f"SYS CPU STREAM {int(args.cpu_telemetry_ms)}\n"
+                    sock.sendall(cmd.encode('utf8'))
+                    print(f">>> Enabled SYS CPU STREAM {args.cpu_telemetry_ms}ms")
+                except Exception as e:
+                    print(f"WARN: failed to enable CPU telemetry: {e}")
             
-            print("Listening for BALANCER_DBG... (Waiting for 'BALANCER: started' or first DBG line)")
+            print("Listening for Telemetry... (Waiting for 'BALANCER: started' or first packet)")
             
             started = False
             line_buf = ""
-            recent_lines = [] # Keep a small history to find filter/gain info before "started"
+            recent_lines = [] 
+            udp_packet_count = 0
+            
+            # Use specific list for select, filter out None
+            select_list = [sock]
+            if udp_sock: select_list.append(udp_sock)
+
             with open(args.out, 'w', encoding='utf8') as out_fh:
                 while True:
-                    try:
-                        data = sock.recv(4096).decode('utf8', errors='ignore')
-                    except socket.timeout:
-                        continue 
+                    # Wait for data from either socket
+                    r, _, _ = select.select(select_list, [], [], 0.05)
                     
-                    if not data:
-                        break
-                    line_buf += data
+                    if udp_sock and udp_sock in r:
+                        try:
+                            # Use a slightly larger buffer for safety
+                            data, addr = udp_sock.recvfrom(1024)
+                            if parse_binary(data, rows, motor_sync):
+                                udp_packet_count += 1
+                                if not started:
+                                    print(f">>> Binary UDP stream detected from {addr}!")
+                                    started = True
+                                
+                                if udp_packet_count % 500 == 0:
+                                    # Print status without flooding
+                                    ts = int(struct.unpack("<I", data[4:8])[0])
+                                    print(f"\r>>> UDP packets: {udp_packet_count} (last t={ts}ms)  ", end="", flush=True)
+                            else:
+                                if udp_packet_count == 0:
+                                    print(f">>> Received invalid UDP packet (size={len(data)})")
+                        except Exception as e:
+                            # On Windows, recvfrom can raise ConnectionResetError if the target port isn't reachable
+                            pass
+
+                    if sock in r:
+                        try:
+                            raw_data = sock.recv(4096)
+                            if not raw_data:
+                                if started:
+                                    print("\n>>> TCP connection closed by peer. Continuing with UDP...")
+                                    select_list.remove(sock)
+                                    sock.close()
+                                    sock = None
+                                    continue
+                                else:
+                                    print("\n>>> TCP connection closed before telemetry started.")
+                                    break
+                            data = raw_data.decode('utf8', errors='ignore')
+                            line_buf += data
+                        except (socket.timeout, ConnectionResetError):
+                            if started:
+                                print("\n>>> TCP connection reset. Continuing with UDP...")
+                                if sock in select_list: select_list.remove(sock)
+                                sock.close()
+                                sock = None
+                                continue
+                            else:
+                                print("\n>>> TCP connection reset by ESP32 (possibly rebooting?).")
+                                break
                     while '\n' in line_buf:
                         line, line_buf = line_buf.split('\n', 1)
                         line = line.strip()
@@ -224,18 +472,38 @@ def main():
                                         strategy_mode = 'LQR'
                                 started = True
                         
-                        if started:
-                            parse_line(line, rows)
+                        should_parse = started
+                        if not should_parse:
+                            if line.startswith("CPU:") or line.startswith("MOTOR:"):
+                                should_parse = True
+
+                        if should_parse:
+                            parse_line(line, rows, motor_sync)
                             if "BALANCER: stopped" in line:
-                                print(">>> Balancer STOP detected. Ending capture.")
+                                print("\n>>> Balancer STOP detected. Ending capture.")
                                 raise StopIteration
         except (KeyboardInterrupt, StopIteration):
             print("\nCapture finished.")
         finally:
-            if sock: sock.close()
+            if sock:
+                try:
+                    # Cleanup telemetry streams
+                    sock.sendall(b"SYS TELEM UDP STOP\n")
+                    time.sleep(0.05)
+                    if args.cpu_telemetry_ms and args.cpu_telemetry_ms > 0:
+                        sock.sendall(b"SYS CPU STOP\n")
+                        time.sleep(0.05)
+                    if args.motor_telemetry_ms and args.motor_telemetry_ms > 0:
+                        sock.sendall(b"MOTOR TELEMETRY ALL 0\n")
+                        time.sleep(0.05)
+                except Exception:
+                    pass
+                sock.close()
+            if udp_sock:
+                udp_sock.close()
 
     # Build DataFrame
-    keys = set(rows['drive'].keys()) | set(rows['bal'].keys()) | set(rows['setdrive'].keys()) | set(rows['imu'].keys())
+    keys = set(rows['drive'].keys()) | set(rows['bal'].keys()) | set(rows['setdrive'].keys()) | set(rows['imu'].keys()) | set(rows['motor'].keys()) | set(rows['cpu'].keys())
     if not keys:
         print("No balancer data found.")
         return
@@ -248,6 +516,8 @@ def main():
         r.update(rows['drive'].get(t, {}))
         r.update(rows['bal'].get(t, {}))
         r.update(rows['setdrive'].get(t, {}))
+        r.update(rows['motor'].get(t, {}))
+        r.update(rows['cpu'].get(t, {}))
         recs.append(r)
     
     df = pd.DataFrame(recs).sort_values('time_ms')
@@ -333,7 +603,15 @@ def main():
                 df['speed'] = df['dist'].diff() / dt_s
                 df['lqr_speed'] = -df['speed'] * gains['ks']
 
-        t_axis = (df['time_ms'] - df['time_ms'].iloc[0]) / 1000.0
+        time_origin_ms = int(df['time_ms'].iloc[0])
+        try:
+            bal_keys = list(rows['bal'].keys())
+            if bal_keys:
+                time_origin_ms = int(min(bal_keys))
+        except Exception:
+            pass
+
+        t_axis = (df['time_ms'] - time_origin_ms) / 1000.0
         
         # Calculate Gyro Pitch (simple integration for lag comparison)
         if 'gy' in df.columns and len(df) > 1:
@@ -358,10 +636,13 @@ def main():
                     gyro_pitch.append(val)
             df['gyro_pitch_est'] = gyro_pitch
 
-        plt.figure(figsize=(18, 28))
+        has_motor = any(k.startswith('motor_') for k in df.columns)
+        has_cpu = ('cpu_core0_pct' in df.columns) or ('cpu_core1_pct' in df.columns)
+        nrows = 8 + (1 if has_cpu else 0) + (1 if has_motor else 0)
+        plt.figure(figsize=(18, 30 if has_motor else 28))
         
         # Subplot 1: Pitch
-        ax1 = plt.subplot(8, 1, 1)
+        ax1 = plt.subplot(nrows, 1, 1)
         ax1.plot(t_axis, df['pitch_setpoint'], 'r--', label='Target (User)', alpha=0.7)
         ax1.plot(t_axis, df['pitch'], 'b-', label='Filtered Pitch (deg)', linewidth=2)
         
@@ -388,7 +669,7 @@ def main():
         ax1.set_title(f'Balancer Pitch stability ({filter_info} | {gain_info})')
 
         # Subplot 2: PID Components (Decomposition)
-        ax2 = plt.subplot(8, 1, 2, sharex=ax1)
+        ax2 = plt.subplot(nrows, 1, 2, sharex=ax1)
         if strategy_mode == 'PID':
             if 'p_term' in df.columns:
                 ax2.plot(t_axis, df['p_term'], label='P contribution (Kp*err)', alpha=0.8)
@@ -413,29 +694,53 @@ def main():
         ax2.grid(True)
 
         # Subplot 3: Loop Frequency and Latency
-        ax3 = plt.subplot(8, 1, 3, sharex=ax1)
+        ax3 = plt.subplot(nrows, 1, 3, sharex=ax1)
         if 'lp_hz' in df.columns:
-            ax3.plot(t_axis, df['lp_hz'], 'r-', label='Loop Freq (Hz)', alpha=0.7)
-            # Adapt target line to data
+            # Detect target frequency
             max_hz = df['lp_hz'].max()
             target_hz = 1000.0 if max_hz > 700 else 500.0
-            ax3.axhline(y=target_hz, color='k', linestyle=':', alpha=0.3)
+            
+            # Use rolling mean for frequency to avoid the "block of red" effect
+            freq_smooth = df['lp_hz'].rolling(window=50, min_periods=1, center=True).mean()
+            ax3.plot(t_axis, freq_smooth, 'r-', label=f'Loop Freq (Hz, avg)', linewidth=1.5)
+            
+            # Fill region where frequency drops significantly (e.g. < 95% of target)
+            warning_mask = df['lp_hz'] < (target_hz * 0.95)
+            if warning_mask.any():
+                # Plot faint red dots for raw drops, and a light background for sustained drops
+                ax3.scatter(t_axis[warning_mask], df['lp_hz'][warning_mask], color='red', s=1, alpha=0.3, label='Freq Drop')
+            
+            ax3.axhline(y=target_hz, color='k', linestyle=':', alpha=0.5)
             ax3.set_ylim(0, target_hz * 1.2)
-        
+
         ax3_twin = ax3.twinx()
         if 'lat' in df.columns:
-            ax3_twin.plot(t_axis, df['lat'] / 1000.0, 'b-', label='Bus Latency (ms)', alpha=0.3)
-            # Auto-scale latency axis: at least 0.5 to 2ms
-            max_lat_ms = (df['lat'].max() / 1000.0) if not df['lat'].empty else 1.0
-            ax3_twin.set_ylim(0.5, max(2.0, max_lat_ms * 1.2))
+            ax3_twin.plot(t_axis, df['lat'] / 1000.0, 'b-', label='Bus Latency (ms)', alpha=0.2)
+
+        if 'prof_f' in df.columns:
+            val = df['prof_f'].rolling(window=20, min_periods=1).mean() / 1000.0
+            ax3_twin.plot(t_axis, val, 'g-', label='Fusion (ms, avg)', alpha=0.7)
+        if 'prof_l' in df.columns:
+            val = df['prof_l'].rolling(window=20, min_periods=1).mean() / 1000.0
+            ax3_twin.plot(t_axis, val, 'm-', label='LQR (ms, avg)', alpha=0.7)
+        if 'prof_t' in df.columns:
+            val = df['prof_t'].rolling(window=20, min_periods=1).mean() / 1000.0
+            ax3_twin.plot(t_axis, val, 'k:', label='Total Compute (ms, avg)', alpha=0.8)
+
+        # Auto-scale latency axis: at least 1.5ms
+        max_lat_ms = (df['lat'].max() / 1000.0) if ('lat' in df.columns and not df['lat'].empty) else 1.0
+        if 'prof_t' in df.columns and not df['prof_t'].empty:
+            max_lat_ms = max(max_lat_ms, (df['prof_t'].max() / 1000.0))
+        ax3_twin.set_ylim(0.0, max(1.5, max_lat_ms * 1.1))
         
         ax3.set_ylabel('Frequency (Hz)', color='r')
-        ax3_twin.set_ylabel('Latency (ms)', color='b')
-        ax3.set_title(f'Timing Stability (Target: {int(target_hz)}Hz / {1000.0/target_hz:.1f}ms)')
+        ax3_twin.set_ylabel('Latency/Compute (ms)', color='b')
+        ax3_twin.legend(loc='upper right', fontsize=8)
+        ax3.set_title(f'Timing Stability & Profiling (Target: {int(target_hz)}Hz)')
         ax3.grid(True)
 
         # Subplot 4: Total PID and Motor Command
-        ax4 = plt.subplot(8, 1, 4, sharex=ax1)
+        ax4 = plt.subplot(nrows, 1, 4, sharex=ax1)
         if 'pid_out' in df.columns:
             ax4.plot(t_axis, df['pid_out'], 'g-', label='Total PID/LQR Out', linewidth=1.5)
         if 'cmd' in df.columns:
@@ -447,7 +752,7 @@ def main():
         ax4.grid(True)
 
         # Subplot 5: Navigation Analysis (Linear Distance & Rotation)
-        ax5 = plt.subplot(8, 1, 5, sharex=ax1)
+        ax5 = plt.subplot(nrows, 1, 5, sharex=ax1)
         if 'encL' in df.columns and 'encR' in df.columns:
             linear_pos = (df['encL'] + df['encR']) / 2.0
             rotation = (df['encL'] - df['encR']) / 2.0  # Proxy for heading
@@ -483,7 +788,7 @@ def main():
         ax5.grid(True)
 
         # Subplot 6: Yaw Stability and Heading Hold
-        ax6 = plt.subplot(8, 1, 6, sharex=ax1)
+        ax6 = plt.subplot(nrows, 1, 6, sharex=ax1)
         if 'gz' in df.columns:
             ax6.plot(t_axis, np.degrees(df['gz']), 'r-', label='Yaw Rate (deg/s)', alpha=0.8)
         if 'steer' in df.columns:
@@ -504,7 +809,7 @@ def main():
         ax6.grid(True)
 
         # Subplot 7: IMU Raw Pitch-Axis
-        ax7 = plt.subplot(8, 1, 7, sharex=ax1)
+        ax7 = plt.subplot(nrows, 1, 7, sharex=ax1)
         ax7.plot(t_axis, df['gx'], label='Gyro X (Roll)', alpha=0.3)
         ax7.plot(t_axis, df['gy'], label='Gyro Y (Pitch)', alpha=0.8)
         ax7.plot(t_axis, df['ax'], label='Accel X (Linear)', alpha=0.6)
@@ -513,44 +818,136 @@ def main():
         ax7.grid(True)
 
         # Subplot 8: FFT Analysis (Pitch)
-        ax8 = plt.subplot(8, 1, 8)
-        pitch_vals = df['pitch'].dropna().values
-        if len(pitch_vals) > 32: # Lowered requirement (from 64)
-            # Estimate sample rate from time_ms
-            dt_series = df['time_ms'].diff().dropna()
+        # Goal: highlight resonances (e.g. 8-20Hz) and ignore the low-frequency fall/drift.
+        ax8 = plt.subplot(nrows, 1, 8)
+        pitch_df = df[['time_ms', 'pitch']].dropna()
+        if len(pitch_df) > 32:  # Lowered requirement (from 64)
+            dt_series = pitch_df['time_ms'].diff().dropna()
             if not dt_series.empty:
-                dt_avg = dt_series.mean() / 1000.0
-                fs = 1.0 / dt_avg
-                n = len(pitch_vals)
-                # Remove DC and Window
-                pitch_detrend = pitch_vals - np.mean(pitch_vals)
-                # Apply Hanning window to reduce leakage
-                window = np.hanning(n)
-                yf = np.fft.rfft(pitch_detrend * window)
-                xf = np.fft.rfftfreq(n, d=1.0/fs)
-                
-                mag = np.abs(yf)
-                ax8.plot(xf, mag, 'r-', linewidth=1.5)
-                
-                # Find peak frequency (ignore DC and very low frequencies < 0.5Hz)
-                mask = xf > 0.5
-                if np.any(mask):
-                    peak_idx = np.argmax(mag[mask])
-                    peak_freq = xf[mask][peak_idx]
-                    ax8.set_title(f"Pitch FFT Analysis (Dominant Frequency: {peak_freq:.2f} Hz)")
-                else:
-                    ax8.set_title("Pitch FFT Analysis")
-                
-                ax8.set_xlim(0, fs/2.0 if fs > 20 else 20)
-                ax8.set_ylim(0, mag.max() * 1.1 if len(mag) > 0 else 1.0)
+                dt_avg_s = dt_series.mean() / 1000.0
+                if dt_avg_s > 0:
+                    fs = 1.0 / dt_avg_s
+                    t = (pitch_df['time_ms'].values - pitch_df['time_ms'].values[0]) / 1000.0
+                    y = pitch_df['pitch'].values
+
+                    # Detrend (linear) to suppress slow drift / fall dominating the FFT
+                    if len(y) >= 3:
+                        a, b = np.polyfit(t, y, 1)
+                        y_detr = y - (a * t + b)
+                    else:
+                        y_detr = y - np.mean(y)
+
+                    n = len(y_detr)
+                    window = np.hanning(n)
+                    yf = np.fft.rfft(y_detr * window)
+                    xf = np.fft.rfftfreq(n, d=1.0 / fs)
+                    mag = np.abs(yf)
+
+                    ax8.plot(xf, mag, 'r-', linewidth=1.5)
+
+                    # Focus resonance search band (ignore <5Hz because it captures the fall/lean)
+                    f_lo = 5.0
+                    f_hi = 30.0
+                    band = (xf >= f_lo) & (xf <= f_hi)
+                    peak_freq = None
+                    peak_mag = None
+
+                    if np.any(band):
+                        band_x = xf[band]
+                        band_mag = mag[band]
+
+                        # Top-3 peaks in band
+                        top_n = min(3, len(band_mag))
+                        top_idx = np.argsort(band_mag)[-top_n:][::-1]
+                        peaks = [(float(band_x[i]), float(band_mag[i])) for i in top_idx]
+
+                        if peaks:
+                            peak_freq, peak_mag = peaks[0]
+                            for f, _m in peaks:
+                                ax8.axvline(f, color='k', linestyle=':', alpha=0.2)
+
+                            df_hz = fs / n if n > 0 else 0.0
+                            peaks_txt = "\n".join([f"{f:5.2f} Hz" for f, _m in peaks])
+                            info = (
+                                f"Peak (5-30Hz): {peak_freq:.2f} Hz\n"
+                                f"Δf≈{df_hz:.2f} Hz, fs≈{fs:.1f} Hz\n"
+                                f"Top peaks:\n{peaks_txt}"
+                            )
+                            ax8.text(
+                                0.02,
+                                0.95,
+                                info,
+                                transform=ax8.transAxes,
+                                verticalalignment='top',
+                                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                                fontsize=9,
+                            )
+
+                    title = "Pitch FFT Analysis"
+                    if peak_freq is not None:
+                        title += f" (Peak 5-30Hz: {peak_freq:.2f} Hz)"
+                    ax8.set_title(title)
+                    ax8.set_xlim(0, min(40.0, fs / 2.0))
+                    if len(mag) > 0:
+                        ax8.set_ylim(0, float(mag.max()) * 1.1)
         else:
-            ax8.set_title(f"Pitch FFT Analysis (Not enough data: {len(pitch_vals)} samples)")
+            ax8.set_title(f"Pitch FFT Analysis (Not enough data: {len(pitch_df)} samples)")
             
         ax8.set_ylabel('Magnitude')
         ax8.set_xlabel('Frequency (Hz)')
         ax8.grid(True)
 
+        next_row = 9
+        if has_cpu:
+            ax_cpu = plt.subplot(nrows, 1, next_row, sharex=ax1)
+            # Use rolling means and fill_between for clarity
+            if 'cpu_core0_pct' in df.columns:
+                c0 = df['cpu_core0_pct'].rolling(window=100, min_periods=1, center=True).mean()
+                ax_cpu.fill_between(t_axis, 0, c0, color='blue', alpha=0.2, label='Core 0 (System) Range')
+                ax_cpu.plot(t_axis, c0, 'b-', alpha=0.9, label='Core 0 (System) Avg', linewidth=1)
+                
+            if 'cpu_core1_pct' in df.columns:
+                c1 = df['cpu_core1_pct'].rolling(window=100, min_periods=1, center=True).mean()
+                ax_cpu.fill_between(t_axis, 0, c1, color='red', alpha=0.2, label='Core 1 (Control) Range')
+                ax_cpu.plot(t_axis, c1, 'r-', alpha=0.9, label='Core 1 (Control) Avg', linewidth=1)
+
+            ax_cpu.set_ylabel('CPU Load (%)')
+            ax_cpu.set_ylim(0.0, 100.0)
+            ax_cpu.set_title('CPU Load (per core)')
+            ax_cpu.legend(loc='upper right')
+            ax_cpu.grid(True)
+            next_row += 1
+
+        # Optional: Motor command freshness / bus health
+        if has_motor:
+            ax9 = plt.subplot(nrows, 1, next_row, sharex=ax1)
+            if 'motor_bus_lat_us' in df.columns:
+                ax9.plot(t_axis, df['motor_bus_lat_us'] / 1000.0, 'k-', alpha=0.4, label='motor bus lat (ms)')
+            if 'motor_l_cmd_age_ms' in df.columns:
+                ax9.plot(t_axis, df['motor_l_cmd_age_ms'], 'b-', alpha=0.8, label='L cmd age (ms)')
+            if 'motor_r_cmd_age_ms' in df.columns:
+                ax9.plot(t_axis, df['motor_r_cmd_age_ms'], 'r-', alpha=0.8, label='R cmd age (ms)')
+            ax9.set_ylabel('Age(ms)/Lat(ms)')
+            ax9.set_xlabel('Time (s)')
+            accel_title = ''
+            if 'motor_accel' in df.columns:
+                accel_vals = df['motor_accel'].dropna()
+                accel_vals = accel_vals[accel_vals != 0]
+                uniq = list(pd.unique(accel_vals))
+                if len(uniq) == 1:
+                    accel_title = f" (accel={int(uniq[0])})"
+                elif len(uniq) > 1:
+                    accel_title = f" (accel changes: {','.join(str(int(x)) for x in uniq[:5])})"
+
+            ax9.set_title('Motor Health: command age and bus latency' + accel_title)
+            ax9.legend(loc='upper right')
+            ax9.grid(True)
+
         plt.tight_layout()
+        try:
+            ax1.set_xlim(left=0.0)
+        except Exception:
+            pass
         plt.savefig(args.png)
         print(f"Saved plot: {args.png}")
         

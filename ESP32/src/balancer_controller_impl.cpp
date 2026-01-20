@@ -153,7 +153,8 @@ void setDriveSetpoints(float v, float w) {
 void start(float pitch_rad) {
   if (g_active) return;
   g_active = true;
-  abbot::log::enableChannel(abbot::log::CHANNEL_BALANCER);
+  // Previously we enabled text logging here, but it's too slow for 1000Hz.
+  // We now rely on Binary UDP Telemetry.
   
   auto& manager = abbot::balancing::BalancingManager::getInstance();
   manager.reset(pitch_rad);
@@ -183,7 +184,7 @@ void start(float pitch_rad) {
 void stop() {
   if (!g_active) return;
   g_active = false;
-  abbot::log::disableChannel(abbot::log::CHANNEL_BALANCER);
+  // Channels are no longer toggled here to avoid impacting the system performance.
   if (auto driver = abbot::motor::getActiveMotorDriver()) {
     driver->setMotorCommandBoth(0.0f, 0.0f);
     driver->disableMotors();

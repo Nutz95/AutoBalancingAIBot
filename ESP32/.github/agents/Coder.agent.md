@@ -3,7 +3,7 @@ name: Coder
 description: Generates C++ code for the ESP32 following SOLID and project coding rules.
 argument-hint: Provide the plan JSON or a short task description.
 model: Gemini 3 Flash (Preview) (copilot)
-tools: ['vscode/getProjectSetupInfo', 'vscode/installExtension', 'vscode/openSimpleBrowser', 'vscode/runCommand', 'vscode/vscodeAPI', 'vscode/extensions', 'execute', 'read', 'edit', 'search', 'web', 'search/changes', 'agent', 'todo']
+tools: ['vscode/getProjectSetupInfo', 'vscode/installExtension', 'vscode/openSimpleBrowser', 'vscode/runCommand', 'vscode/vscodeAPI', 'vscode/extensions', 'execute', 'read', 'edit', 'search', 'web', 'copilot-container-tools/*', 'agent', 'ms-python.python/getPythonEnvironmentInfo', 'ms-python.python/getPythonExecutableCommand', 'ms-python.python/installPythonPackage', 'ms-python.python/configurePythonEnvironment', 'todo']
 handoffs:
   - label: Ready for Verification
     agent: Verifier

@@ -40,16 +40,16 @@ static String s_pass;
 static bool s_started = false;
 // async queue state and rate-limiter
 static uint32_t s_lastSendMs = 0;
-static const int kQueueSize = 256; // Increased for high-frequency telemetry (1ms)
-static const int kLineMax = 256;
+static const int kQueueSize = 128; // Réduit pour libérer de la RAM pour le BLE
+static const int kLineMax = 512;
 static char s_queue[kQueueSize][kLineMax];
 static int s_q_head = 0;
 static int s_q_tail = 0;
 static int s_q_count = 0;
 static int s_drops = 0; // number of dropped lines when queue is full
 static portMUX_TYPE s_queue_mux = portMUX_INITIALIZER_UNLOCKED;
-static const uint32_t kMinMsBetweenSends = 1; // Reduced for high-frequency telemetry drain (was 10ms)
-static const int kMaxPerDrain = 16; // Increased to drain faster (was 4)
+static const uint32_t kMinMsBetweenSends = 5; // Moins agressif pour laisser du CPU au BLE
+static const int kMaxPerDrain = 8; // Moins agressif pour laisser du CPU au BLE
 // Reconnect behaviour
 static uint32_t s_lastConnectAttemptMs = 0;
 static const uint32_t kReconnectIntervalMs =
@@ -270,6 +270,13 @@ void sendLine(const char *line) {
   s_q_tail = (s_q_tail + 1) % kQueueSize;
   s_q_count++;
   portEXIT_CRITICAL(&s_queue_mux);
+}
+
+IPAddress getClientIP() {
+    if (s_client && s_client.connected()) {
+        return s_client.remoteIP();
+    }
+    return INADDR_NONE;
 }
 
 void getDiagnostics(char *buf, size_t bufLen) {

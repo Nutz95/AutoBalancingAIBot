@@ -10,7 +10,10 @@ void MotorTelemetryManager::taskEntry(void *pv) {
     uint64_t timestamp_us = (uint64_t)esp_timer_get_time();  // Use microseconds for consistency
     auto activeDriver = abbot::motor::getActiveMotorDriver();
     if (activeDriver) {
-        if (telemetryManager->both) {
+      const char* drvName = activeDriver->getDriverName();
+      uint32_t busLatUs = activeDriver->getLastBusLatencyUs();
+      uint32_t accel = activeDriver->getSpeedCommandAccel();
+      if (telemetryManager->both) {
         int leftId = abbot::motor::getActiveMotorId(abbot::motor::IMotorDriver::MotorSide::LEFT, -1);
         int rightId = abbot::motor::getActiveMotorId(abbot::motor::IMotorDriver::MotorSide::RIGHT, -1);
         // Read values using driver-manager helpers (they internally protect access).
@@ -27,10 +30,13 @@ void MotorTelemetryManager::taskEntry(void *pv) {
           leftCmdTs = activeDriver->getLastCommandTimeUs(abbot::motor::IMotorDriver::MotorSide::LEFT);
           rightCmdTs = activeDriver->getLastCommandTimeUs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
         }
+        int64_t leftAgeMs = (leftCmdTs > 0 && timestamp_us >= leftCmdTs) ? (int64_t)((timestamp_us - leftCmdTs) / 1000ULL) : -1;
+        int64_t rightAgeMs = (rightCmdTs > 0 && timestamp_us >= rightCmdTs) ? (int64_t)((timestamp_us - rightCmdTs) / 1000ULL) : -1;
         LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-                   "MOTOR: telemetry ts_us=%llu interval=%dms L(id=%d) enc=%ld sp=%.2f cmd_ts_us=%llu R(id=%d) enc=%ld sp=%.2f cmd_ts_us=%llu\n",
-                   (unsigned long long)timestamp_us, telemetryManager->intervalMs, leftId, (long)leftEncoder,
-                   (double)leftSpeed, (unsigned long long)leftCmdTs, rightId, (long)rightEncoder, (double)rightSpeed, (unsigned long long)rightCmdTs);
+             "MOTOR: telemetry drv=%s ts_us=%llu interval=%dms bus_lat_us=%lu accel=%lu L(id=%d) enc=%ld sp=%.2f cmd_age_ms=%lld R(id=%d) enc=%ld sp=%.2f cmd_age_ms=%lld\n",
+             drvName, (unsigned long long)timestamp_us, telemetryManager->intervalMs, (unsigned long)busLatUs, (unsigned long)accel,
+                   leftId, (long)leftEncoder, (double)leftSpeed, (long long)leftAgeMs,
+                   rightId, (long)rightEncoder, (double)rightSpeed, (long long)rightAgeMs);
       } else {
         int selectedSideId = telemetryManager->singleLeft ?
             abbot::motor::getActiveMotorId(abbot::motor::IMotorDriver::MotorSide::LEFT, -1) :
@@ -44,10 +50,11 @@ void MotorTelemetryManager::taskEntry(void *pv) {
         if (activeDriver) {
           cmdTs = activeDriver->getLastCommandTimeUs(side);
         }
+        int64_t ageMs = (cmdTs > 0 && timestamp_us >= cmdTs) ? (int64_t)((timestamp_us - cmdTs) / 1000ULL) : -1;
         LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-                   "MOTOR: telemetry ts_us=%llu interval=%dms id=%d enc=%ld sp=%.2f cmd_ts_us=%llu\n",
-                   (unsigned long long)timestamp_us, telemetryManager->intervalMs, selectedSideId,
-                   (long)encoderValue, (double)speedValue, (unsigned long long)cmdTs);
+             "MOTOR: telemetry drv=%s ts_us=%llu interval=%dms bus_lat_us=%lu accel=%lu id=%d enc=%ld sp=%.2f cmd_age_ms=%lld\n",
+             drvName, (unsigned long long)timestamp_us, telemetryManager->intervalMs, (unsigned long)busLatUs, (unsigned long)accel,
+                   selectedSideId, (long)encoderValue, (double)speedValue, (long long)ageMs);
       }
     } else {
       LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "MOTOR: telemetry (no driver)");

@@ -120,6 +120,17 @@ public:
     return 0;
   }
 
+  /**
+   * @brief Return the acceleration value used for speed commands (0-255).
+   *
+   * For bus-based motor drivers, this may correspond to a protocol field
+   * included in speed command frames (e.g. MKS 0xF6 accel). For other
+   * drivers, this returns 0 by default.
+   */
+  virtual uint32_t getSpeedCommandAccel() const {
+    return 0;
+  }
+
   // Human-readable driver name (e.g. "servo", "dc_mirror", ...)
   virtual const char *getDriverName() const = 0;
 };

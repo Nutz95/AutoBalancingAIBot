@@ -24,21 +24,28 @@
 | **v50** | 0.04 | 0.015 | 2e-5 | 0.0 | **Saturated** | Correct sign. 15Hz oscillation (Phase Lag limit). Command hits +/- 1.0. Trim too slow. |
 | **v51** | 0.035 | 0.012 | 1e-5 | 0.0 | **Worse** | Fell faster (0.8s). Gains too weak. Trim frozen by 15° safety limit. |
 | **v52** | 0.042 | 0.008 | 5e-6 | 0.0 | **Wobbly** | Trim s'emballe pendant la chute (10°). Kg trop bas = manque de tenue. |
-| **v53** | 0.045 | 0.012 | 5e-6 | 0.0 | **TBD** | Brushing trim (max 7° error). Remontée Kg pour amortir. |
+| **v53** | 0.045 | 0.012 | 5e-6 | 0.0 | **Worse** | Fall in 0.7s. Trim limited by 7° window. Pre-saturation at 60% due to bias. |
+| **v54/55** | 0.050 | 0.015 | 5e-6 | 0.0 | **Runaway** | "Turbo Trim": High alpha/window. Trim ran to -23° in 1.4s, killing balance. |
+| **v56** | 0.045 | 0.012 | 0.0 | 0.0 | **Wobbly** | Trim finally stable (~1.5°). Peak 11.3Hz on FFT. Fell in 0.9s. |
+| **v57** | 0.045 | 0.018 | 0.0 | 0.0 | **Wobbly** | Dominant peak at 12.5Hz. Damping term (Kg) is too filtered to be effective. |
+| **v58** | 0.045 | 0.035 | 0.0 | 0.0 | **Better** | Holds ~2.6s. Trim ~0°. Damping works, but motor command becomes high‑freq “chatter” then falls. |
+| **v59** | 0.045 | 0.030 | 0.0 | 0.0 | **Better** | Holds ~3.0s. Trim stays controlled (~-2.3°). Chatter persists; FFT peak (5-30Hz) ~8.8Hz. |
+| **v60** | 0.045 | 0.028 | 0.0 | 0.0 | **TBD** | Reduce chatter further: LPF alpha 0.3 -> 0.25 and Kg 0.030 -> 0.028. |
 
 ---
 
 ## Technical Analysis: The 12-14Hz Mystery
 The 12-14Hz (approx 70-80ms period) is the **Phase Lag limit** of the system.
-- **Madgwick Cost**: We discovered the Madgwick filter was likely adding 10-20ms of group delay to the pitch estimation.
+- **FFT Proof**: v55 clearly shows a dominant peak at **12.5Hz**.
 - **System Latency**: By switching to `COMPLEMENTARY1D`, we eliminate the filter lag. In v45, the filter was fighting itself; v46 fixes the gyro sign.
 
 ## Action Plan (Convergence Strategy)
 To stop "shooting in the dark", we follow this sequence:
 
-1. **Step 1: Pure Balance (Alpha stage - current V45)**
+1. **Step 1: Pure Balance (Alpha stage - current V56)**
    - Target: Robot balances without vibrating, even if it moves forward/backward.
    - Using: `IMU_FILTER_COMPLEMENTARY` for zero-lag response.
+   - **Trim Status**: Set near-zero to prevent interference.
    
 2. **Step 2: Static COG Correction**
    - Once Step 1 is stable, find the **fixed** `pitch_offset` that stops the drift. 

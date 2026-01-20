@@ -5,6 +5,7 @@
 #include "../../config/motor_configs/mks_servo_config.h"
 #include "speed_estimator.h"
 #include <atomic>
+#include <cstdint>
 
 #if !defined(UNIT_TEST_HOST)
 #include <freertos/FreeRTOS.h>
@@ -76,6 +77,10 @@ public:
         return (l > r) ? l : r;
     }
 
+    uint32_t getSpeedCommandAccel() const override {
+        return (uint32_t)m_speed_accel.load();
+    }
+
     // Serial command interface
     bool processSerialCommand(const String &line) override;
 
@@ -112,6 +117,23 @@ private:
         std::atomic<bool> encoder_dirty{false};
         std::atomic<uint32_t> last_latency_us{0};
         std::atomic<bool> last_reported_enabled{true}; // Init to true to force torque sync at boot
+
+        // Time when a speed frame was last written to the motor (microseconds).
+        std::atomic<uint64_t> last_cmd_send_time_us{0};
+        // Time when telemetry (encoder) was last successfully read (microseconds).
+        std::atomic<uint64_t> last_encoder_time_us{0};
+
+        // Lightweight diagnostics counters
+        std::atomic<uint32_t> speed_cmd_sent{0};
+        std::atomic<uint32_t> speed_ack_timeout{0};
+        std::atomic<uint32_t> speed_ack_error{0};
+        std::atomic<uint32_t> encoder_ok{0};
+        std::atomic<uint32_t> encoder_timeout{0};
+
+        // Per-task safety zeroing timer (milliseconds). Only accessed by the
+        // corresponding motor task, so no atomic needed.
+        uint32_t last_zero_ms = 0;
+
         TaskHandle_t task_handle = nullptr;
         uint32_t last_telemetry_ms = 0;
     };
@@ -119,9 +141,15 @@ private:
     AsyncState m_left_async;
     AsyncState m_right_async;
 
+    // When enabled, each speed write waits for an ACK (adds latency).
+    std::atomic<bool> m_wait_for_ack{false};
+
+    // Acceleration byte (0-255) included in MKS 0xF6 speed frames.
+    // Default comes from config (MKS_SERVO_ACCEL).
+    std::atomic<uint8_t> m_speed_accel{(uint8_t)MKS_SERVO_ACCEL};
+
     static void motorTaskEntry(void* pvParameters);
     void runMotorTask(MotorSide side);
-
     // Protocol helpers
     void sendSpeedCommand(uint8_t id, float normalized_speed, bool invert, bool wait_for_ack = false);
     void sendFunctionCommand(uint8_t id, uint8_t function_code, const uint8_t* data, size_t length);

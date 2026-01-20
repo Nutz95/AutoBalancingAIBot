@@ -19,6 +19,10 @@ public:
         float k_speed;
         bool adaptive_trim_enabled;
         float adaptive_trim_alpha;
+
+        // Optional filters (Hz). Set to 0 to disable.
+        float pitch_rate_lpf_hz;
+        float cmd_lpf_hz;
     };
 
     CascadedLqrStrategy();
@@ -55,6 +59,7 @@ private:
 
     float lp_pitch_rate_ = 0.0f;
     float lp_v_speed_ = 0.0f;
+    float lp_cmd_ = 0.0f;
 
     void updateAdaptiveTrim(float pitch_rad, float dist_err, float dt);
 };

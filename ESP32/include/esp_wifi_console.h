@@ -15,6 +15,9 @@ void loop();
 // Send a single line (null-terminated) to the connected TCP client if any.
 void sendLine(const char *line);
 
+// Returns the IP of the currently connected TCP client, or INADDR_NONE
+IPAddress getClientIP();
+
 // Connect/disconnect helpers exposed for manual control
 void connectNow();
 void disconnectNow();

@@ -348,8 +348,9 @@ void abbot::btle_hid::begin() {
 
   // Create a background FreeRTOS task to run the BLE scan/connect loop so
   // `begin()` returns quickly and does not block `setup()`.
-  BaseType_t r = xTaskCreate(btleTask, "BTLETask", 8192, nullptr,
-                             configMAX_PRIORITIES - 5, nullptr);
+  // Pinning to Core 1 to avoid Core 0 saturation issues.
+  BaseType_t r = xTaskCreatePinnedToCore(btleTask, "BTLETask", 8192, nullptr,
+                             tskIDLE_PRIORITY + 5, nullptr, 1);
   if (r != pdPASS) {
     LOG_PRINTLN(abbot::log::CHANNEL_BLE, "Failed to create BTLE task");
   }

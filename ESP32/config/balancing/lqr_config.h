@@ -9,16 +9,16 @@
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_ALPHA
-#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.0008f  // Speed up convergence 4x (from 0.0002)
+#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.00005f // Extremely slow (Back to basics)
 #endif
 
 // Limits for adaptive trim activation
 #ifndef BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG
-#define BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG 7.0f   // Only learn COG when nearly vertical
+#define BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG 3.0f   // Only learn if very close to vertical
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS
-#define BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS 2000.0f // Back to reasonable range
+#define BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS 1000.0f
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_LIMIT_RAD
@@ -27,19 +27,19 @@
 
 // --- Cascaded LQR Gains ---
 #ifndef BALANCER_DEFAULT_K_PITCH
-#define BALANCER_DEFAULT_K_PITCH 0.045f     // Firm control
+#define BALANCER_DEFAULT_K_PITCH 0.045f     // Firm but safe
 #endif
 
 #ifndef BALANCER_DEFAULT_K_GYRO
-#define BALANCER_DEFAULT_K_GYRO 0.012f      // Increased damping (was 0.008)
+#define BALANCER_DEFAULT_K_GYRO 0.028f
 #endif
 
 #ifndef BALANCER_DEFAULT_K_DIST
-#define BALANCER_DEFAULT_K_DIST 0.000005f   // Keep it very soft
+#define BALANCER_DEFAULT_K_DIST 0.0f        // DISABLE position anchor to isolate balance
 #endif
 
 #ifndef BALANCER_DEFAULT_K_SPEED
-#define BALANCER_DEFAULT_K_SPEED 0.0f       // Keep speed damping at 0 for cleaner debug
+#define BALANCER_DEFAULT_K_SPEED 0.0f       // Keep speed damping at 0
 #endif
 
 // --- Yaw / Heading Control ---
@@ -75,7 +75,19 @@
 
 // Low-pass filter alpha for derivatives (500Hz)
 #ifndef BALANCER_PITCH_RATE_LPF_ALPHA
-#define BALANCER_PITCH_RATE_LPF_ALPHA 0.1f  // Strong filters to kill the 15Hz vibration
+#define BALANCER_PITCH_RATE_LPF_ALPHA 0.25f  // Increased from 0.1 to 0.3 to reduce phase lag
+#endif
+
+// Optional: Use a cutoff frequency (Hz) for pitch-rate low-pass instead of a fixed alpha.
+// Set to 0 to keep using BALANCER_PITCH_RATE_LPF_ALPHA.
+#ifndef BALANCER_LQR_PITCH_RATE_LPF_HZ
+#define BALANCER_LQR_PITCH_RATE_LPF_HZ 0.0f
+#endif
+
+// Optional: Low-pass filter the final LQR command (Hz). Set to 0 to disable.
+// This can reduce high-frequency oscillations but adds phase lag.
+#ifndef BALANCER_LQR_CMD_LPF_HZ
+#define BALANCER_LQR_CMD_LPF_HZ 0.0f
 #endif
 
 #ifndef BALANCER_SPEED_LPF_ALPHA

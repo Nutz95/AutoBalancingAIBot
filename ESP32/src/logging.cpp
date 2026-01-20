@@ -222,18 +222,21 @@ void lockedPrintf(const char *fmt, ...) {
   if (!fmt) {
     return;
   }
-  char tmp[256];
+  if (g_log_mutex) {
+    xSemaphoreTake(g_log_mutex, portMAX_DELAY);
+  }
+
+  static char tmp[512];
   va_list ap;
   va_start(ap, fmt);
   vsnprintf(tmp, sizeof(tmp), fmt, ap);
   va_end(ap);
-  if (g_log_mutex) {
-    xSemaphoreTake(g_log_mutex, portMAX_DELAY);
-  }
+
   Serial.print(tmp);
   // Forward formatted output to WiFi console. We forward the raw
   // buffer; if it contains newlines the remote will receive them.
   abbot::wifi_console::sendLine(tmp);
+
   if (g_log_mutex) {
     xSemaphoreGive(g_log_mutex);
   }
@@ -251,7 +254,7 @@ void lockedPrintfNonBlocking(const char *fmt, ...) {
     }
   }
 
-  char tmp[256];
+  static char tmp[512];
   va_list ap;
   va_start(ap, fmt);
   vsnprintf(tmp, sizeof(tmp), fmt, ap);

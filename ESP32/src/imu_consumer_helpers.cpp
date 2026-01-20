@@ -9,10 +9,15 @@
 #include "motor_drivers/driver_manager.h"
 #include "tuning_capture.h"
 #include "units.h"
+#include "TelemetryService.h"
 #include <cmath>
 #include <cstdio>
 
 namespace abbot {
+namespace serialcmds {
+extern bool tryGetCpuLoadPercent(float &cpu0, float &cpu1);
+}
+
 namespace imu_consumer {
 
 float computeDt(ConsumerState &state, const IMUSample &sample,
@@ -343,10 +348,61 @@ void requestWarmup(ConsumerState &state, float seconds, float sample_rate_hz) {
 void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               float fused_pitch_rate_local, float left_cmd,
                               float right_cmd, const float accel_robot[3], 
-                              const float gyro_robot[3], float freq_hz, uint32_t lat_us) {
+                              const float gyro_robot[3], float freq_hz, uint32_t lat_us,
+                              const ProfileData &profiler) {
   static uint32_t last_log_ms = 0;
+  static uint8_t telemetry_divider = 0;
   uint32_t now = millis();
   
+  float pitch_deg = radToDeg(fused_pitch_local);
+  float avg_cmd = (left_cmd + right_cmd) / 2.0f;
+  float steer = (left_cmd - right_cmd) / 2.0f;
+
+  // Binary UDP Telemetry - Throttled to reduce CPU load
+  // This helps core 0 handle WiFi and Bluetooth (NimBLE) reliably.
+  if (abbot::telemetry::TelemetryService::getInstance().isActive()) {
+      if (++telemetry_divider >= TELEMETRY_BINARY_DIVIDER) {
+          telemetry_divider = 0;
+          
+          abbot::balancer::controller::Diagnostics diag = {};
+          abbot::balancer::controller::getDiagnostics(diag);
+
+          abbot::telemetry::TelemetryPacket pkt;
+          pkt.timestamp_ms = ts_ms;
+      pkt.pitch_deg = pitch_deg;
+      pkt.pid_in_deg = pitch_deg;
+      pkt.pid_out = avg_cmd;
+      pkt.iterm = diag.iterm;
+      pkt.cmd = avg_cmd;
+      pkt.steer = steer;
+      pkt.ax = accel_robot[0]; pkt.ay = accel_robot[1]; pkt.az = accel_robot[2];
+      pkt.gx = gyro_robot[0]; pkt.gy = gyro_robot[1]; pkt.gz = gyro_robot[2];
+      pkt.loop_freq_hz = freq_hz;
+      pkt.enc_l = diag.enc_l; pkt.enc_r = diag.enc_r;
+      pkt.bus_latency_us = lat_us;
+      pkt.lqr_angle = diag.lqr_angle;
+      pkt.lqr_gyro = diag.lqr_gyro;
+      pkt.lqr_dist = diag.lqr_dist;
+      pkt.lqr_speed = diag.lqr_speed;
+      
+      static uint32_t last_cpu_ms = 0;
+      static float last_c0 = 0, last_c1 = 0;
+      if (now - last_cpu_ms >= 100) {
+          if (abbot::serialcmds::tryGetCpuLoadPercent(last_c0, last_c1)) {
+              last_cpu_ms = now;
+          }
+      }
+      pkt.cpu0_pct = last_c0;
+      pkt.cpu1_pct = last_c1;
+
+      pkt.prof_f = profiler.t_fusion;
+      pkt.prof_l = profiler.t_lqr;
+      pkt.prof_t = profiler.t_total;
+      pkt.prof_log = profiler.t_logging;
+      abbot::telemetry::TelemetryService::getInstance().send(pkt);
+      }
+  }
+
   if (!abbot::log::isChannelEnabled(abbot::log::CHANNEL_BALANCER)) {
     return;
   }
@@ -355,25 +411,25 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
   if (now - last_log_ms < BALANCER_DEBUG_LOG_INTERVAL_MS) {
     return;
   }
+
+  // Fallback to text logs if enabled, but use a higher throttle if binary is active
+  if (abbot::telemetry::TelemetryService::getInstance().isActive()) {
+      if (now - last_log_ms < TELEMETRY_TEXT_THROTTLE_MS) {
+          return;
+      }
+  }
   last_log_ms = now;
 
-  float pitch_deg = radToDeg(fused_pitch_local);
-  
-  // Format compatible with capture_balancer_dbg.py
-  // We map: pid_in -> pitch, pid_out -> cmd, iterm -> adaptive trim or integrator
-  float avg_cmd = (left_cmd + right_cmd) / 2.0f;
-  float steer = (left_cmd - right_cmd) / 2.0f;
-  
-  // Get detailed diagnostics from controller
   abbot::balancer::controller::Diagnostics diag = {};
   abbot::balancer::controller::getDiagnostics(diag);
-  
+
   LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
-             "BALANCER_DBG t=%lums pitch=%.3fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.3f cmd=%.3f steer=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f lp_hz=%.1f encL=%ld encR=%ld termA=%.6f termG=%.6f termD=%.6f termS=%.6f\n",
+             "BALANCER_DBG t=%lums pitch=%.3fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.3f cmd=%.3f steer=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f lp_hz=%.1f encL=%ld encR=%ld termA=%.6f termG=%.6f termD=%.6f termS=%.6f prof_f=%lu prof_l=%lu prof_t=%lu\n",
              (unsigned long)ts_ms, pitch_deg, pitch_deg, avg_cmd, diag.iterm, avg_cmd, steer,
              (unsigned long)lat_us, accel_robot[0], accel_robot[1], accel_robot[2], 
              gyro_robot[0], gyro_robot[1], gyro_robot[2], freq_hz, (long)diag.enc_l, (long)diag.enc_r,
-             diag.lqr_angle, diag.lqr_gyro, diag.lqr_dist, diag.lqr_speed);
+             diag.lqr_angle, diag.lqr_gyro, diag.lqr_dist, diag.lqr_speed,
+             (unsigned long)profiler.t_fusion, (unsigned long)profiler.t_lqr, (unsigned long)profiler.t_total);
 }
 
 bool measureAndLogImuFrequency(ImuFrequencyMeasurement &freq_state,

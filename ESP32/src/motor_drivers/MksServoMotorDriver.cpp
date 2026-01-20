@@ -96,8 +96,10 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
             // 2. Send Speed Command
             if (speed_dirty || (enabled_changed && current_enabled)) {
                 float cmd = current_enabled ? async.target_speed.load() : 0.0f;
-                // SPEED ACK: FALSE. This restores < 200us latency for high frequency control.
-                sendSpeedCommand(state.id, cmd, state.invert, false); 
+                // SPEED ACK: keep disabled during balancing; enable only for diagnostics.
+                // Waiting for ACK adds latency and can reduce effective control bandwidth.
+                bool waitAck = m_wait_for_ack.load();
+                sendSpeedCommand(state.id, cmd, state.invert, waitAck);
                 
                 // Fixed delay after command to ensure it's processed and clear the bus
                 // before any subsequent encoder reads.
@@ -106,10 +108,10 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                 }
             } else if (!current_enabled) {
                 // Occasional safety zeroing
-                static uint32_t last_zero_ms = 0;
-                if (millis() - last_zero_ms > 200) {
-                    sendSpeedCommand(state.id, 0.0f, state.invert, false);
-                    last_zero_ms = millis();
+                uint32_t now_ms = millis();
+                if (now_ms - async.last_zero_ms > 200) {
+                    sendSpeedCommand(state.id, 0.0f, state.invert, m_wait_for_ack.load());
+                    async.last_zero_ms = now_ms;
                 }
             }
 
@@ -153,6 +155,8 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     async.encoder_value.store(corrected_p);
                     async.encoder_dirty.store(true);
                     async.last_telemetry_ms = now;
+                    async.last_encoder_time_us.store((uint64_t)esp_timer_get_time());
+                    async.encoder_ok.fetch_add(1);
 
                     // Diagnostic: Log non-zero speed once in a while to verify atomic store
                     static uint32_t last_speed_check_ms = 0;
@@ -160,6 +164,9 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                         LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ID 0x%02X speed_ticks_s = %.2f\n", state.id, (double)s);
                         last_speed_check_ms = now;
                     }
+                }
+                else {
+                    async.encoder_timeout.fetch_add(1);
                 }
             }
             xSemaphoreGiveRecursive(mutex);
@@ -216,15 +223,29 @@ bool MksServoMotorDriver::areMotorsEnabled() {
 }
 
 void MksServoMotorDriver::printStatus() {
+    uint32_t lat_us = getLastBusLatencyUs();
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-               "mks_servo: enabled=%d L_cmd=%.2f R_cmd=%.2f\n",
-               m_enabled, m_left.last_command, m_right.last_command);
+               "mks_servo: enabled=%d ack=%d accel=%u bus_lat_us=%lu L_cmd=%.3f R_cmd=%.3f\n",
+               m_enabled, (int)m_wait_for_ack.load(), (unsigned)m_speed_accel.load(), (unsigned long)lat_us,
+               (double)m_left.last_command, (double)m_right.last_command);
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "mks_servo: L sent=%lu ack_to=%lu ack_err=%lu enc_ok=%lu enc_to=%lu | R sent=%lu ack_to=%lu ack_err=%lu enc_ok=%lu enc_to=%lu\n",
+               (unsigned long)m_left_async.speed_cmd_sent.load(),
+               (unsigned long)m_left_async.speed_ack_timeout.load(),
+               (unsigned long)m_left_async.speed_ack_error.load(),
+               (unsigned long)m_left_async.encoder_ok.load(),
+               (unsigned long)m_left_async.encoder_timeout.load(),
+               (unsigned long)m_right_async.speed_cmd_sent.load(),
+               (unsigned long)m_right_async.speed_ack_timeout.load(),
+               (unsigned long)m_right_async.speed_ack_error.load(),
+               (unsigned long)m_right_async.encoder_ok.load(),
+               (unsigned long)m_right_async.encoder_timeout.load());
 }
 
 void MksServoMotorDriver::dumpConfig() {
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-               "mks_servo: L_ID=0x%02X R_ID=0x%02X Baud=%d Ma=%d\n",
-               m_left.id, m_right.id, MKS_SERVO_BAUD, MKS_SERVO_MA);
+               "mks_servo: L_ID=0x%02X R_ID=0x%02X Baud=%d Ma=%d vmax_rpm=%d accel=%u\n",
+               m_left.id, m_right.id, MKS_SERVO_BAUD, MKS_SERVO_MA, (int)VELOCITY_MAX_SPEED, (unsigned)m_speed_accel.load());
 }
 
 void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_command) {
@@ -246,8 +267,6 @@ void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_co
     // 3. Update legacy state for monitoring/logging
     m_left.last_command = left_command;
     m_right.last_command = right_command;
-    m_left.last_command_time_us = micros();
-    m_right.last_command_time_us = micros();
 }
 
 void MksServoMotorDriver::readEncodersBoth(int32_t& left_out, int32_t& right_out) {
@@ -302,7 +321,9 @@ void MksServoMotorDriver::resetPositionTracking() {
 }
 
 uint64_t MksServoMotorDriver::getLastCommandTimeUs(MotorSide side) const {
-    return (side == MotorSide::LEFT) ? m_left.last_command_time_us : m_right.last_command_time_us;
+    // Return timestamp of last *hardware* send (not queue time)
+    return (side == MotorSide::LEFT) ? m_left_async.last_cmd_send_time_us.load()
+                                    : m_right_async.last_cmd_send_time_us.load();
 }
 
 int MksServoMotorDriver::getMotorId(MotorSide side) const {
@@ -379,10 +400,102 @@ void MksServoMotorDriver::scanBus() {
 }
 
 bool MksServoMotorDriver::processSerialCommand(const String &line) {
+    // Ack toggle for diagnostics. Example: "MOTOR ACK ON" or "MOTOR ACK OFF".
+    // Note: the command handler strips the leading "MOTOR " and passes just "ACK ..." here.
+    if (line.equalsIgnoreCase("ACK") || line.startsWith("ACK ") ||
+        line.equalsIgnoreCase("MOTOR ACK") || line.startsWith("MOTOR ACK ")) {
+        String s = line;
+        s.replace("MOTOR", "");
+        s.trim();
+        // s is now "ACK" or "ACK <arg>"
+        int sp = s.indexOf(' ');
+        bool hasArg = (sp >= 0);
+        String arg = hasArg ? s.substring(sp + 1) : String();
+        arg.trim();
+        arg.toUpperCase();
+        if (!hasArg || arg.length() == 0) {
+            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ACK wait is %s\n", m_wait_for_ack.load() ? "ON" : "OFF");
+            return true;
+        }
+        bool enable = false;
+        if (arg == "ON" || arg == "1" || arg == "TRUE") {
+            enable = true;
+        } else if (arg == "OFF" || arg == "0" || arg == "FALSE") {
+            enable = false;
+        } else {
+            LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: Usage: MOTOR ACK <ON|OFF>");
+            return true;
+        }
+        m_wait_for_ack.store(enable);
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ACK wait set to %s\n", enable ? "ON" : "OFF");
+        return true;
+    }
+
     if (line.equalsIgnoreCase("SCAN") || line.startsWith("SCAN ") ||
         line.equalsIgnoreCase("MOTOR SCAN") || line.startsWith("MOTOR SCAN ")) {
         scanBus();
         return true;
+    }
+
+    // Runtime accel tuning. Examples:
+    // - "MOTOR ACCEL" (prints current)
+    // - "MOTOR ACCEL 125"
+    // - "MOTOR ACC LEFT 125" (compat with existing menu entry)
+    auto handleAccelSet = [this](const String &rawLine) -> bool {
+        String s = rawLine;
+        s.replace("MOTOR", "");
+        s.trim();
+        // s is now "ACCEL ..." or "ACC ..."
+        if (s.startsWith("ACCEL") || s.startsWith("accel")) {
+            s = s.substring(5);
+        } else if (s.startsWith("ACC") || s.startsWith("acc")) {
+            s = s.substring(3);
+        } else {
+            return false;
+        }
+        s.trim();
+        if (s.length() == 0) {
+            uint32_t a = (uint32_t)m_speed_accel.load();
+            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ACCEL is %lu\n", (unsigned long)a);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "mks_servo: ACCEL is %lu\n", (unsigned long)a);
+            return true;
+        }
+
+        // Allow optional side token (LEFT/RIGHT/ID), ignore it.
+        String token1 = s;
+        String token2 = String();
+        int sp = s.indexOf(' ');
+        if (sp >= 0) {
+            token1 = s.substring(0, sp);
+            token2 = s.substring(sp + 1);
+            token2.trim();
+        }
+        String t1u = token1;
+        t1u.trim();
+        t1u.toUpperCase();
+        String valueStr = token1;
+        if (t1u == "LEFT" || t1u == "RIGHT" || t1u == "ID") {
+            valueStr = token2;
+        }
+        valueStr.trim();
+        int v = valueStr.toInt();
+        if (v < 0 || v > 255) {
+            LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: Usage: MOTOR ACCEL <0-255>");
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "mks_servo: Usage: MOTOR ACCEL <0-255>");
+            return true;
+        }
+        m_speed_accel.store((uint8_t)v);
+        uint32_t a = (uint32_t)m_speed_accel.load();
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ACCEL set to %lu\n", (unsigned long)a);
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "mks_servo: ACCEL set to %lu\n", (unsigned long)a);
+        return true;
+    };
+
+    if (line.equalsIgnoreCase("ACCEL") || line.startsWith("ACCEL ") ||
+        line.equalsIgnoreCase("MOTOR ACCEL") || line.startsWith("MOTOR ACCEL ") ||
+        line.equalsIgnoreCase("ACC") || line.startsWith("ACC ") ||
+        line.equalsIgnoreCase("MOTOR ACC") || line.startsWith("MOTOR ACC ")) {
+        return handleAccelSet(line);
     }
 
     if (line.equalsIgnoreCase("READ ALL") || line.equalsIgnoreCase("MOTOR READ ALL")) {
@@ -515,6 +628,7 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
     uint16_t speedValueUint = (uint16_t)speedValueCalc;
 
     MotorState& state = (id == m_left.id) ? m_left : m_right;
+    AsyncState& async = (id == m_left.id) ? m_left_async : m_right_async;
     unsigned long start_us = micros();
 
     SemaphoreHandle_t mutex = getMutexForMotor(id);
@@ -529,11 +643,14 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
     frame[2] = 0xF6;
     frame[3] = (direction << 7) | ((speedValueUint >> 8) & 0x0F);
     frame[4] = speedValueUint & 0xFF;
-    frame[5] = MKS_SERVO_ACCEL;
+    frame[5] = (uint8_t)m_speed_accel.load();
     frame[6] = calculateChecksum(frame, 6);
 
     HardwareSerial& serial = getSerialForMotor(id);
     writeFrame(serial, frame, 7);
+
+    async.last_cmd_send_time_us.store((uint64_t)esp_timer_get_time());
+    async.speed_cmd_sent.fetch_add(1);
     
     bool ackOk = true;
     if (wait_for_ack) {
@@ -541,23 +658,27 @@ void MksServoMotorDriver::sendSpeedCommand(uint8_t id, float normalized_speed, b
         uint8_t ackBuffer[5];
         ackOk = readResponse(serial, id, 0xF6, ackBuffer, 5, MKS_SERVO_TIMEOUT_CONTROL_US);
         
-        if (ackOk && ackBuffer[3] != 0x01 && (millis() - state.last_ack_log_ms >= 1000)) {
-            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ID 0x%02X command error status=0x%02X\n", id, ackBuffer[3]);
-            state.last_ack_log_ms = millis();
+        if (!ackOk) {
+            async.speed_ack_timeout.fetch_add(1);
+        } else if (ackBuffer[3] != 0x01) {
+            async.speed_ack_error.fetch_add(1);
+            if ((millis() - state.last_ack_log_ms >= 1000)) {
+                LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                           "mks_servo: ID 0x%02X command error status=0x%02X\n",
+                           id, ackBuffer[3]);
+                state.last_ack_log_ms = millis();
+            }
         }
     }
 
     unsigned long duration_us = micros() - start_us;
     
-    // Update per-motor latency atomic
-    if (id == m_left.id) {
-        m_left_async.last_latency_us.store((uint32_t)duration_us);
-    } else {
-        m_right_async.last_latency_us.store((uint32_t)duration_us);
-    }
+    // Update per-motor latency atomic (includes ACK time when enabled)
+    async.last_latency_us.store((uint32_t)duration_us);
 
     xSemaphoreGiveRecursive(mutex);
 }
+
 
 void MksServoMotorDriver::setMode(uint8_t id, MksServoMode mode) {
     uint8_t data = (uint8_t)mode;
