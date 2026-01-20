@@ -28,6 +28,7 @@ struct TelemetryPacket {
     
     // Motors/Odometry
     int32_t enc_l, enc_r;
+    uint32_t last_encoder_age_ms;
     uint32_t bus_latency_us;
     uint32_t ack_pending_left_us;
     uint32_t ack_pending_right_us;

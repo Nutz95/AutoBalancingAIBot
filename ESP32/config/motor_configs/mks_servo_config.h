@@ -148,11 +148,11 @@ enum class MksServoHoldCurrent : uint8_t {
 #endif
 
 #ifndef MKS_SERVO_LEDC_RES
-#define MKS_SERVO_LEDC_RES 10
+#define MKS_SERVO_LEDC_RES 8
 #endif
 
 #ifndef MKS_SERVO_LEDC_DUTY
-#define MKS_SERVO_LEDC_DUTY 512 // 50% for 10-bit (2^10 = 1024)
+#define MKS_SERVO_LEDC_DUTY 128 // 50% for 8-bit (2^8 = 256)
 #endif
 
 // Microsteps per revolution (configured on MKS driver)
@@ -171,6 +171,17 @@ enum class MksServoHoldCurrent : uint8_t {
 // to reduce motor bus packet rate. Example: 2 => 500Hz.
 #ifndef MKS_SERVO_CONTROL_SEND_DIVIDER
 #define MKS_SERVO_CONTROL_SEND_DIVIDER 2
+#endif
+
+// Limit Step/Dir LEDC reconfiguration rate (Hz). Default 500Hz.
+// Higher values increase CPU usage on core 1.
+#ifndef MKS_SERVO_STEP_UPDATE_HZ
+#define MKS_SERVO_STEP_UPDATE_HZ 250
+#endif
+
+// Throttle frequency updates: only update if change is > X Hz
+#ifndef MKS_SERVO_STEP_DEADBAND_HZ
+#define MKS_SERVO_STEP_DEADBAND_HZ 5
 #endif
 
 // Minimum time between two frames on the same serial bus.
@@ -254,7 +265,12 @@ enum class MksServoHoldCurrent : uint8_t {
 // Encoder update frequency (Hz). 
 // High values (100-250) improve LQR/speed estimation but increase bus traffic.
 #ifndef MKS_SERVO_ENCODER_UPDATE_HZ
-#define MKS_SERVO_ENCODER_UPDATE_HZ 50
+#define MKS_SERVO_ENCODER_UPDATE_HZ 25
+#endif
+
+// Enable/disable RS485 encoder telemetry (0x31) for A/B testing.
+#ifndef MKS_SERVO_TELEMETRY_ENABLED
+#define MKS_SERVO_TELEMETRY_ENABLED 1
 #endif
 
 // Default acceleration for speed commands (0-255)
@@ -296,9 +312,9 @@ enum class MksServoHoldCurrent : uint8_t {
 
 // Telemetry/Data timeout (e.g. reading position)
 // Position reads can take longer to process internally on MKS drivers.
-// Reduced to 2000us because 10000us (10ms) busy-waits freeze the system/Bluetooth.
+// Increased to 50000us (50ms) for diagnostic testing as requested.
 #ifndef MKS_SERVO_TIMEOUT_DATA_US
-#define MKS_SERVO_TIMEOUT_DATA_US 2000 
+#define MKS_SERVO_TIMEOUT_DATA_US 50000 
 #endif
 
 // Heavy request timeout (e.g. scanning or register dump)
@@ -317,6 +333,15 @@ enum class MksServoHoldCurrent : uint8_t {
 // and the motor has time to process and begin its response.
 #ifndef MKS_SERVO_TELEMETRY_WAIT_US
 #define MKS_SERVO_TELEMETRY_WAIT_US 500
+#endif
+
+// Optional quiet window (microseconds) for Hybrid Step/Dir mode.
+// Some MKS firmwares stop responding to RS485 telemetry (0x31) while receiving
+// high-frequency Step/Dir pulses. Setting a small quiet window temporarily
+// disables step pulses around the telemetry request to allow the driver to
+// respond. Start with 2000us and adjust.
+#ifndef MKS_SERVO_TELEMETRY_QUIET_WINDOW_US
+#define MKS_SERVO_TELEMETRY_QUIET_WINDOW_US 5000
 #endif
 
 // Turnaround delay for RS485 auto-direction hardware (us)

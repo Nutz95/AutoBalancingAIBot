@@ -51,10 +51,13 @@ import pandas as pd
 #     uint32_t prof_t;             // 4
 #     uint32_t prof_log;           // 4
 # };
-TELEMETRY_FMT = "<2I6f3f3ff2i7I6f4I"
+# v2 adds last_encoder_age_ms after enc_l/enc_r
+TELEMETRY_FMT = "<2I6f3f3ff2i8I6f4I"
+TELEMETRY_FMT_V1 = "<2I6f3f3ff2i7I6f4I"
 TELEMETRY_FMT_ACK_LR = "<2I6f3f3ff2i3I6f4I"
 TELEMETRY_FMT_LEGACY_ACK = "<2I6f3f3ff2i2I6f4I"
 TELEMETRY_SIZE = struct.calcsize(TELEMETRY_FMT)
+TELEMETRY_SIZE_V1 = struct.calcsize(TELEMETRY_FMT_V1)
 TELEMETRY_SIZE_ACK_LR = struct.calcsize(TELEMETRY_FMT_ACK_LR)
 TELEMETRY_SIZE_LEGACY_ACK = struct.calcsize(TELEMETRY_FMT_LEGACY_ACK)
 UDP_PORT = 8888
@@ -194,8 +197,21 @@ def parse_line(line, rows, motor_sync):
 
 
 def parse_binary(data, rows, motor_sync):
+    last_encoder_age_ms = 0
+    lat_index = 17
     if len(data) == TELEMETRY_SIZE:
         v = struct.unpack(TELEMETRY_FMT, data)
+        last_encoder_age_ms = v[17]
+        lat_index = 18
+        ack_left = v[19]
+        ack_right = v[20]
+        bus_lat_left = v[21]
+        bus_lat_right = v[22]
+        bus_lat_left_age = v[23]
+        bus_lat_right_age = v[24]
+        lqr_index = 25
+    elif len(data) == TELEMETRY_SIZE_V1:
+        v = struct.unpack(TELEMETRY_FMT_V1, data)
         ack_left = v[18]
         ack_right = v[19]
         bus_lat_left = v[20]
@@ -240,7 +256,8 @@ def parse_binary(data, rows, motor_sync):
         'gx': v[11], 'gy': v[12], 'gz': v[13],
         'lp_hz': v[14],
         'encL': v[15], 'encR': v[16],
-        'lat': v[17],
+        'last_encoder_age_ms': last_encoder_age_ms,
+        'lat': v[lat_index],
         'ack_pending_l_us': ack_left,
         'ack_pending_r_us': ack_right,
         'bus_lat_l_us': bus_lat_left,
@@ -764,6 +781,12 @@ def main():
             lat_r[df['bus_lat_r_age_ms'] > 50] = np.nan
             ax3_twin.plot(t_axis, lat_r / 1000.0, 'b--', label='Bus Lat R (ms)', alpha=0.5)
 
+        if 'last_encoder_age_ms' in df.columns:
+            enc_age = df['last_encoder_age_ms'].copy()
+            # Treat UINT32_MAX as "never updated"
+            enc_age[enc_age >= 4_000_000_000] = np.nan
+            ax3_twin.plot(t_axis, enc_age, color='orange', linestyle='-', label='Encoder Age (ms)', alpha=0.7)
+
         # Estimated transfer time for speed command + ACK (7 bytes TX + 5 bytes RX)
         transfer_us = (12.0 * 10.0 * 1e6) / float(args.mks_baud)
 
@@ -796,6 +819,10 @@ def main():
             max_lat_ms = max(max_lat_ms, (df['bus_lat_l_us'].max() / 1000.0))
         if 'bus_lat_r_us' in df.columns and not df['bus_lat_r_us'].empty:
             max_lat_ms = max(max_lat_ms, (df['bus_lat_r_us'].max() / 1000.0))
+        if 'last_encoder_age_ms' in df.columns and not df['last_encoder_age_ms'].empty:
+            enc_age_max = df['last_encoder_age_ms'].replace([np.inf, -np.inf], np.nan).dropna().max()
+            if pd.notna(enc_age_max) and enc_age_max < 4_000_000_000:
+                max_lat_ms = max(max_lat_ms, enc_age_max)
         if 'ack_pending_l_us' in df.columns and not df['ack_pending_l_us'].empty:
             max_lat_ms = max(max_lat_ms, (df['ack_pending_l_us'].max() / 1000.0))
         if 'ack_pending_r_us' in df.columns and not df['ack_pending_r_us'].empty:

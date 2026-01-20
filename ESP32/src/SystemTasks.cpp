@@ -318,6 +318,9 @@ static void imuConsumerTask(void *pvParameters) {
     uint32_t bus_latency_right_us = 0;
     uint32_t bus_latency_left_age_ms = 0;
     uint32_t bus_latency_right_age_ms = 0;
+    uint32_t encoder_left_age_ms = 0;
+    uint32_t encoder_right_age_ms = 0;
+    uint32_t last_encoder_age_ms = 0;
     if (auto d = abbot::motor::getActiveMotorDriver()) {
         bus_lat = d->getLastBusLatencyUs();
         ack_pending_left_us = d->getAckPendingTimeUs(abbot::motor::IMotorDriver::MotorSide::LEFT);
@@ -326,6 +329,10 @@ static void imuConsumerTask(void *pvParameters) {
       bus_latency_right_us = d->getLastBusLatencyUs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
       bus_latency_left_age_ms = d->getLastBusLatencyAgeMs(abbot::motor::IMotorDriver::MotorSide::LEFT);
       bus_latency_right_age_ms = d->getLastBusLatencyAgeMs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+
+      encoder_left_age_ms = d->getLastEncoderAgeMs(abbot::motor::IMotorDriver::MotorSide::LEFT);
+      encoder_right_age_ms = d->getLastEncoderAgeMs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+      last_encoder_age_ms = (encoder_left_age_ms > encoder_right_age_ms) ? encoder_left_age_ms : encoder_right_age_ms;
     }
     float inst_freq = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
 
@@ -335,7 +342,8 @@ static void imuConsumerTask(void *pvParameters) {
         left_cmd, right_cmd, accel_robot, gyro_robot, inst_freq, bus_lat,
       ack_pending_left_us, ack_pending_right_us,
       bus_latency_left_us, bus_latency_right_us,
-      bus_latency_left_age_ms, bus_latency_right_age_ms, prof);
+      bus_latency_left_age_ms, bus_latency_right_age_ms,
+      last_encoder_age_ms, prof);
 
     // Emit raw IMU debug logs (throttled)
     abbot::imu_consumer::emitImuDebugLogsIfEnabled(sample, last_debug_print_ms);

@@ -137,6 +137,17 @@ public:
   }
 
   /**
+   * @brief Return age (ms) since the last encoder/telemetry update.
+   *
+   * For drivers that update encoder values asynchronously (e.g. bus telemetry),
+   * this reports how stale the last encoder sample is. Returns 0 if the driver
+   * does not provide this information.
+   */
+  virtual uint32_t getLastEncoderAgeMs(MotorSide /*side*/) const {
+    return 0;
+  }
+
+  /**
    * @brief Return the current time spent waiting for a command ACK.
    *
    * For serial bus drivers with non-blocking ACK handling, this returns the

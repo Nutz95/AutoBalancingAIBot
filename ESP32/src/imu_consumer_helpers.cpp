@@ -355,6 +355,7 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               uint32_t bus_latency_right_us,
                               uint32_t bus_latency_left_age_ms,
                               uint32_t bus_latency_right_age_ms,
+                              uint32_t last_encoder_age_ms,
                               const ProfileData &profiler) {
   static uint32_t last_log_ms = 0;
   static uint8_t telemetry_divider = 0;
@@ -366,6 +367,7 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
 
   // Binary UDP Telemetry - Throttled to reduce CPU load
   // This helps core 0 handle WiFi and Bluetooth (NimBLE) reliably.
+#if TELEMETRY_UDP_ENABLED
   if (abbot::telemetry::TelemetryService::getInstance().isActive()) {
       if (++telemetry_divider >= TELEMETRY_BINARY_DIVIDER) {
           telemetry_divider = 0;
@@ -385,6 +387,7 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
       pkt.gx = gyro_robot[0]; pkt.gy = gyro_robot[1]; pkt.gz = gyro_robot[2];
       pkt.loop_freq_hz = freq_hz;
       pkt.enc_l = diag.enc_l; pkt.enc_r = diag.enc_r;
+      pkt.last_encoder_age_ms = last_encoder_age_ms;
       pkt.bus_latency_us = lat_us;
       pkt.ack_pending_left_us = ack_pending_left_us;
       pkt.ack_pending_right_us = ack_pending_right_us;
@@ -414,6 +417,11 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
       abbot::telemetry::TelemetryService::getInstance().send(pkt);
       }
   }
+    #endif
+
+#if !TELEMETRY_TEXT_ENABLED
+  return;
+#endif
 
   if (!abbot::log::isChannelEnabled(abbot::log::CHANNEL_BALANCER)) {
     return;

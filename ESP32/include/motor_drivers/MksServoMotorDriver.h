@@ -96,6 +96,8 @@ public:
         }
         return m_right_async.last_latency_age_ms.load();
     }
+
+    uint32_t getLastEncoderAgeMs(MotorSide side) const override;
     uint32_t getAckPendingTimeUs() const override {
         uint32_t l = m_left_async.ack_pending_time_us.load();
         uint32_t r = m_right_async.ack_pending_time_us.load();
@@ -176,6 +178,7 @@ private:
         // corresponding motor task, so no atomic needed.
         uint32_t last_zero_ms = 0;
         uint32_t last_ledc_freq = 0;
+        uint32_t last_ledc_update_us = 0;
 
         TaskHandle_t task_handle = nullptr;
         uint32_t last_telemetry_ms = 0;

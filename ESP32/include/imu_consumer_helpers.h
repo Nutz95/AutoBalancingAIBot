@@ -126,6 +126,7 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
                               uint32_t bus_latency_right_us,
                               uint32_t bus_latency_left_age_ms,
                               uint32_t bus_latency_right_age_ms,
+                              uint32_t last_encoder_age_ms,
                               const ProfileData &profiler);
 
 /**

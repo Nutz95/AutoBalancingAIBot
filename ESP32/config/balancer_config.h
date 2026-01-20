@@ -156,8 +156,18 @@
 #define TELEMETRY_BINARY_DIVIDER 5
 #endif
 
+// Enable/disable UDP binary telemetry at compile time (A/B test CPU load).
+#ifndef TELEMETRY_UDP_ENABLED
+#define TELEMETRY_UDP_ENABLED 1
+#endif
+
 // Throttles text diagnostics logging to serial/console (ms).
 // Set to a high value (e.g. 1000) when high-speed binary is active.
 #ifndef TELEMETRY_TEXT_THROTTLE_MS
 #define TELEMETRY_TEXT_THROTTLE_MS 1000
+#endif
+
+// Enable/disable text diagnostics logging at compile time (A/B test CPU load).
+#ifndef TELEMETRY_TEXT_ENABLED
+#define TELEMETRY_TEXT_ENABLED 1
 #endif
