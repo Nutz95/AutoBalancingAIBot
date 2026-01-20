@@ -51,9 +51,11 @@ import pandas as pd
 #     uint32_t prof_t;             // 4
 #     uint32_t prof_log;           // 4
 # };
-TELEMETRY_FMT = "<2I6f3f3ff2i3I6f4I"
+TELEMETRY_FMT = "<2I6f3f3ff2i7I6f4I"
+TELEMETRY_FMT_ACK_LR = "<2I6f3f3ff2i3I6f4I"
 TELEMETRY_FMT_LEGACY_ACK = "<2I6f3f3ff2i2I6f4I"
 TELEMETRY_SIZE = struct.calcsize(TELEMETRY_FMT)
+TELEMETRY_SIZE_ACK_LR = struct.calcsize(TELEMETRY_FMT_ACK_LR)
 TELEMETRY_SIZE_LEGACY_ACK = struct.calcsize(TELEMETRY_FMT_LEGACY_ACK)
 UDP_PORT = 8888
 
@@ -196,11 +198,28 @@ def parse_binary(data, rows, motor_sync):
         v = struct.unpack(TELEMETRY_FMT, data)
         ack_left = v[18]
         ack_right = v[19]
+        bus_lat_left = v[20]
+        bus_lat_right = v[21]
+        bus_lat_left_age = v[22]
+        bus_lat_right_age = v[23]
+        lqr_index = 24
+    elif len(data) == TELEMETRY_SIZE_ACK_LR:
+        v = struct.unpack(TELEMETRY_FMT_ACK_LR, data)
+        ack_left = v[18]
+        ack_right = v[19]
+        bus_lat_left = 0
+        bus_lat_right = 0
+        bus_lat_left_age = 0
+        bus_lat_right_age = 0
         lqr_index = 20
     elif len(data) == TELEMETRY_SIZE_LEGACY_ACK:
         v = struct.unpack(TELEMETRY_FMT_LEGACY_ACK, data)
         ack_left = v[18]
         ack_right = 0
+        bus_lat_left = 0
+        bus_lat_right = 0
+        bus_lat_left_age = 0
+        bus_lat_right_age = 0
         lqr_index = 19
     else:
         return False
@@ -224,6 +243,10 @@ def parse_binary(data, rows, motor_sync):
         'lat': v[17],
         'ack_pending_l_us': ack_left,
         'ack_pending_r_us': ack_right,
+        'bus_lat_l_us': bus_lat_left,
+        'bus_lat_r_us': bus_lat_right,
+        'bus_lat_l_age_ms': bus_lat_left_age,
+        'bus_lat_r_age_ms': bus_lat_right_age,
         'lqr_angle': v[lqr_index],
         'lqr_gyro': v[lqr_index + 1],
         'lqr_dist': v[lqr_index + 2],
@@ -731,8 +754,15 @@ def main():
             ax3.set_ylim(0, target_hz * 1.2)
 
         ax3_twin = ax3.twinx()
-        if 'lat' in df.columns:
-            ax3_twin.plot(t_axis, df['lat'] / 1000.0, 'b-', label='Bus Latency (ms)', alpha=0.2)
+
+        if 'bus_lat_l_us' in df.columns and 'bus_lat_l_age_ms' in df.columns:
+            lat_l = df['bus_lat_l_us'].copy()
+            lat_l[df['bus_lat_l_age_ms'] > 50] = np.nan
+            ax3_twin.plot(t_axis, lat_l / 1000.0, 'b-', label='Bus Lat L (ms)', alpha=0.5)
+        if 'bus_lat_r_us' in df.columns and 'bus_lat_r_age_ms' in df.columns:
+            lat_r = df['bus_lat_r_us'].copy()
+            lat_r[df['bus_lat_r_age_ms'] > 50] = np.nan
+            ax3_twin.plot(t_axis, lat_r / 1000.0, 'b--', label='Bus Lat R (ms)', alpha=0.5)
 
         # Estimated transfer time for speed command + ACK (7 bytes TX + 5 bytes RX)
         transfer_us = (12.0 * 10.0 * 1e6) / float(args.mks_baud)
@@ -742,17 +772,17 @@ def main():
             ax3_twin.plot(t_axis, val, 'c-', label='ACK Pending L (ms, avg)', alpha=0.6)
             proc = (df['ack_pending_l_us'] - transfer_us).clip(lower=0.0)
             proc = proc.rolling(window=20, min_periods=1).mean() / 1000.0
-            ax3_twin.plot(t_axis, proc, 'c:', label='ACK Proc L (ms, avg)', alpha=0.6)
+            ax3_twin.plot(t_axis, proc, color='darkgreen', linestyle='-', label='MKS Proc L (ms, avg)', alpha=0.8)
         if 'ack_pending_r_us' in df.columns:
             val = df['ack_pending_r_us'].rolling(window=20, min_periods=1).mean() / 1000.0
             ax3_twin.plot(t_axis, val, 'c--', label='ACK Pending R (ms, avg)', alpha=0.6)
             proc = (df['ack_pending_r_us'] - transfer_us).clip(lower=0.0)
             proc = proc.rolling(window=20, min_periods=1).mean() / 1000.0
-            ax3_twin.plot(t_axis, proc, 'c-.', label='ACK Proc R (ms, avg)', alpha=0.6)
+            ax3_twin.plot(t_axis, proc, color='darkgreen', linestyle='--', label='MKS Proc R (ms, avg)', alpha=0.8)
 
         if 'prof_f' in df.columns:
             val = df['prof_f'].rolling(window=20, min_periods=1).mean() / 1000.0
-            ax3_twin.plot(t_axis, val, 'g-', label='Fusion (ms, avg)', alpha=0.7)
+            ax3_twin.plot(t_axis, val, color='lime', linestyle='-', label='Fusion (ms, avg)', alpha=0.7)
         if 'prof_l' in df.columns:
             val = df['prof_l'].rolling(window=20, min_periods=1).mean() / 1000.0
             ax3_twin.plot(t_axis, val, 'm-', label='LQR (ms, avg)', alpha=0.7)
@@ -762,6 +792,10 @@ def main():
 
         # Auto-scale latency axis: at least 1.5ms
         max_lat_ms = (df['lat'].max() / 1000.0) if ('lat' in df.columns and not df['lat'].empty) else 1.0
+        if 'bus_lat_l_us' in df.columns and not df['bus_lat_l_us'].empty:
+            max_lat_ms = max(max_lat_ms, (df['bus_lat_l_us'].max() / 1000.0))
+        if 'bus_lat_r_us' in df.columns and not df['bus_lat_r_us'].empty:
+            max_lat_ms = max(max_lat_ms, (df['bus_lat_r_us'].max() / 1000.0))
         if 'ack_pending_l_us' in df.columns and not df['ack_pending_l_us'].empty:
             max_lat_ms = max(max_lat_ms, (df['ack_pending_l_us'].max() / 1000.0))
         if 'ack_pending_r_us' in df.columns and not df['ack_pending_r_us'].empty:
