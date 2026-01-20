@@ -139,3 +139,20 @@ The following table shows the default UART0, UART1, and UART2 RX and TX pins for
 | UART0 | GPIO 43 | GPIO 44 | Cannot be changed |
 | UART1 | GPIO 17 | GPIO 18 | Can be assigned to other GPIOs |
 | UART2 | — | — | Assign any pins of your choice |
+
+## CRITICAL: Forbidden or Risky Pins
+
+To avoid hardware conflicts that cause erratic motor behavior or system crashes, **DO NOT USE** the following pins for motor control (Step/Dir/EN) or critical sensors:
+
+### UART0 / USB-Serial (GPIO 1, 2, 43, 44)
+* **GPIO 1 & 2**: On many ESP32-S3 DevKits, these pins are used for the secondary serial bridge or touch sensors and have proven extremely unreliable for high-frequency Step/Dir signals. **MKS Servo motors will fail to rotate or glitch if connected here.**
+* **GPIO 43 & 44**: Native USB-Serial / Console. Do not use.
+
+### Octal Flash / PSRAM (GPIO 33 to 37)
+* **DO NOT USE GPIO 33, 34, 35, 36, or 37**: On "N16R8" variants (like the one used in this project), these are used for the Octal Flash/PSRAM bus. Accessing them will cause an immediate **ESP_ERR_FLASH_OP_FAIL** or board hang.
+
+### Integrated SPI Bus (GPIO 4 to 7)
+* **GPIO 4, 5, 6, 7**: Currently assigned to the primary SPI bus for sensors. Avoid using them for other high-speed signals like Step/Dir to prevent crosstalk or bus contention.
+
+### Internal Flash (GPIO 26 to 32)
+* As mentioned in the SPI Flash section, these are internal and must never be used.

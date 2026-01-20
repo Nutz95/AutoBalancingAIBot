@@ -52,7 +52,7 @@
 				"run"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/ESP32"
+				"cwd": "${workspaceFolder}"
 			},
 			"group": {
 				"kind": "build",
@@ -74,7 +74,7 @@
 				"upload"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/ESP32"
+				"cwd": "${workspaceFolder}"
 			},
 			"presentation": {
 				"panel": "new",
@@ -95,7 +95,7 @@
 				"921600"
 			],
 			"options": {
-				"cwd": "${workspaceFolder}/ESP32"
+				"cwd": "${workspaceFolder}"
 			},
 			"isBackground": true,
 			"presentation": {

@@ -120,6 +120,60 @@ void MksServoMotorDriver::initMotorDriver() {
     Serial2.begin(MKS_SERVO_BAUD, SERIAL_8N1, MKS_SERVO_P1_RX_PIN, MKS_SERVO_P1_TX_PIN);
     // Motor 2 (Right) on Serial1
     Serial1.begin(MKS_SERVO_BAUD, SERIAL_8N1, MKS_SERVO_P2_RX_PIN, MKS_SERVO_P2_TX_PIN);
+
+#if MKS_SERVO_USE_STEP_DIR
+    // Initialize Step/Dir pins
+    // Cablage : 
+    //   - Step (PUL+) : Fil VERT
+    //   - Dir (DIR+) : Fil BLEU
+    //   - COM : 3.3V (Common Anode)
+    pinMode(MKS_SERVO_P1_STEP_PIN, OUTPUT);
+    pinMode(MKS_SERVO_P1_DIR_PIN, OUTPUT);
+    pinMode(MKS_SERVO_P2_STEP_PIN, OUTPUT);
+    pinMode(MKS_SERVO_P2_DIR_PIN, OUTPUT);
+    pinMode(MKS_SERVO_P1_EN_PIN, OUTPUT);
+    pinMode(MKS_SERVO_P2_EN_PIN, OUTPUT);
+
+#if MKS_SERVO_COMMON_ANODE
+    // Common Anode: pins must be HIGH to keep optos OFF
+    digitalWrite(MKS_SERVO_P1_STEP_PIN, HIGH);
+    digitalWrite(MKS_SERVO_P1_DIR_PIN, HIGH);
+    digitalWrite(MKS_SERVO_P2_STEP_PIN, HIGH);
+    digitalWrite(MKS_SERVO_P2_DIR_PIN, HIGH);
+    digitalWrite(MKS_SERVO_P1_EN_PIN, HIGH); // Disabled
+    digitalWrite(MKS_SERVO_P2_EN_PIN, HIGH); // Disabled
+#else
+    digitalWrite(MKS_SERVO_P1_STEP_PIN, LOW);
+    digitalWrite(MKS_SERVO_P1_DIR_PIN, LOW);
+    digitalWrite(MKS_SERVO_P2_STEP_PIN, LOW);
+    digitalWrite(MKS_SERVO_P2_DIR_PIN, LOW);
+    digitalWrite(MKS_SERVO_P1_EN_PIN, LOW); 
+    digitalWrite(MKS_SERVO_P2_EN_PIN, LOW); 
+#endif
+
+    // Setup LEDC (PWM) channels for high-precision step generation
+    ledcSetup(0, 1000, MKS_SERVO_LEDC_RES);      
+    ledcAttachPin(MKS_SERVO_P1_STEP_PIN, 0);
+#if MKS_SERVO_COMMON_ANODE
+    ledcWrite(0, (1 << MKS_SERVO_LEDC_RES) - 1); // 100% Duty = HIGH = OFF
+#else
+    ledcWrite(0, 0);                             // 0% Duty = LOW = OFF
+#endif
+    
+    // Use Channel 2 for Right motor to ensure independent freq timer (on S3)
+    ledcSetup(2, 1000, MKS_SERVO_LEDC_RES);      
+    ledcAttachPin(MKS_SERVO_P2_STEP_PIN, 2);
+#if MKS_SERVO_COMMON_ANODE
+    ledcWrite(2, (1 << MKS_SERVO_LEDC_RES) - 1);
+#else
+    ledcWrite(2, 0);
+#endif
+
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "mks_servo: Step/Dir Hybrid Enabled (L_STEP:%d, L_DIR:%d | R_STEP:%d, R_DIR:%d)\n",
+               MKS_SERVO_P1_STEP_PIN, MKS_SERVO_P1_DIR_PIN, 
+               MKS_SERVO_P2_STEP_PIN, MKS_SERVO_P2_DIR_PIN);
+#endif
     
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
                "mks_servo: initialized Serial2 (Left, ID:%d) TX:%d RX:%d, Serial1 (Right, ID:%d) TX:%d RX:%d at %d baud\n",
@@ -174,6 +228,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
     SemaphoreHandle_t mutex = (side == MotorSide::LEFT) ? m_leftBusMutex : m_rightBusMutex;
 
     const uint32_t telemetry_interval_ms = (MKS_SERVO_ENCODER_UPDATE_HZ > 0) ? (1000 / MKS_SERVO_ENCODER_UPDATE_HZ) : 10;
+    uint32_t last_latency_log_ms = 0;
     uint8_t loop_divider = 0;
     uint32_t next_tx_allowed_us = 0;
     bool ack_pending = false;
@@ -199,17 +254,17 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
     };
     
     while (true) {
-        // High reactivity wait (notified by IMU consumer at 1000Hz)
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(1)); 
+        // In Hybrid (Step/Dir) mode, we don't need 1000Hz RS485 reactivity because 
+        // pulses are hardware-generated. We wait for the telemetry interval.
+        // In Serial mode, we wait 1ms to process speed commands with low latency.
+        uint32_t wait_ms = 1;
+#if MKS_SERVO_USE_STEP_DIR
+        wait_ms = telemetry_interval_ms;
+#endif
+        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms)); 
 
-        // Throttle motor packet frequency relative to the IMU notification rate.
-        // Example: 1000Hz / 2 => 500Hz.
-        if (++loop_divider < (uint8_t)MKS_SERVO_CONTROL_SEND_DIVIDER) {
-            continue;
-        }
-        loop_divider = 0;
-
-        if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(2)) == pdTRUE) {
+        uint32_t now_ms = millis();
+        if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
             // Non-blocking ACK processing (per-bus). When ACK is enabled, do not
             // interleave encoder reads/other frames until the motor confirms.
             if (ack_pending) {
@@ -218,6 +273,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     uint32_t now_us = micros();
                     async.ack_pending_time_us.store((uint32_t)(now_us - ack_start_us));
                     async.last_latency_us.store((uint32_t)(now_us - ack_start_us));
+                    async.last_latency_age_ms.store(0);
                     if (ack_status != 0x01) {
                         async.speed_ack_error.fetch_add(1);
                         if ((millis() - state.last_ack_log_ms >= 1000)) {
@@ -235,6 +291,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     if ((int32_t)(now_us - ack_deadline_us) >= 0) {
                         async.speed_ack_timeout.fetch_add(1);
                         async.last_latency_us.store((uint32_t)(now_us - ack_start_us));
+                        async.last_latency_age_ms.store(0);
                         ack_pending = false;
                         ack_parser.received = 0;
                         async.ack_pending_time_us.store(0);
@@ -292,10 +349,24 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
             // 1. Handle Torque State Changes
             if (enabled_changed) {
                 if (canTransmitNow()) {
-                    uint8_t data = current_enabled ? 0x01 : 0x00;
+                    bool target_en = current_enabled;
+
+                    // Send Enable/Disable command via RS485 (Redundant but safe)
+                    uint8_t data = target_en ? 0x01 : 0x00;
                     sendFunctionCommand(state.id, 0xF3, &data, 1);
-                    markTransmitted();
-                    async.last_reported_enabled.store(current_enabled);
+
+                    // Update physical EN pins (Now mandatory with Step/Dir hybrid)
+                    bool pin_level = target_en ? LOW : HIGH;
+#if !MKS_SERVO_COMMON_ANODE
+                    pin_level = !pin_level;
+#endif
+                    if (state.id == m_left.id) {
+                        digitalWrite(MKS_SERVO_P1_EN_PIN, pin_level);
+                    } else {
+                        digitalWrite(MKS_SERVO_P2_EN_PIN, pin_level);
+                    }
+
+                    async.last_reported_enabled.store(target_en);
                     speed_dirty = true;
                 } else {
                     // Try again on next tick; keep last_reported_enabled unchanged.
@@ -303,6 +374,13 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
             }
 
             // 2. Send Speed Command
+#if MKS_SERVO_USE_STEP_DIR
+            // Speed is handled by hardware pulses (Zero Latency). 
+            // We skip sending RS485 speed packets to avoid bus congestion and mode conflicts.
+            if (speed_dirty) {
+                async.speed_cmd_sent.fetch_add(1);
+            }
+#else
             if (speed_dirty || (enabled_changed && current_enabled)) {
                 float cmd = current_enabled ? async.target_speed.load() : 0.0f;
                 // SPEED ACK: keep disabled during balancing; enable only for diagnostics.
@@ -321,12 +399,15 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                         ack_parser.received = 0;
                     } else {
                         async.last_latency_us.store((uint32_t)(micros() - tx_start_us));
+                        async.last_latency_age_ms.store(0);
                     }
                 } else {
                     // Could not transmit yet; keep the command pending.
                     async.speed_dirty.store(true);
                 }
-            } else if (!current_enabled) {
+            } 
+#endif
+            else if (!current_enabled) {
                 // Occasional safety zeroing
                 uint32_t now_ms = millis();
                 if (now_ms - async.last_zero_ms > 200) {
@@ -341,67 +422,59 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
             // 3. Telemetry read
             uint32_t now = millis();
             if (now - async.last_telemetry_ms >= telemetry_interval_ms) {
-                // Clear any leftover ACKs from the speed commands
+                // Update timer IMMEDIATELY to prevent high-frequency retry loops 
+                // if the upcoming readResponse times out or fails.
+                async.last_telemetry_ms = now;
+
+                // Clear any leftover bytes and echoes
                 while (serial.available() > 0) {
                     serial.read();
                 }
 
-                if (!canTransmitNow()) {
-                    xSemaphoreGiveRecursive(mutex);
-                    continue;
-                }
+                if (canTransmitNow()) {
+                    uint8_t readFrame[4];
+                    readFrame[0] = 0xFA;
+                    readFrame[1] = state.id;
+                    readFrame[2] = 0x31;
+                    readFrame[3] = calculateChecksum(readFrame, 3);
+                    writeFrame(serial, readFrame, 4);
+                    markTransmitted();
 
-                uint8_t readFrame[4];
-                readFrame[0] = 0xFA;
-                readFrame[1] = state.id;
-                readFrame[2] = 0x31;
-                readFrame[3] = calculateChecksum(readFrame, 3);
-                writeFrame(serial, readFrame, 4);
-                markTransmitted();
-
-                uint8_t response[10]; 
-                bool got_response = readResponse(serial, state.id, 0x31, response, 10, MKS_SERVO_TIMEOUT_DATA_US);
-                
-                // DEBUG: Log encoder read failures (throttled to avoid spam)
-                static uint32_t last_debug_ms = 0;
-                if (!got_response && (now - last_debug_ms > MKS_SERVO_DIAG_LOG_ms)) {
-                    LOG_PRINTF(abbot::log::CHANNEL_MOTOR, 
-                               "mks_servo: Motor ID 0x%02X encoder read TIMEOUT on %s\n", 
-                               state.id, (side == MotorSide::LEFT) ? "Serial2" : "Serial1");
-                    last_debug_ms = now;
-                }
-                
-                if (got_response) {
-                    int32_t p = ((int32_t)response[5] << 24) | ((int32_t)response[6] << 16) | 
-                                ((int32_t)response[7] << 8) | (int32_t)response[8];
-                    if (response[3] == 1) { p = -p; }
+                    uint8_t response[10]; 
+                    bool got_response = readResponse(serial, state.id, 0x31, response, 10, MKS_SERVO_TIMEOUT_DATA_US);
                     
-                    int32_t corrected_p = state.invert ? -p : p;
-                    
-                    // Update the speed estimator used for damping (LQR/PID)
-                    // We use the absolute timestamp from esp_timer for better dt consistency
-                    float s = state.speedEstimator.update(corrected_p, esp_timer_get_time());
+                    if (got_response) {
+                        // Extract position according to spec: [ID][0x31][Sign][P3][P2][P1][P0][VH][VL][CS]
+                        int32_t p = ((int32_t)response[3] << 24) | ((int32_t)response[4] << 16) | 
+                                    ((int32_t)response[5] << 8) | (int32_t)response[6];
+                        if (response[2] == 1) { p = -p; }
+                        
+                        int32_t corrected_p = state.invert ? -p : p;
+                        
+                        // Update the speed estimator used for damping (LQR/PID)
+                        float s = state.speedEstimator.update(corrected_p, esp_timer_get_time());
 
-                    async.speed_value.store(s);
-                    async.encoder_value.store(corrected_p);
-                    async.encoder_dirty.store(true);
-                    async.last_telemetry_ms = now;
-                    async.last_encoder_time_us.store((uint64_t)esp_timer_get_time());
-                    async.encoder_ok.fetch_add(1);
-
-                    // Diagnostic: Log non-zero speed once in a while to verify atomic store
-                    static uint32_t last_speed_check_ms = 0;
-                    if (fabsf(s) > 0.1f && (now - last_speed_check_ms > 5000)) {
-                        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: ID 0x%02X speed_ticks_s = %.2f\n", state.id, (double)s);
-                        last_speed_check_ms = now;
+                        async.speed_value.store(s);
+                        async.encoder_value.store(corrected_p);
+                        async.encoder_dirty.store(true);
+                        async.last_encoder_time_us.store((uint64_t)esp_timer_get_time());
+                        async.encoder_ok.fetch_add(1);
                     }
-                }
-                else {
-                    async.encoder_timeout.fetch_add(1);
+                    else {
+                        async.encoder_timeout.fetch_add(1);
+                        if (now - last_latency_log_ms > MKS_SERVO_DIAG_LOG_ms) {
+                            LOG_PRINTF(abbot::log::CHANNEL_MOTOR, 
+                                       "mks_servo: Motor ID 0x%02X encoder read TIMEOUT\n", state.id);
+                            last_latency_log_ms = now;
+                        }
+                    }
                 }
             }
             xSemaphoreGiveRecursive(mutex);
         }
+
+        // Cooperative yield to avoid Watchdog triggers, especially if telemetry is failing.
+        vTaskDelay(1);
     }
 }
 
@@ -480,20 +553,97 @@ void MksServoMotorDriver::dumpConfig() {
 }
 
 void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_command) {
-    // 1. Update targets (Atomics for background tasks)
+    // 1. Update targets (Atomics for background tasks telemetry/config)
     m_left_async.target_speed.store(left_command);
     m_left_async.speed_dirty.store(true);
     
     m_right_async.target_speed.store(right_command);
     m_right_async.speed_dirty.store(true);
 
-    // 2. Notify background tasks to process immediately
+    m_left.last_command = left_command;
+    m_right.last_command = right_command;
+
+#if MKS_SERVO_USE_STEP_DIR
+    // 2. Immediate Step/Dir hardware update (Zero Latency)
+    
+    // Left Motor (Channel 0)
+    {
+        bool left_dir = (left_command >= 0);
+        if (m_left.invert) { left_dir = !left_dir; }
+#if MKS_SERVO_PULSE_DIR_INVERT
+        left_dir = !left_dir;
+#endif
+#if MKS_SERVO_COMMON_ANODE
+        left_dir = !left_dir; // Sinking logic for optocoupler: LOW = LED ON
+#endif
+        digitalWrite(MKS_SERVO_P1_DIR_PIN, left_dir ? HIGH : LOW);
+
+        float left_abs = fabsf(left_command);
+        if (left_abs < 0.001f || !m_enabled) {
+            m_left_async.last_ledc_freq = 0;
+#if MKS_SERVO_COMMON_ANODE
+            ledcWrite(0, (1 << MKS_SERVO_LEDC_RES) - 1);
+#else
+            ledcWrite(0, 0);
+#endif
+        } else {
+            uint32_t freq = (uint32_t)((left_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
+            if (freq > MKS_SERVO_STEP_MAX_HZ) freq = MKS_SERVO_STEP_MAX_HZ;
+            if (freq < 1) freq = 1;
+            
+            // Avoid killing pulses by resetting frequency at high rate if diff is tiny
+            if (abs((int)freq - (int)m_left_async.last_ledc_freq) > 2) {
+                m_left_async.last_ledc_freq = freq;
+                ledcWriteTone(0, freq);
+            }
+        }
+    }
+    
+    // Right Motor (Channel 2)
+    {
+        bool right_dir = (right_command >= 0);
+        if (m_right.invert) { right_dir = !right_dir; }
+#if MKS_SERVO_PULSE_DIR_INVERT
+        right_dir = !right_dir;
+#endif
+#if MKS_SERVO_COMMON_ANODE
+        right_dir = !right_dir;
+#endif
+        digitalWrite(MKS_SERVO_P2_DIR_PIN, right_dir ? HIGH : LOW);
+
+        float right_abs = fabsf(right_command);
+        if (right_abs < 0.001f || !m_enabled) {
+            m_right_async.last_ledc_freq = 0;
+#if MKS_SERVO_COMMON_ANODE
+            ledcWrite(2, (1 << MKS_SERVO_LEDC_RES) - 1);
+#else
+            ledcWrite(2, 0);
+#endif
+        } else {
+            uint32_t freq = (uint32_t)((right_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
+            if (freq > MKS_SERVO_STEP_MAX_HZ) freq = MKS_SERVO_STEP_MAX_HZ;
+            if (freq < 1) freq = 1;
+
+            if (abs((int)freq - (int)m_right_async.last_ledc_freq) > 2) {
+                m_right_async.last_ledc_freq = freq;
+                ledcWriteTone(2, freq);
+            }
+        }
+    }
+#endif
+
+    // 3. Notify background tasks to process RS485
+    // In Hybrid mode (Step/Dir), we don't notify the task for every speed update 
+    // because speed is handled by hardware PWM. The task will still run periodically 
+    // for telemetry via its internal timeout.
+#if !MKS_SERVO_USE_STEP_DIR
     if (m_left_async.task_handle) {
         xTaskNotifyGive(m_left_async.task_handle);
     }
     if (m_right_async.task_handle) {
         xTaskNotifyGive(m_right_async.task_handle);
     }
+#endif
 
     // 3. Update legacy state for monitoring/logging
     m_left.last_command = left_command;
@@ -510,17 +660,85 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
     if (side == MotorSide::LEFT) {
         m_left_async.target_speed.store(command);
         m_left_async.speed_dirty.store(true);
+#if !MKS_SERVO_USE_STEP_DIR
         if (m_left_async.task_handle) {
             xTaskNotifyGive(m_left_async.task_handle);
         }
+#endif
         m_left.last_command = command;
+
+#if MKS_SERVO_USE_STEP_DIR
+        // Immediate hardware pulse update for single motor command
+        bool left_dir = (command >= 0);
+        if (m_left.invert) { left_dir = !left_dir; }
+#if MKS_SERVO_PULSE_DIR_INVERT
+        left_dir = !left_dir;
+#endif
+#if MKS_SERVO_COMMON_ANODE
+        left_dir = !left_dir;
+#endif
+        digitalWrite(MKS_SERVO_P1_DIR_PIN, left_dir ? HIGH : LOW);
+
+        float left_abs = fabsf(command);
+        if (left_abs < 0.001f || !m_enabled) {
+            m_left_async.last_ledc_freq = 0;
+#if MKS_SERVO_COMMON_ANODE
+            ledcWrite(0, (1 << MKS_SERVO_LEDC_RES) - 1);
+#else
+            ledcWrite(0, 0);
+#endif
+        } else {
+            uint32_t freq = (uint32_t)((left_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
+            if (freq > MKS_SERVO_STEP_MAX_HZ) freq = MKS_SERVO_STEP_MAX_HZ;
+            if (freq < 1) freq = 1;
+            
+            if (abs((int)freq - (int)m_left_async.last_ledc_freq) > 2) {
+                m_left_async.last_ledc_freq = freq;
+                ledcWriteTone(0, freq);
+            }
+        }
+#endif
     } else {
         m_right_async.target_speed.store(command);
         m_right_async.speed_dirty.store(true);
+#if !MKS_SERVO_USE_STEP_DIR
         if (m_right_async.task_handle) {
             xTaskNotifyGive(m_right_async.task_handle);
         }
+#endif
         m_right.last_command = command;
+
+#if MKS_SERVO_USE_STEP_DIR
+        // Immediate hardware pulse update for single motor command
+        bool right_dir = (command >= 0);
+        if (m_right.invert) { right_dir = !right_dir; }
+#if MKS_SERVO_PULSE_DIR_INVERT
+        right_dir = !right_dir;
+#endif
+#if MKS_SERVO_COMMON_ANODE
+        right_dir = !right_dir;
+#endif
+        digitalWrite(MKS_SERVO_P2_DIR_PIN, right_dir ? HIGH : LOW);
+
+        float right_abs = fabsf(command);
+        if (right_abs < 0.001f || !m_enabled) {
+            m_right_async.last_ledc_freq = 0;
+#if MKS_SERVO_COMMON_ANODE
+            ledcWrite(2, (1 << MKS_SERVO_LEDC_RES) - 1);
+#else
+            ledcWrite(2, 0);
+#endif
+        } else {
+            uint32_t freq = (uint32_t)((right_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
+            if (freq > MKS_SERVO_STEP_MAX_HZ) freq = MKS_SERVO_STEP_MAX_HZ;
+            if (freq < 1) freq = 1;
+
+            if (abs((int)freq - (int)m_right_async.last_ledc_freq) > 2) {
+                m_right_async.last_ledc_freq = freq;
+                ledcWriteTone(2, freq);
+            }
+        }
+#endif
     }
 }
 
@@ -910,6 +1128,14 @@ void MksServoMotorDriver::setEnable(uint8_t id, bool enable) {
         m_right.enabled = enable;
     }
 
+    // Support for physical EN pins
+    bool pin_level = enable ? LOW : HIGH;
+#if !MKS_SERVO_COMMON_ANODE
+    pin_level = !pin_level;
+#endif
+    if (id == m_left.id) digitalWrite(MKS_SERVO_P1_EN_PIN, pin_level);
+    else if (id == m_right.id) digitalWrite(MKS_SERVO_P2_EN_PIN, pin_level);
+
     uint8_t data = enable ? 0x01 : 0x00;
     sendFunctionCommand(id, 0xF3, &data, 1);
 }
@@ -1014,6 +1240,7 @@ QueueHandle_t MksServoMotorDriver::getQueueForMotor(uint8_t id) {
 
 void MksServoMotorDriver::writeFrame(HardwareSerial& serial, const uint8_t* frame, size_t length) {
     serial.write(frame, length);
+    serial.flush();
 }
 
 bool MksServoMotorDriver::verifyConfig(uint8_t id, uint8_t function_code, uint8_t expected_value, const char* label) {
@@ -1024,7 +1251,7 @@ bool MksServoMotorDriver::verifyConfig(uint8_t id, uint8_t function_code, uint8_
 
     HardwareSerial& serial = getSerialForMotor(id);
 
-    // Clear any leftover data in RX buffer
+    // Clear buffer before making a new synchronous request
     while (serial.available() > 0) {
         serial.read();
     }
@@ -1056,60 +1283,81 @@ bool MksServoMotorDriver::verifyConfig(uint8_t id, uint8_t function_code, uint8_
 }
 
 bool MksServoMotorDriver::readResponse(HardwareSerial& serial, uint8_t id, uint8_t function_code, uint8_t* out_data, size_t expected_length, uint32_t timeout_us) {
-    // Blocking read with precision timeout
     unsigned long start_us = micros();
     size_t received = 0;
-    uint32_t empty_checks = 0;
+    
+    bool use_ack_header = (function_code >= 0x80);
+    uint8_t start_byte = use_ack_header ? 0xFB : id;
+    size_t echo_skip_remaining = 0;
+    size_t request_length = use_ack_header ? 5U : 4U;
     
     while (micros() - start_us < timeout_us) { 
         if (serial.available()) {
-            uint8_t byteRead = serial.read();
-            empty_checks = 0;
-            
-            // Look for header 0xFB
-            if (received == 0) {
-                if (byteRead == 0xFB) {
-                    out_data[0] = byteRead;
-                    received = 1;
-                }
+            uint8_t b = serial.read();
+
+            if (echo_skip_remaining > 0) {
+                echo_skip_remaining--;
                 continue;
             }
             
-            out_data[received++] = byteRead;
+            if (received == 0) {
+                if (b == 0xFA) {
+                    echo_skip_remaining = request_length - 1;
+                    continue;
+                }
+
+                if (b == start_byte) {
+                    out_data[received++] = b;
+                }
+                // Skip bytes scanning for header
+                continue;
+            }
+
+            // Data phase
+            out_data[received++] = b;
             
-            // Validate ID and Cmd as soon as they are available (indices 1 and 2)
-            if (received == 3) {
-                if (out_data[1] != id || out_data[2] != function_code) {
-                    received = 0;
-                    if (byteRead == 0xFB) {
-                        out_data[0] = 0xFB;
-                        received = 1;
+            // Header validation (ID + Function)
+            if (received == 2) {
+                if (!use_ack_header && out_data[1] != function_code) {
+                    // Mismatch - maybe part of a missed echo or junk. 
+                    // Reset and check if THIS byte could be the start of a real header.
+                    received = (b == start_byte) ? 1 : 0;
+                    if (received == 1) {
+                        out_data[0] = b;
+                    }
+                    continue;
+                }
+                if (use_ack_header && b != id) {
+                    received = (b == start_byte) ? 1 : 0;
+                    if (received == 1) {
+                        out_data[0] = b;
                     }
                     continue;
                 }
             }
-            
-            if (received == expected_length) {
-                // Verify checksum
-                uint8_t calculatedChecksum = calculateChecksum(out_data, expected_length - 1);
-                if (calculatedChecksum == out_data[expected_length - 1]) {
-                    return true;
+            if (received == 3 && use_ack_header && b != function_code) {
+                received = (b == start_byte) ? 1 : 0;
+                if (received == 1) {
+                    out_data[0] = b;
                 }
-                
-                received = 0;
-                if (byteRead == 0xFB) {
-                    out_data[0] = 0xFB;
-                    received = 1;
+                continue;
+            }
+            
+            // Frame complete?
+            if (received >= expected_length) {
+                uint8_t actual_cs = calculateChecksum(out_data, expected_length - 1);
+                if (out_data[expected_length - 1] == actual_cs) {
+                    return true;
+                } else {
+                    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+                               "mks_servo: CS error on ID 0x%02X FUNC 0x%02X (Got 0x%02X, expected 0x%02X)\n",
+                               id, function_code, out_data[expected_length - 1], actual_cs);
+                    received = 0;
                 }
             }
         } else {
-            // No data available.
-            empty_checks++;
-            // Busy wait for the first 100 empty checks (approx 10-20us) matches typical inter-byte gap.
-            // After that, yield to other tasks to prevent CPU starvation.
-            if (empty_checks > 100) {
-                vTaskDelay(0);
-            }
+            // yielding is important for high priority tasks
+            vTaskDelay(1);
         }
     }
     return false;

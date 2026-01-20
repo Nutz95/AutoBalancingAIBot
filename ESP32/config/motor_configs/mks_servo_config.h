@@ -83,6 +83,84 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_BAUD 256000
 #endif
 
+// =============================================================================
+// STEP/DIR (HYBRID MODE)
+// =============================================================================
+// If enabled, speed commands are sent via pulses (Step/Dir) while RS485 
+// is still used for configuration, torque enable, and encoder telemetry.
+#ifndef MKS_SERVO_USE_STEP_DIR
+#define MKS_SERVO_USE_STEP_DIR 1
+#endif
+
+// Common Anode wiring (COM tied to 3.3V). 
+// Set to 1 if using the wiring from the MKS manual (sinking current).
+#ifndef MKS_SERVO_COMMON_ANODE
+#define MKS_SERVO_COMMON_ANODE 1
+#endif
+
+// Pulse mode configuration (Ensure MKS motor menu matches this!)
+// 0 = PULSE + DIRECTION (Recommended)
+// 1 = CW + CCW (Not supported by this driver)
+#ifndef MKS_SERVO_PULSE_MODE
+#define MKS_SERVO_PULSE_MODE 0
+#endif
+
+// Hardware direction signal inversion
+// Set to 1 if motors spin in the opposite direction of the balancer's tilt.
+#ifndef MKS_SERVO_PULSE_DIR_INVERT
+#define MKS_SERVO_PULSE_DIR_INVERT 0
+#endif
+
+// Wiring notes for Step/Dir connection:
+// Step : fil vert (Connect to STP/PUL)
+// Dir  : fil bleu (Connect to DIR)
+// COM  : Connect to 3.3V (for Common Anode)
+
+// Left Motor (P1) Step/Dir pins
+// NOTE: GPIO1/2 are UART0 (USB-serial) on ESP32-S3 DevKitC and are not reliable for Step/Dir.
+// GPIO4-7 are reserved for SPI in this build, so avoid them too.
+// Use free GPIOs to avoid conflicts with the console/bootloader.
+#ifndef MKS_SERVO_P1_STEP_PIN
+#define MKS_SERVO_P1_STEP_PIN 8 // green
+#endif
+#ifndef MKS_SERVO_P1_DIR_PIN
+#define MKS_SERVO_P1_DIR_PIN 9 // blue
+#endif
+#ifndef MKS_SERVO_P1_EN_PIN
+#define MKS_SERVO_P1_EN_PIN 10 // Same side as STEP/DIR for wiring convenience
+#endif
+
+// Right Motor (P2) Step/Dir pins
+// Adjacent pins on Left header
+#ifndef MKS_SERVO_P2_STEP_PIN
+#define MKS_SERVO_P2_STEP_PIN 17 // green
+#endif
+#ifndef MKS_SERVO_P2_DIR_PIN
+#define MKS_SERVO_P2_DIR_PIN 18 // blue
+#endif
+#ifndef MKS_SERVO_P2_EN_PIN
+#define MKS_SERVO_P2_EN_PIN 16 // black
+#endif
+
+// Hardware step generation parameters
+#ifndef MKS_SERVO_STEP_MAX_HZ
+#define MKS_SERVO_STEP_MAX_HZ 155000 // Clamp below 160kHz spec
+#endif
+
+#ifndef MKS_SERVO_LEDC_RES
+#define MKS_SERVO_LEDC_RES 10
+#endif
+
+#ifndef MKS_SERVO_LEDC_DUTY
+#define MKS_SERVO_LEDC_DUTY 512 // 50% for 10-bit (2^10 = 1024)
+#endif
+
+// Microsteps per revolution (configured on MKS driver)
+// Used to calculate frequency of steps from target speed.
+#ifndef MKS_SERVO_STEPS_PER_REV
+#define MKS_SERVO_STEPS_PER_REV (200 * 32) // 200 pulses * 32 mstep
+#endif
+
 // FreeRTOS task priority for each motor bus task.
 // Keep this high to preserve command latency during balancing.
 #ifndef MKS_SERVO_TASK_PRIORITY
@@ -132,9 +210,11 @@ enum class MksServoHoldCurrent : uint8_t {
 // These are calibrated for physical wiring.
 // =============================================================================
 
-// Default operating mode (SR_vFOC recommended)
+// Default operating mode (CR_vFOC recommended for Step/Dir hybrid)
+// 0=CR_OPEN, 1=CR_CLOSE, 2=CR_vFOC (Pulse control)
+// 3=SR_OPEN, 4=SR_CLOSE, 5=SR_vFOC (Serial control)
 #ifndef MKS_SERVO_DEFAULT_MODE
-#define MKS_SERVO_DEFAULT_MODE abbot::motor::MksServoMode::SR_vFOC
+#define MKS_SERVO_DEFAULT_MODE abbot::motor::MksServoMode::CR_vFOC
 #endif
 
 // Microstepping (32 recommended for balancing smoothness)
@@ -174,7 +254,7 @@ enum class MksServoHoldCurrent : uint8_t {
 // Encoder update frequency (Hz). 
 // High values (100-250) improve LQR/speed estimation but increase bus traffic.
 #ifndef MKS_SERVO_ENCODER_UPDATE_HZ
-#define MKS_SERVO_ENCODER_UPDATE_HZ 100
+#define MKS_SERVO_ENCODER_UPDATE_HZ 50
 #endif
 
 // Default acceleration for speed commands (0-255)
