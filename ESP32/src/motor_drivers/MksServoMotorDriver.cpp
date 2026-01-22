@@ -61,6 +61,9 @@ void MksServoMotorDriver::initMotorDriver() {
     
     Serial1.setRxBufferSize(1024);
     Serial1.begin(MKS_SERVO_BAUD, SERIAL_8N1, MKS_SERVO_P2_RX_PIN, MKS_SERVO_P2_TX_PIN);
+
+    // IMPORTANT: Delay to let Serials stabilize
+    delay(50);
     
     // Create protocols
     if (m_leftProtocol) delete m_leftProtocol;
@@ -72,6 +75,9 @@ void MksServoMotorDriver::initMotorDriver() {
     if (m_rightTelemetryIngest) delete m_rightTelemetryIngest;
     m_leftTelemetryIngest = new MksServoTelemetryIngest(*m_leftProtocol, m_left.speedEstimator, &m_left.invert);
     m_rightTelemetryIngest = new MksServoTelemetryIngest(*m_rightProtocol, m_right.speedEstimator, &m_right.invert);
+
+    m_left_async.interpolator.setTau(MKS_SERVO_INTERP_TAU_S);
+    m_right_async.interpolator.setTau(MKS_SERVO_INTERP_TAU_S);
 
     delay(100);
     int found_count = scanBusOnCurrentBaud();
@@ -216,7 +222,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     async.last_latency_age_ms.store(0);
                     if (ack_status != 0x01) {
                         async.speed_ack_error.fetch_add(1);
-                        if ((millis() - state.last_ack_log_ms >= 1000)) {
+                        if ((millis() - state.last_ack_log_ms >= MKS_SERVO_DIAG_LOG_ms)) {
                             LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
                                        "mks_servo: ID 0x%02X command error status=0x%02X\n",
                                        state.id, ack_status);
@@ -329,7 +335,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
 #if !MKS_SERVO_COMMON_ANODE
                     pin_level = !pin_level;
 #endif
-                    if (state.id == m_left.id) {
+                    if (side == MotorSide::LEFT) {
                         digitalWrite(MKS_SERVO_P1_EN_PIN, pin_level);
                     } else {
                         digitalWrite(MKS_SERVO_P2_EN_PIN, pin_level);
@@ -394,10 +400,26 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
             while (serial.available() > 0) {
                 uint8_t byte_value = (uint8_t)serial.read();
                 if (telemetryIngest.ingestByte(byte_value, sample)) {
+                    uint32_t now_us = (uint32_t)esp_timer_get_time();
+                    uint32_t last_pkt_us = async.last_encoder_time_us.load();
+                    
+                    // BUS LATENCY: Measure time between packets
+                    if (last_pkt_us > 0) {
+                        uint32_t delta_us = now_us - last_pkt_us;
+                        async.last_latency_us.store(delta_us);
+                        async.last_latency_age_ms.store(0);
+                    }
+                    
                     async.speed_value.store(sample.speed);
                     async.encoder_value.store(sample.position);
                     async.encoder_dirty.store(true);
-                    async.last_encoder_time_us.store((uint64_t)esp_timer_get_time());
+                    async.last_encoder_time_us.store(now_us);
+                    
+                    // We use a small deadband/threshold for the speed used in interpolation
+                    // to prevent "fuzz" when the robot is nearly still.
+                    float interp_speed = (abs(sample.speed) < 10.0f) ? 0.0f : sample.speed;
+                    async.interpolator.update(sample.position, interp_speed, now_us);
+                    
                     async.encoder_ok.fetch_add(1);
                 }
             }
@@ -431,15 +453,16 @@ MksServoTelemetryIngest& MksServoMotorDriver::getTelemetryIngestForSide(MotorSid
     return *m_rightTelemetryIngest;
 }
 
-void MksServoMotorDriver::queuePeriodicTelemetry(MotorSide side, uint16_t interval_ms) {
+void MksServoMotorDriver::queuePeriodicTelemetry(MotorSide side, uint8_t code, uint16_t interval_ms) {
 #if MKS_SERVO_TELEMETRY_ENABLED
     uint8_t payload[3];
-    payload[0] = MksServoProtocol::FUNC_READ_TELEMETRY; // 0x31: speed + pulses
+    payload[0] = code;
     payload[1] = (uint8_t)((interval_ms >> 8) & 0xFF);
     payload[2] = (uint8_t)(interval_ms & 0xFF);
     sendFunctionCommand(side, MksServoProtocol::FUNC_SET_PERIODIC, payload, 3);
 #else
     (void)side;
+    (void)code;
     (void)interval_ms;
 #endif
 }
@@ -463,8 +486,10 @@ void MksServoMotorDriver::enableMotors() {
     LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: enabling motors (Queueing Torque ON)");
     m_enabled = true;
 
-    queuePeriodicTelemetry(MotorSide::LEFT, (uint16_t)MKS_SERVO_PERIODIC_TELEMETRY_MS);
-    queuePeriodicTelemetry(MotorSide::RIGHT, (uint16_t)MKS_SERVO_PERIODIC_TELEMETRY_MS);
+    uint16_t interval = (uint16_t)MKS_SERVO_PERIODIC_TELEMETRY_MS;
+    queuePeriodicTelemetry(MotorSide::LEFT, MksServoProtocol::FUNC_READ_TELEMETRY, interval);
+    delay(10);
+    queuePeriodicTelemetry(MotorSide::RIGHT, MksServoProtocol::FUNC_READ_TELEMETRY, interval);
     
     // Notify background tasks to perform Torque ON and initial speed sync
     if (m_left_async.task_handle) {
@@ -483,8 +508,10 @@ void MksServoMotorDriver::disableMotors() {
     LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: disabling motors (Queueing Torque OFF)");
     m_enabled = false;
 
-    queuePeriodicTelemetry(MotorSide::LEFT, 0);
-    queuePeriodicTelemetry(MotorSide::RIGHT, 0);
+    queuePeriodicTelemetry(MotorSide::LEFT, MksServoProtocol::FUNC_READ_TELEMETRY, 0);
+    delay(2);
+    queuePeriodicTelemetry(MotorSide::RIGHT, MksServoProtocol::FUNC_READ_TELEMETRY, 0);
+    delay(2);
 
     // Notify background tasks to perform Torque OFF
     if (m_left_async.task_handle) {
@@ -495,27 +522,57 @@ void MksServoMotorDriver::disableMotors() {
     }
 }
 
-bool MksServoMotorDriver::areMotorsEnabled() {
-    return m_enabled;
+uint32_t MksServoMotorDriver::getLastBusLatencyUs() const {
+    uint32_t l = m_left_async.last_latency_us.load();
+    uint32_t r = m_right_async.last_latency_us.load();
+    return (l > r) ? l : r;
+}
+
+uint32_t MksServoMotorDriver::getLastBusLatencyUs(MotorSide side) const {
+    if (side == MotorSide::LEFT) {
+        return m_left_async.last_latency_us.load();
+    }
+    return m_right_async.last_latency_us.load();
+}
+
+uint32_t MksServoMotorDriver::getLastBusLatencyAgeMs(MotorSide side) const {
+    if (side == MotorSide::LEFT) {
+        return m_left_async.last_latency_age_ms.load();
+    }
+    return m_right_async.last_latency_age_ms.load();
+}
+
+uint32_t MksServoMotorDriver::getAckPendingTimeUs() const {
+    uint32_t l = m_left_async.ack_pending_time_us.load();
+    uint32_t r = m_right_async.ack_pending_time_us.load();
+    return (l > r) ? l : r;
+}
+
+uint32_t MksServoMotorDriver::getAckPendingTimeUs(MotorSide side) const {
+    if (side == MotorSide::LEFT) {
+        return m_left_async.ack_pending_time_us.load();
+    }
+    return m_right_async.ack_pending_time_us.load();
 }
 
 uint32_t MksServoMotorDriver::getLastEncoderAgeMs(MotorSide side) const {
     const AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
-    uint64_t last_us = async.last_encoder_time_us.load();
+    uint32_t last_us = async.last_encoder_time_us.load();
     if (last_us == 0) {
-        return UINT32_MAX;
+        return 4294967; // approx max to indicate no data
     }
 
-    uint64_t now_us = (uint64_t)esp_timer_get_time();
+    uint32_t now_us = (uint32_t)esp_timer_get_time();
     if (now_us <= last_us) {
         return 0;
     }
 
-    uint64_t age_us = now_us - last_us;
-    if (age_us > (uint64_t)UINT32_MAX * 1000ULL) {
-        return UINT32_MAX;
-    }
-    return (uint32_t)(age_us / 1000ULL);
+    uint32_t age_us = now_us - last_us;
+    return age_us / 1000;
+}
+
+bool MksServoMotorDriver::areMotorsEnabled() {
+    return m_enabled;
 }
 
 void MksServoMotorDriver::printStatus() {
@@ -568,16 +625,14 @@ void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_co
         left_dir = !left_dir;
 #endif
 #if MKS_SERVO_COMMON_ANODE
-        left_dir = !left_dir; // Sinking logic for optocoupler: LOW = LED ON
+        left_dir = !left_dir; 
 #endif
         digitalWrite(MKS_SERVO_P1_DIR_PIN, left_dir ? HIGH : LOW);
 
         float left_abs = fabsf(left_command);
         if (left_abs < 0.001f || !m_enabled) {
             m_left_async.last_ledc_freq = 0;
-            if (!m_telemetry_quiet_pending) {
-                m_stepGenerator.setFrequency(true, 0);
-            }
+            m_stepGenerator.setFrequency(true, 0);
             m_left_async.last_ledc_update_us = micros();
         } else {
             uint32_t freq = (uint32_t)((left_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
@@ -591,9 +646,7 @@ void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_co
             if (time_ok && abs((int)freq - (int)m_left_async.last_ledc_freq) > MKS_SERVO_STEP_DEADBAND_HZ) {
                 m_left_async.last_ledc_freq = freq;
                 m_left_async.last_ledc_update_us = now_us;
-                if (!m_telemetry_quiet_pending) {
-                    m_stepGenerator.setFrequency(true, freq);
-                }
+                m_stepGenerator.setFrequency(true, freq);
             }
         }
     }
@@ -613,9 +666,7 @@ void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_co
         float right_abs = fabsf(right_command);
         if (right_abs < 0.001f || !m_enabled) {
             m_right_async.last_ledc_freq = 0;
-            if (!m_telemetry_quiet_pending) {
-                m_stepGenerator.setFrequency(false, 0);
-            }
+            m_stepGenerator.setFrequency(false, 0);
             m_right_async.last_ledc_update_us = micros();
         } else {
             uint32_t freq = (uint32_t)((right_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
@@ -629,9 +680,7 @@ void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_co
             if (time_ok && abs((int)freq - (int)m_right_async.last_ledc_freq) > MKS_SERVO_STEP_DEADBAND_HZ) {
                 m_right_async.last_ledc_freq = freq;
                 m_right_async.last_ledc_update_us = now_us;
-                if (!m_telemetry_quiet_pending) {
-                    m_stepGenerator.setFrequency(false, freq);
-                }
+                m_stepGenerator.setFrequency(false, freq);
             }
         }
     }
@@ -656,9 +705,14 @@ void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_co
 }
 
 void MksServoMotorDriver::readEncodersBoth(int32_t& left_out, int32_t& right_out) {
-    // Return cached values updated by motorTasks on Core 0
-    left_out = m_left_async.encoder_value.load();
-    right_out = m_right_async.encoder_value.load();
+    // Return interpolated values to smooth out LQR control loop
+    left_out = getInterpolatedEncoder(m_left_async);
+    right_out = getInterpolatedEncoder(m_right_async);
+}
+
+int32_t MksServoMotorDriver::getInterpolatedEncoder(const AsyncState& async) const {
+    uint32_t now_us = (uint32_t)esp_timer_get_time();
+    return async.interpolator.getInterpolated(now_us, (uint32_t)MKS_SERVO_ENCODER_EXTRAPOLATE_MS * 1000UL);
 }
 
 void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
@@ -689,9 +743,7 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
     float left_abs = fabsf(command);
     if (left_abs < 0.001f || !m_enabled) {
         m_left_async.last_ledc_freq = 0;
-        if (!m_telemetry_quiet_pending) {
-            m_stepGenerator.setFrequency(true, 0);
-        }
+        m_stepGenerator.setFrequency(true, 0);
         m_left_async.last_ledc_update_us = micros();
     } else {
         uint32_t freq = (uint32_t)((left_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
@@ -705,9 +757,7 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
         if (time_ok && abs((int)freq - (int)m_left_async.last_ledc_freq) > MKS_SERVO_STEP_DEADBAND_HZ) {
             m_left_async.last_ledc_freq = freq;
             m_left_async.last_ledc_update_us = now_us;
-            if (!m_telemetry_quiet_pending) {
-                m_stepGenerator.setFrequency(true, freq);
-            }
+            m_stepGenerator.setFrequency(true, freq);
         }
     }
 #endif
@@ -738,9 +788,7 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
     float right_abs = fabsf(command);
     if (right_abs < 0.001f || !m_enabled) {
         m_right_async.last_ledc_freq = 0;
-        if (!m_telemetry_quiet_pending) {
-            m_stepGenerator.setFrequency(false, 0);
-        }
+        m_stepGenerator.setFrequency(false, 0);
         m_right_async.last_ledc_update_us = micros();
     } else {
         uint32_t freq = (uint32_t)((right_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
@@ -754,9 +802,7 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
         if (time_ok && abs((int)freq - (int)m_right_async.last_ledc_freq) > MKS_SERVO_STEP_DEADBAND_HZ) {
             m_right_async.last_ledc_freq = freq;
             m_right_async.last_ledc_update_us = now_us;
-            if (!m_telemetry_quiet_pending) {
-                m_stepGenerator.setFrequency(false, freq);
-            }
+            m_stepGenerator.setFrequency(false, freq);
         }
     }
 #endif
@@ -770,7 +816,7 @@ void MksServoMotorDriver::setMotorCommandRaw(MotorSide side, int16_t rawSpeed) {
 }
 
 int32_t MksServoMotorDriver::readEncoder(MotorSide side) {
-    return (side == MotorSide::LEFT) ? m_left_async.encoder_value.load() : m_right_async.encoder_value.load();
+    return getInterpolatedEncoder((side == MotorSide::LEFT) ? m_left_async : m_right_async);
 }
 
 float MksServoMotorDriver::readSpeed(MotorSide side) {
@@ -858,9 +904,9 @@ void MksServoMotorDriver::dumpAllConfigs() {
 
 void MksServoMotorDriver::calibrateMotor(uint8_t id) {
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: starting calibration for ID 0x%02X\n", id);
-    // Determine which bus this ID might be on. If ambiguous (both 1), we'll try both.
-    if (id == (uint8_t)m_left.id) sendFunctionCommand(MotorSide::LEFT, MksServoProtocol::FUNC_CALIBRATE_ENCODER, nullptr, 0);
-    if (id == (uint8_t)m_right.id) sendFunctionCommand(MotorSide::RIGHT, MksServoProtocol::FUNC_CALIBRATE_ENCODER, nullptr, 0);
+    // Explicitly send to both buses to handle duplicate IDs across Serial1/Serial2
+    sendFunctionCommand(MotorSide::LEFT, MksServoProtocol::FUNC_CALIBRATE_ENCODER, nullptr, 0);
+    sendFunctionCommand(MotorSide::RIGHT, MksServoProtocol::FUNC_CALIBRATE_ENCODER, nullptr, 0);
 }
 
 void MksServoMotorDriver::scanBus() {
@@ -882,7 +928,7 @@ int MksServoMotorDriver::scanBusOnCurrentBaud() {
 
         LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "mks_servo: Scanning %s...\n", port_names[i]);
 
-        for (uint8_t id = 1; id <= 2; ++id) {
+        for (uint8_t id = 1; id <= 10; ++id) {
             if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(50)) != pdTRUE) {
                 continue;
             }
@@ -989,12 +1035,12 @@ bool MksServoMotorDriver::processSerialCommand(const String &line) {
         }
 
         if (side_token == "LEFT") {
-            queuePeriodicTelemetry(MotorSide::LEFT, (uint16_t)interval_ms);
+            queuePeriodicTelemetry(MotorSide::LEFT, MksServoProtocol::FUNC_READ_TELEMETRY, (uint16_t)interval_ms);
         } else if (side_token == "RIGHT") {
-            queuePeriodicTelemetry(MotorSide::RIGHT, (uint16_t)interval_ms);
+            queuePeriodicTelemetry(MotorSide::RIGHT, MksServoProtocol::FUNC_READ_TELEMETRY, (uint16_t)interval_ms);
         } else if (side_token == "ALL") {
-            queuePeriodicTelemetry(MotorSide::LEFT, (uint16_t)interval_ms);
-            queuePeriodicTelemetry(MotorSide::RIGHT, (uint16_t)interval_ms);
+            queuePeriodicTelemetry(MotorSide::LEFT, MksServoProtocol::FUNC_READ_TELEMETRY, (uint16_t)interval_ms);
+            queuePeriodicTelemetry(MotorSide::RIGHT, MksServoProtocol::FUNC_READ_TELEMETRY, (uint16_t)interval_ms);
         } else {
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
                         "mks_servo: Usage: MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms>");

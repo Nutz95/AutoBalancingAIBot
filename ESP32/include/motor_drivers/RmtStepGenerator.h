@@ -1,24 +1,26 @@
 #pragma once
 
 #include "IStepGenerator.h"
+#include <driver/rmt.h>
 
 namespace abbot {
 namespace motor {
 
 /**
- * @brief MCPWM-based Step Generator for ESP32-S3.
- * Provides high-precision pulse generation with low CPU overhead.
+ * @brief RMT-based Step Generator for ESP32-S3.
+ * Uses the Remote Control (RMT) peripheral to generate precise pulse trains
+ * even at very low frequencies, which is often difficult with MCPWM/PWM.
  */
-class McpwmStepGenerator : public IStepGenerator {
+class RmtStepGenerator : public IStepGenerator {
 public:
-    McpwmStepGenerator();
-    virtual ~McpwmStepGenerator() override;
+    RmtStepGenerator();
+    virtual ~RmtStepGenerator() override;
 
     /**
-     * @brief Initialize MCPWM for two motors.
+     * @brief Initialize RMT channels for two motors.
      * @param left_step_pin GPIO for left motor pulse
      * @param right_step_pin GPIO for right motor pulse
-     * @param common_anode If true, duty cycle is inverted for sinking logic
+     * @param common_anode If true, idle level is HIGH
      * @return true if successful
      */
     bool init(int left_step_pin, int right_step_pin, bool common_anode = false) override;
@@ -42,7 +44,10 @@ private:
     uint32_t m_current_freq_l = 0;
     uint32_t m_current_freq_r = 0;
 
-    void updateHardware(int timer_idx, uint32_t freq);
+    rmt_channel_t m_left_chan = RMT_CHANNEL_2;
+    rmt_channel_t m_right_chan = RMT_CHANNEL_3;
+
+    void updateHardware(rmt_channel_t channel, uint32_t freq);
 };
 
 } // namespace motor

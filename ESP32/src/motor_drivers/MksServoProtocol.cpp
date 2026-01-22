@@ -208,14 +208,20 @@ bool MksServoProtocol::parsePositionPayload(const uint8_t* buffer, int32_t& pos_
     status_out = 0; // Default success
     
     if (func == FUNC_READ_TELEMETRY) {
-        // V1.0.9 format: FB ADDR 31 V5 V4 V3 V2 V1 V0 CS
-        // This is a 48-bit cumulative value. We take the lower 32 bits for pos_out.
-        // Big Endian: V5 (MSB) ... V0 (LSB)
-        // buffer[3..8] = V5..V0
-        pos_out = ((int32_t)buffer[5] << 24) | ((int32_t)buffer[6] << 16) | 
-                  ((int32_t)buffer[7] << 8) | (int32_t)buffer[8];
+        // V1.0.9 format: FB ADDR 31 P5 P4 P3 P2 P1 P0 CS (10 bytes)
+        // This is a 48-bit cumulative value.
+        // Big Endian: P5 (MSB) ... P0 (LSB) at indices 3..8
+        uint64_t val = 0;
+        for (int i = 0; i < 6; ++i) {
+            val = (val << 8) | buffer[3 + i];
+        }
+        // Sign-extend from 48-bit to 64-bit
+        if (val & (1ULL << 47)) {
+            val |= 0xFFFF000000000000ULL;
+        }
+        pos_out = (int32_t)val;
     } else if (func == FUNC_READ_PULSES) {
-        // 32-bit received pulses: FB ADDR 33 P3 P2 P1 P0 CS
+        // 32-bit received pulses: FB ADDR 33 P3 P2 P1 P0 CS (8 bytes)
         pos_out = ((int32_t)buffer[3] << 24) | ((int32_t)buffer[4] << 16) | 
                   ((int32_t)buffer[5] << 8) | (int32_t)buffer[6];
     } else {
@@ -228,11 +234,18 @@ bool MksServoProtocol::parsePositionPayload(const uint8_t* buffer, int32_t& pos_
 }
 
 bool MksServoProtocol::parseTelemetryPayload(const uint8_t* buffer, int32_t& pos_out, int16_t& speed_out) {
-    // 0x31 frame: [FB] [ID] [0x31] [SIGN] [P3] [P2] [P1] [P0] [V_H] [V_L] [CS]
+    // V1.0.9 (10-byte 0x31) only contains 48-bit position.
+    // Speed estimation is handled by our internal estimators.
     uint8_t status;
     parsePositionPayload(buffer, pos_out, status);
-    // Speed is at index 8 and 9 if the frame is 11 bytes
-    speed_out = (int16_t)(((uint16_t)buffer[8] << 8) | (uint16_t)buffer[9]);
+    speed_out = 0;
+    return true;
+}
+
+bool MksServoProtocol::parseSpeedPayload(const uint8_t* buffer, int16_t& speed_out) {
+    // FB ADDR 32 V_H V_L CS
+    // Indices: 0=FB, 1=ADDR, 2=32, 3=V_H, 4=V_L, 5=CS
+    speed_out = (int16_t)((uint16_t)buffer[3] << 8 | (uint16_t)buffer[4]);
     return true;
 }
 
@@ -509,10 +522,10 @@ uint8_t MksServoProtocol::computeChecksum(const uint8_t *data, size_t length) {
 uint8_t MksServoProtocol::getExpectedResponseLength(uint8_t function_code) {
     switch (function_code) {
         case FUNC_READ_TELEMETRY:    return 10; // V1.0.9 manual: FB ADDR 31 V5-V0 CS (10 bytes) 
-        case FUNC_READ_SPEED:        return 6;  // FB ADDR 32 V_H V_L CS (As seen in capture: FB 01 32 00 00 2E)
-        case FUNC_READ_PULSES:       return 8;  // FB ADDR 33 P3-0 CS (As seen in capture: FB 01 33 00 00 00 01 30)
+        case FUNC_READ_SPEED:        return 6;  // FB ADDR 32 V_H V_L CS (As seen in capture: FB 01 32 00 0D 3B)
+        case FUNC_READ_PULSES:       return 8;  // FB ADDR 33 P3-0 CS (As seen in capture: FB 01 33 00 00 00 00 2F)
         case FUNC_READ_IO:           return 5;  // FB ADDR 34 DATA CS
-        case FUNC_READ_ERROR:        return 5;  // FB ADDR 39 ERR CS (1-byte error as seen in capture, manual says 8 but logs differ)
+        case FUNC_READ_ERROR:        return 6;  // FB ADDR 39 E1 E0 CS (6 bytes per user dump)
         case FUNC_READ_ENABLED:      return 5;  // FB ADDR 3A EN CS
         case 0x47:                   return 38; // FB ADDR 47 DATA[34] CS
         case 0x48:                   return 32; // FB ADDR 48 DATA[28] CS

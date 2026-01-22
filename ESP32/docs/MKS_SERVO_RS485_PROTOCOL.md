@@ -17,12 +17,13 @@ Standard ACK (Functions >= 0x80):
 `0xFB` | `ID` | `Function` | `Status/Data` | `Checksum`
 
 Telemetry (Functions < 0x80):
-`ID` | `Function` | `Data...` | `Checksum`
+`0xFB` | `ID` | `Function` | `Data...` | `Checksum`
+*Note*: Some older firmware versions might omit the `0xFB` header, but V1.0.9+ standardizes on it.
 
 Automatic Upload (Command `0x01`):
 `0xFB` | `ID` | `0x01` | `Code` | `Status` | `Checksum`
 
-## Key Functions
+## Key Functions (Aligned with Manual V1.0.9)
 
 ### 0x01: Automatic Read-Only Parameter Upload
 - **Request**: `0xFA` | `ID` | `0x01` | `Code` | `Time_H` | `Time_L` | `CS`
@@ -30,73 +31,35 @@ Automatic Upload (Command `0x01`):
     - `Status`: `0x01` success, `0x00` fail
 - **Periodic Data Frame** (once enabled):
     - `0xFB` | `ID` | `Code` | `Param...` | `CS`
-    - Example for `0x31`: `Param` = `Sign` `P3` `P2` `P1` `P0` `V_H` `V_L`
+    - Example for `0x31`: `Param` = `V5` `V4` `V3` `V2` `V1` `V0` (48-bit cumulative value)
 - **Disable**: set `Time_H=0` and `Time_L=0`.
 
-### 0x46: Write All Configuration Parameters
-- **Request**: `0xFA` | `ID` | `0x46` | `Params[34]` | `CS`
-- **Response**: `0xFB` | `ID` | `0x46` | `Status` | `CS`
-    - `Status`: `0x01` success, `0x00` fail
-- **Params (Bytes 4-37)**
-    1. Work mode (`0x82`)
-    2. Operating current (`0x83`) (device-specific defaults)
-    3. Maintaining current (`0x9B`)
-    4. Job breakdown / microstep (`0x84`)
-    5. Enable effective level (`0x85`)
-    6. Motor direction (`0x86`)
-    7. Automatic screen off (`0x87`)
-    8. Stall protection (`0x88`)
-    9. Subdivision interpolation (`0x89`)
-    10. Baud rate (`0x8A`)
-    11. Slave address (`0x8B`)
-    12. Group address (`0x8D`)
-    13. Response method (`0x8C`)
-    14. Reserved (Modbus option `0x8E`, not used)
-    15. Button lock (`0x8F`)
-    16. Limit trigger level
-    17. Limit direction
-    18. Limit speed (`0x90`) (2 bytes)
-    19. Limit enable
-    20. Return distance (2 bytes)
-    21. Parameter `0x94`
-    22. Zero mode
-    23. Zero-return current (2 bytes)
-    24. Limit remapping (`0x9E`)
-    25. Single zero mode
-    26. Setting 0 point (`0x9A`)
-    27. Return to zero speed
-    28. Return to zero direction
-
-### 0x47: Read All Configuration Parameters
-- **Request**: `0xFA` | `ID` | `0x47` | `CS`
-- **Response**: `0xFB` | `ID` | `0x47` | `Params[34]` | `CS`
-
-### 0x48: Read All Status Parameters
-- **Request**: `0xFA` | `ID` | `0x48` | `CS`
-- **Response**: `0xFB` | `ID` | `0x48` | `Params[28]` | `CS`
-- **Params (Bytes 4-31)**
-    - Motor operating status (`0xF1`)
-    - Encoder value (`0x31`)
-    - Real-time rotation speed (`0x32`)
-    - Pulse count (`0x33`)
-    - IO status (`0x34`)
-    - Raw encoder value (`0x35`)
-    - Angular error (`0x39`)
-    - Enable state (`0x3A`)
-    - Single lap return to zero (`0x3B`)
-    - Stalled state (`0x3E`)
-    - Return to zero state (`0x3B`)
-
-### 0xF3: Torque Enable
-- **Request**: `0xFA` | `ID` | `0xF3` | `Enable (0=OFF, 1=ON)` | `CS`
-- **Response**: `0xFB` | `ID` | `0xF3` | `0x01 (Success) / 0x00 (Fail)` | `CS`
-- *Note*: In `CR_vFOC` (Mode 2), this command might be rejected. Switch to `SR_vFOC` (Mode 5) briefly to enable torque.
-
-### 0x31: Read Position and Speed
+### 0x31: Read Cumulative Encoder Value
 - **Request**: `0xFA` | `ID` | `0x31` | `CS`
-- **Response** (10 bytes): `ID` | `0x31` | `Sign (0=+, 1=-)` | `P3` | `P2` | `P1` | `P0` | `V_H` | `V_L` | `CS`
-- Position = `(P3<<24 | P2<<16 | P1<<8 | P0)`
-- Speed = `(V_H<<8 | V_L)`
+- **Response** (10 bytes): `0xFB` | `ID` | `0x31` | `V5` `V4` `V3` `V2` `V1` `V0` | `CS`
+- Position = `(V5<<40 | ... | V0)` (Cumulative counts, 16384 per turn)
+
+### 0x32: Read Real-time Speed
+- **Request**: `0xFA` | `ID` | `0x32` | `CS`
+- **Response** (6 bytes): `0xFB` | `ID` | `0x32` | `V_H` | `V_L` | `CS`
+- Speed = `(int16_t)(V_H<<8 | V_L)` (RPM)
+
+### 0x33: Read Received Pulses
+- **Request**: `0xFA` | `ID` | `0x33` | `CS`
+- **Response** (8 bytes): `0xFB` | `ID` | `0x33` | `P3` `P2` `P1` `P0` | `CS`
+- Position = `(int32_t)(P3<<24 | ... | P0)` (Total step pulses received)
+
+### 0x34: Read I/O Port Status
+- **Request**: `0xFA` | `ID` | `0x34` | `CS`
+- **Response** (5 bytes): `0xFB` | `ID` | `0x34` | `Status` | `CS`
+
+### 0x39: Read Position Error
+- **Request**: `0xFA` | `ID` | `0x39` | `CS`
+- **Response** (Varies): Manual says 8 bytes (4-byte data), but some firmware returns 5 bytes (1-byte data).
+
+### 0x3A: Read Enable State
+- **Request**: `0xFA` | `ID` | `0x3A` | `CS`
+- **Response** (5 bytes): `0xFB` | `ID` | `0x3A` | `Status (1=ON, 0=OFF)` | `CS`
 
 ### 0x82: Set Operating Mode
 - **Request**: `0xFA` | `ID` | `0x82` | `Mode` | `CS`

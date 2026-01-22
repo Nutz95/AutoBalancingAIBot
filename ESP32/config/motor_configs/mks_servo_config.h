@@ -97,6 +97,15 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_USE_STEP_DIR 1
 #endif
 
+/**
+ * @brief Choice of hardware peripheral for generating Step pulses.
+ * 0: MCPWM (Motor Control Pulse Width Modulator) - High performance, high freq.
+ * 1: RMT (Remote Control) - Excellent for low frequencies, very stable. (Recommended)
+ */
+#ifndef MKS_SERVO_STEP_GENERATOR_TYPE
+#define MKS_SERVO_STEP_GENERATOR_TYPE 1
+#endif
+
 // Common Anode wiring (COM tied to 3.3V). 
 // Set to 1 if using the wiring from the MKS manual (sinking current).
 #ifndef MKS_SERVO_COMMON_ANODE
@@ -187,8 +196,9 @@ enum class MksServoHoldCurrent : uint8_t {
 
 // Limit Step/Dir LEDC reconfiguration rate (Hz). Default 1000Hz.
 // Higher values increase CPU usage on core 1.
+// Recommended for balancing: 100-250Hz.
 #ifndef MKS_SERVO_STEP_UPDATE_HZ
-#define MKS_SERVO_STEP_UPDATE_HZ 1000
+#define MKS_SERVO_STEP_UPDATE_HZ 125
 #endif
 
 // Throttle frequency updates: only update if change is > X Hz
@@ -239,6 +249,13 @@ enum class MksServoHoldCurrent : uint8_t {
 #define LEFT_MOTOR_INVERT 1
 #endif
 
+// Interpolation Smoothing Time Constant (seconds)
+// Time taken for encoder "jumps" to bleed out. 
+// 0.010f (10ms) is recommended for 200Hz telemetry.
+#ifndef MKS_SERVO_INTERP_TAU_S
+#define MKS_SERVO_INTERP_TAU_S 0.010f
+#endif
+
 #ifndef RIGHT_MOTOR_INVERT
 #define RIGHT_MOTOR_INVERT 0
 #endif
@@ -256,7 +273,7 @@ enum class MksServoHoldCurrent : uint8_t {
 // Encoder update frequency (Hz). 
 // High values (100-250) improve LQR/speed estimation but increase bus traffic.
 #ifndef MKS_SERVO_ENCODER_UPDATE_HZ
-#define MKS_SERVO_ENCODER_UPDATE_HZ 25
+#define MKS_SERVO_ENCODER_UPDATE_HZ 100
 #endif
 
 
@@ -284,8 +301,17 @@ enum class MksServoHoldCurrent : uint8_t {
 // Read encoder interval (ms) - Throttled to keep bus clear for commands
 // Minimum time between encoder reads (milliseconds) to avoid bus saturation.
 // Increased to 100ms to maximize bandwidth for balancing at 100Hz.
+// Interval for telemetry push from motor in Hybrid mode.
+// 20ms (50Hz) is recommended for stable balancing.
 #ifndef MKS_SERVO_ENCODER_READ_MS
-#define MKS_SERVO_ENCODER_READ_MS 100
+#define MKS_SERVO_ENCODER_READ_MS 5 // 200Hz
+#endif
+
+// Max time (ms) to extrapolate encoder position between telemetry frames.
+// This smoothing (first-order hold) removes "staircase" artifacts for LQR.
+// Recommended: 2-3x the MKS_SERVO_ENCODER_READ_MS value.
+#ifndef MKS_SERVO_ENCODER_EXTRAPOLATE_MS
+#define MKS_SERVO_ENCODER_EXTRAPOLATE_MS 15
 #endif
 
 // Periodic telemetry interval (ms) when using automatic upload (command 0x01).

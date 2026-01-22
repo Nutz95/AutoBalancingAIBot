@@ -141,13 +141,14 @@ public:
     static bool parsePositionPayload(const uint8_t* buffer, int32_t& pos_out, uint8_t& status_out);
 
     /**
-     * @brief Parses a 0x31 Telemetry frame (Pos + Speed).
-     * @param buffer Full response frame starting with 0xFB
-     * @param pos_out Resulting 32-bit position
-     * @param speed_out Resulting 16-bit speed
-     * @return true if successfully parsed
+     * @brief Parses the raw payload from a FUNC_READ_TELEMETRY (0x31) response.
      */
     static bool parseTelemetryPayload(const uint8_t* buffer, int32_t& pos_out, int16_t& speed_out);
+
+    /**
+     * @brief Parses the raw payload from a FUNC_READ_SPEED (0x32) response.
+     */
+    static bool parseSpeedPayload(const uint8_t* buffer, int16_t& speed_out);
 
     // Blocking response reader for fixed-size frames.
     bool readResponse(uint8_t address,

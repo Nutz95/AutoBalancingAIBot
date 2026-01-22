@@ -14,6 +14,7 @@ public:
     struct TelemetrySample {
         int32_t position = 0;
         float speed = 0.0f;
+        float raw_speed = 0.0f; // Speed parsed directly from motor frame (RPM or scaled)
     };
 
     MksServoTelemetryIngest(MksServoProtocol &protocol,
@@ -28,6 +29,8 @@ private:
     SpeedEstimator &m_speedEstimator;
     const bool *m_invertFlag = nullptr;
     uint32_t m_last_log_ms = 0;
+    int32_t m_lastPosition = 0;
+    uint32_t m_lastPositionTimeUs = 0;
 };
 
 } // namespace motor

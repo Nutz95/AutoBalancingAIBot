@@ -1,7 +1,8 @@
 #include "serial_commands/MotorCommandHandler.h"
 #include "motor_drivers/driver_manager.h"
 #include "logging.h"
-#include "../../config/motor_configs/servo_motor_config.h" // For LEFT_MOTOR_ID, RIGHT_MOTOR_ID
+#include "../../config/motor_configs/mks_servo_config.h" // Prefer MKS IDs if present
+#include "../../config/motor_configs/servo_motor_config.h" // Fallback for other motors
 
 namespace abbot {
 namespace serialcmds {
@@ -60,7 +61,7 @@ MotorCommandHandler::MotorCommandHandler(IMotorService* motorService)
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
-    m_menu->addEntry(8, "MOTOR SET <LEFT|RIGHT|ID> <v>",
+    m_menu->addEntry(8, "MOTOR SET <LEFT|RIGHT|BOTH|ID> <v> [v2]",
                 [this](const String &p) { this->motorSetHandler(p); });
     m_menu->addEntry(9, "MOTOR PARAMS <LEFT|RIGHT>", [this](const String &p) {
         String cmd = "PARAMS " + p;
@@ -191,11 +192,12 @@ void MotorCommandHandler::motorSetHandler(const String &p) {
   s.trim();
   int sp = s.indexOf(' ');
   if (sp == -1) {
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: <side> <value>");
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: <side|BOTH> <value> [value2]");
     return;
   }
   String side = s.substring(0, sp);
-  String val = s.substring(sp + 1);
+  String valStr = s.substring(sp + 1);
+  valStr.trim();
   side.toUpperCase();
   
   auto driver = m_motorService->getActiveDriver();
@@ -205,17 +207,32 @@ void MotorCommandHandler::motorSetHandler(const String &p) {
   }
 
   if (side == "LEFT") {
-    driver->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT, val.toFloat());
+    driver->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::LEFT, valStr.toFloat());
   } else if (side == "RIGHT") {
-    driver->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT, val.toFloat());
+    driver->setMotorCommand(abbot::motor::IMotorDriver::MotorSide::RIGHT, valStr.toFloat());
+  } else if (side == "BOTH") {
+      int sp2 = valStr.indexOf(' ');
+      if (sp2 != -1) {
+          float vL = valStr.substring(0, sp2).toFloat();
+          float vR = valStr.substring(sp2 + 1).toFloat();
+          driver->setMotorCommandBoth(vL, vR);
+          LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "MOTOR: set BOTH L=%.3f R=%.3f\n", (double)vL, (double)vR);
+      } else {
+          float v = valStr.toFloat();
+          driver->setMotorCommandBoth(v, v);
+          LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "MOTOR: set BOTH L=%.3f R=%.3f\n", (double)v, (double)v);
+      }
   } else {
     int id = side.toInt();
-    if (id == LEFT_MOTOR_ID) {
-      driver->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::LEFT, (int16_t)val.toInt());
-    } else if (id == RIGHT_MOTOR_ID) {
-      driver->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::RIGHT, (int16_t)val.toInt());
+    if (id == (int)LEFT_MOTOR_ID) {
+      driver->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::LEFT, (int16_t)valStr.toInt());
+    } else if (id == (int)RIGHT_MOTOR_ID) {
+      driver->setMotorCommandRaw(abbot::motor::IMotorDriver::MotorSide::RIGHT, (int16_t)valStr.toInt());
+    } else if (id == 0) {
+      // maybe it was "BOTH" but lower case? Already handled by toUpperCase
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Unknown motor ID or side. Use LEFT, RIGHT, BOTH or ID.");
     } else {
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Unknown motor id");
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Unknown motor side or ID");
     }
   }
 }

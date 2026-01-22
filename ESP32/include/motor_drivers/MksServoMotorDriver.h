@@ -2,9 +2,17 @@
 #pragma once
 
 #include "AbstractMotorDriver.h"
+#include "../../config/motor_configs/mks_servo_config.h"
+
+#if MKS_SERVO_STEP_GENERATOR_TYPE == 0
 #include "McpwmStepGenerator.h"
+#else
+#include "RmtStepGenerator.h"
+#endif
+
 #include "MksServoProtocol.h"
 #include "MksServoTelemetryIngest.h"
+#include "EncoderInterpolator.h"
 #include "../../config/motor_configs/mks_servo_config.h"
 #include "speed_estimator.h"
 #include <atomic>
@@ -80,39 +88,12 @@ public:
 #endif
     }
 
-    uint32_t getLastBusLatencyUs() const override {
-        uint32_t l = m_left_async.last_latency_us.load();
-        uint32_t r = m_right_async.last_latency_us.load();
-        return (l > r) ? l : r;
-    }
-
-    uint32_t getLastBusLatencyUs(MotorSide side) const override {
-        if (side == MotorSide::LEFT) {
-            return m_left_async.last_latency_us.load();
-        }
-        return m_right_async.last_latency_us.load();
-    }
-
-    uint32_t getLastBusLatencyAgeMs(MotorSide side) const override {
-        if (side == MotorSide::LEFT) {
-            return m_left_async.last_latency_age_ms.load();
-        }
-        return m_right_async.last_latency_age_ms.load();
-    }
-
+    uint32_t getLastBusLatencyUs() const override;
+    uint32_t getLastBusLatencyUs(MotorSide side) const override;
+    uint32_t getLastBusLatencyAgeMs(MotorSide side) const override;
     uint32_t getLastEncoderAgeMs(MotorSide side) const override;
-    uint32_t getAckPendingTimeUs() const override {
-        uint32_t l = m_left_async.ack_pending_time_us.load();
-        uint32_t r = m_right_async.ack_pending_time_us.load();
-        return (l > r) ? l : r;
-    }
-
-        uint32_t getAckPendingTimeUs(MotorSide side) const override {
-            if (side == MotorSide::LEFT) {
-                return m_left_async.ack_pending_time_us.load();
-            }
-            return m_right_async.ack_pending_time_us.load();
-        }
+    uint32_t getAckPendingTimeUs() const override;
+    uint32_t getAckPendingTimeUs(MotorSide side) const override;
 
     uint32_t getSpeedCommandAccel() const override {
         return (uint32_t)m_speed_accel.load();
@@ -127,32 +108,12 @@ public:
     void dumpAllConfigs();
 
 private:
-    struct MotorState {
-        int id;
-        bool invert;
-        float last_command;
-        int32_t last_encoder;
-        uint64_t last_command_time_us;
-        uint32_t last_encoder_read_ms;
-        uint32_t last_speed_log_ms;
-        uint32_t last_ack_log_ms;
-        bool enabled;
-        SpeedEstimator speedEstimator;
-    };
     struct FunctionCommandItem {
         uint8_t id = 0;
         uint8_t function_code = 0;
         uint8_t data[8] = {0};
         uint8_t length = 0;
     };
-
-    MotorState m_left;
-    MotorState m_right;
-    bool m_enabled;
-    SemaphoreHandle_t m_leftBusMutex;
-    SemaphoreHandle_t m_rightBusMutex;
-    QueueHandle_t m_leftCommandQueue = nullptr;
-    QueueHandle_t m_rightCommandQueue = nullptr;
 
     // Async control state for background tasks
     struct AsyncState {
@@ -167,9 +128,11 @@ private:
         std::atomic<bool> last_reported_enabled{true}; // Init to true to force torque sync at boot
 
         // Time when a speed frame was last written to the motor (microseconds).
-        std::atomic<uint64_t> last_cmd_send_time_us{0};
+        std::atomic<uint32_t> last_cmd_send_time_us{0};
         // Time when telemetry (encoder) was last successfully read (microseconds).
-        std::atomic<uint64_t> last_encoder_time_us{0};
+        std::atomic<uint32_t> last_encoder_time_us{0};
+
+        EncoderInterpolator interpolator;
 
         // Lightweight diagnostics counters
         std::atomic<uint32_t> speed_cmd_sent{0};
@@ -188,10 +151,41 @@ private:
         uint32_t last_telemetry_ms = 0;
     };
 
+    struct MotorState {
+        int id;
+        bool invert;
+        float last_command;
+        int32_t last_encoder;
+        uint64_t last_command_time_us;
+        uint32_t last_encoder_read_ms;
+        uint32_t last_speed_log_ms;
+        uint32_t last_ack_log_ms;
+        bool enabled;
+        SpeedEstimator speedEstimator;
+    };
+
+    /**
+     * @brief Calculates extrapolated encoder position based on last seen speed and timestamp.
+     * Removes "staircase" artifacts between low-rate telemetry packets.
+     */
+    int32_t getInterpolatedEncoder(const AsyncState& async) const;
+
     AsyncState m_left_async;
     AsyncState m_right_async;
 
+    MotorState m_left;
+    MotorState m_right;
+    bool m_enabled;
+    SemaphoreHandle_t m_leftBusMutex;
+    SemaphoreHandle_t m_rightBusMutex;
+    QueueHandle_t m_leftCommandQueue = nullptr;
+    QueueHandle_t m_rightCommandQueue = nullptr;
+
+#if MKS_SERVO_STEP_GENERATOR_TYPE == 0
     McpwmStepGenerator m_stepGenerator;
+#else
+    RmtStepGenerator m_stepGenerator;
+#endif
 
     MksServoProtocol *m_leftProtocol = nullptr;
     MksServoProtocol *m_rightProtocol = nullptr;
@@ -221,7 +215,7 @@ private:
     void setCurrent(MotorSide side, uint16_t current_ma);
     void setHoldCurrent(MotorSide side, MksServoHoldCurrent hold_pct);
     void setEnable(MotorSide side, bool enable);
-    void queuePeriodicTelemetry(MotorSide side, uint16_t interval_ms);
+    void queuePeriodicTelemetry(MotorSide side, uint8_t code, uint16_t interval_ms);
     bool verifyConfig(MotorSide side, uint8_t function_code, uint8_t expected_value, const char* label);
     QueueHandle_t getQueueForMotor(MotorSide side);
     int scanBusOnCurrentBaud();
