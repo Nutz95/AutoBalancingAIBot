@@ -41,3 +41,9 @@ fi
 
 "${PIO_CMD[@]}" run "$@"
 "${PIO_CMD[@]}" run --target upload "$@"
+
+echo ""
+echo "--------------------------------------------------------"
+echo "Build and Upload finished at: $(date)"
+echo "--------------------------------------------------------"
+echo ""

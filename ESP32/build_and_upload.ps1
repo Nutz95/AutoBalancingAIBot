@@ -37,7 +37,12 @@ try {
     $code2 = $LASTEXITCODE
     if ($code2 -ne 0) { throw "PlatformIO upload failed (exit $code2)" }
 
-    Write-Host "[build_and_upload] Upload finished." -ForegroundColor Green
+    $finishedAt = Get-Date -Format "yyyy-MM-dd HH:mm:ss"
+    Write-Host ""
+    Write-Host "--------------------------------------------------------"
+    Write-Host "[build_and_upload] Build and Upload finished at: $finishedAt" -ForegroundColor Green
+    Write-Host "--------------------------------------------------------"
+    Write-Host ""
 } catch {
     Write-Error "[build_and_upload] $_"
     exit 1
