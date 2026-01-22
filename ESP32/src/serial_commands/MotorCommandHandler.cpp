@@ -251,10 +251,16 @@ bool MotorCommandHandler::handleMotorTelemetry(const String &line, const String 
   
   String arg = line.substring(15);
   arg.trim();
-  if (arg.length() == 0) {
+    if (arg.length() == 0) {
     LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Usage: MOTOR TELEMETRY <LEFT|RIGHT|ALL> <ms> (0 to stop)");
     return true;
   }
+
+    auto activeDriver = m_motorService->getActiveDriver();
+    if (activeDriver) {
+        String driverCmd = "TELEMETRY " + arg;
+        activeDriver->processSerialCommand(driverCmd);
+    }
   
   int sp = arg.indexOf(' ');
   if (sp < 0) {

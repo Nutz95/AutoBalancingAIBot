@@ -309,7 +309,7 @@ def main():
     rows = {'drive': defaultdict(dict), 'bal': defaultdict(dict), 'setdrive': defaultdict(dict), 'imu': dict(), 'motor': defaultdict(dict), 'cpu': defaultdict(dict)}
     motor_sync = {'first_bal_t_ms': None, 'first_motor_ts_us': None, 'offset_ms': None}
     gain_info = "Unknown Gains"
-    gains = {'kp': 0.0, 'ki': 0.0, 'kd': 0.0}
+    gains = {'kp': 0.0, 'ki': 0.0, 'kd': 0.0, 'kg': 0.0, 'ks': 0.0}
     strategy_mode = 'PID' # Default
     filter_info = "Unknown Filter"
     trim_info = {"val": 0.0, "type": "dynamic", "detected": False}
@@ -405,6 +405,7 @@ def main():
             
             print("Listening for Telemetry... (Waiting for 'BALANCER: started' or first packet)")
             
+            start_time = time.time()
             started = False
             line_buf = ""
             recent_lines = [] 
@@ -537,8 +538,10 @@ def main():
                         if should_parse:
                             parse_line(line, rows, motor_sync)
                             if "BALANCER: stopped" in line:
-                                print("\n>>> Balancer STOP detected. Ending capture.")
-                                raise StopIteration
+                                # Add 1s grace period to ignore old logs from previous runs
+                                if time.time() - start_time > 1.0:
+                                    print("\n>>> Balancer STOP detected. Ending capture.")
+                                    raise StopIteration
         except (KeyboardInterrupt, StopIteration):
             print("\nCapture finished.")
         finally:
@@ -649,16 +652,16 @@ def main():
             # theta and gyro are in degrees in the log
             # dist is (encL+encR)/2
             # speed is d(dist)/dt
-            df['lqr_angle'] = (df['pitch'] - trim_info['val']) * gains['kp']
-            df['lqr_gyro'] = df['gy'] * gains['kg']
+            df['lqr_angle'] = (df['pitch'] - trim_info['val']) * gains.get('kp', 0.0)
+            df['lqr_gyro'] = df['gy'] * gains.get('kg', 0.0)
             if 'encL' in df.columns and 'encR' in df.columns:
                 df['dist'] = (df['encL'] + df['encR']) / 2.0
                 df['dist_err'] = df['dist'] - df['dist'].iloc[0] # Relative to start of capture
-                df['lqr_dist'] = -df['dist_err'] * gains['kd']
+                df['lqr_dist'] = -df['dist_err'] * gains.get('kd', 0.0)
                 # Velocity estimation (simple)
                 dt_s = df['time_ms'].diff() / 1000.0
                 df['speed'] = df['dist'].diff() / dt_s
-                df['lqr_speed'] = -df['speed'] * gains['ks']
+                df['lqr_speed'] = -df['speed'] * gains.get('ks', 0.0)
 
         time_origin_ms = int(df['time_ms'].iloc[0])
         try:

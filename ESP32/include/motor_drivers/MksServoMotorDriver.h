@@ -2,6 +2,9 @@
 #pragma once
 
 #include "AbstractMotorDriver.h"
+#include "McpwmStepGenerator.h"
+#include "MksServoProtocol.h"
+#include "MksServoTelemetryIngest.h"
 #include "../../config/motor_configs/mks_servo_config.h"
 #include "speed_estimator.h"
 #include <atomic>
@@ -41,7 +44,7 @@ namespace motor {
 class MksServoMotorDriver : public AbstractMotorDriver {
 public:
     MksServoMotorDriver();
-    virtual ~MksServoMotorDriver() override = default;
+    virtual ~MksServoMotorDriver() override;
 
     // IMotorDriver implementation
     void initMotorDriver() override;
@@ -121,6 +124,7 @@ public:
     // Custom calibration and scan commands
     void calibrateMotor(uint8_t id);
     void scanBus();
+    void dumpAllConfigs();
 
 private:
     struct MotorState {
@@ -187,6 +191,14 @@ private:
     AsyncState m_left_async;
     AsyncState m_right_async;
 
+    McpwmStepGenerator m_stepGenerator;
+
+    MksServoProtocol *m_leftProtocol = nullptr;
+    MksServoProtocol *m_rightProtocol = nullptr;
+
+    MksServoTelemetryIngest *m_leftTelemetryIngest = nullptr;
+    MksServoTelemetryIngest *m_rightTelemetryIngest = nullptr;
+
     // When enabled, each speed write waits for an ACK (adds latency).
     std::atomic<bool> m_wait_for_ack{(MKS_SERVO_DEFAULT_WAIT_FOR_ACK != 0)};
 
@@ -194,41 +206,49 @@ private:
     // Default comes from config (MKS_SERVO_ACCEL).
     std::atomic<uint8_t> m_speed_accel{(uint8_t)MKS_SERVO_ACCEL};
 
+    // State sync for task communication without blocking the high-priority control loop
+    volatile bool m_telemetry_quiet_pending = false;
+
     static void motorTaskEntry(void* pvParameters);
     void runMotorTask(MotorSide side);
     // Protocol helpers
-    void sendSpeedCommand(uint8_t id, float normalized_speed, bool invert, bool wait_for_ack = false);
-    void sendFunctionCommand(uint8_t id, uint8_t function_code, const uint8_t* data, size_t length);
-    void setMode(uint8_t id, MksServoMode mode);
-    void setMStep(uint8_t id, MksServoMicrostep mstep);
-    void setCurrent(uint8_t id, uint16_t current_ma);
-    void setHoldCurrent(uint8_t id, MksServoHoldCurrent hold_pct);
-    void setEnable(uint8_t id, bool enable);
-    bool verifyConfig(uint8_t id, uint8_t function_code, uint8_t expected_value, const char* label);
-    QueueHandle_t getQueueForMotor(uint8_t id);
+    void sendSpeedCommand(MotorSide side, float normalized_speed, bool invert, bool wait_for_ack = false);
+    void sendFunctionCommand(MotorSide side, uint8_t function_code, const uint8_t* data, size_t length);
+    void setMode(MotorSide side, MksServoMode mode);
+    void setResponseMethod(MotorSide side, bool enabled_respond, bool enabled_active = true);
+    void setBaudCode(MotorSide side, uint8_t baud_code);
+    void setMStep(MotorSide side, MksServoMicrostep mstep);
+    void setCurrent(MotorSide side, uint16_t current_ma);
+    void setHoldCurrent(MotorSide side, MksServoHoldCurrent hold_pct);
+    void setEnable(MotorSide side, bool enable);
+    void queuePeriodicTelemetry(MotorSide side, uint16_t interval_ms);
+    bool verifyConfig(MotorSide side, uint8_t function_code, uint8_t expected_value, const char* label);
+    QueueHandle_t getQueueForMotor(MotorSide side);
+    int scanBusOnCurrentBaud();
     
     // Telemetry
     uint32_t last_bus_latency_us_ = 0;
 
-    uint8_t calculateChecksum(const uint8_t* data, size_t length);
-    void writeFrame(HardwareSerial& serial, const uint8_t* frame, size_t length);
-    bool readResponse(HardwareSerial& serial, uint8_t id, uint8_t function_code, uint8_t* out_data, size_t expected_length, uint32_t timeout_us = 2000);
+    bool readResponse(MotorSide side, uint8_t function_code, uint8_t* out_data, size_t expected_length, uint32_t timeout_us = 2000);
     
     /**
      * @brief Maps a motor ID to its dedicated HardwareSerial port.
      * @param id The motor ID.
      * @return HardwareSerial& reference to Serial1 or Serial2.
      */
-    HardwareSerial& getSerialForMotor(uint8_t id);
+    HardwareSerial& getSerialForMotor(MotorSide side);
+    MksServoProtocol& getProtocolForMotor(MotorSide side);
+    MksServoProtocol& getProtocolForSide(MotorSide side);
+    MksServoTelemetryIngest& getTelemetryIngestForSide(MotorSide side);
 
     /**
      * @brief Gets the mutex associated with a specific motor's bus.
-     * @param id The motor ID.
+     * @param side The motor side.
      * @return SemaphoreHandle_t for the specific motor.
      */
-    SemaphoreHandle_t getMutexForMotor(uint8_t id);
+    SemaphoreHandle_t getMutexForMotor(MotorSide side);
     
-    void dumpMotorRegisters(uint8_t id);
+    void dumpMotorRegisters(MotorSide side);
 };
 
 } // namespace motor

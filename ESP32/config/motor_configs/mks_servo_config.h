@@ -83,6 +83,11 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_BAUD 256000
 #endif
 
+// Alternate baud used for scan fallback when the default baud fails.
+#ifndef MKS_SERVO_SCAN_ALT_BAUD
+#define MKS_SERVO_SCAN_ALT_BAUD 38400
+#endif
+
 // =============================================================================
 // STEP/DIR (HYBRID MODE)
 // =============================================================================
@@ -103,6 +108,16 @@ enum class MksServoHoldCurrent : uint8_t {
 // 1 = CW + CCW (Not supported by this driver)
 #ifndef MKS_SERVO_PULSE_MODE
 #define MKS_SERVO_PULSE_MODE 0
+#endif
+
+// Echo logging for RS485 (diagnostic)
+#ifndef MKS_SERVO_LOG_ECHO
+#define MKS_SERVO_LOG_ECHO 1
+#endif
+
+// Hex logging for RS485 (diagnostic)
+#ifndef MKS_SERVO_LOG_HEX
+#define MKS_SERVO_LOG_HEX 1
 #endif
 
 // Hardware direction signal inversion
@@ -142,20 +157,17 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_P2_EN_PIN 16 // black
 #endif
 
-// Hardware step generation parameters
-#ifndef MKS_SERVO_STEP_MAX_HZ
-#define MKS_SERVO_STEP_MAX_HZ 155000 // Clamp below 160kHz spec
+// Technical Parameters (Timeouts, Deadbands, etc.)
+#include "mks_servo_constants.h"
+
+// Enable RS485 telemetry (encoder reading) during balancing.
+// WARNING: On some MKS firmwares, Step/Dir pulses can interfere with RS485.
+// Set to 0 to prioritize loop stability for balancing V1.
+#ifndef MKS_SERVO_TELEMETRY_ENABLED
+#define MKS_SERVO_TELEMETRY_ENABLED 1
 #endif
 
-#ifndef MKS_SERVO_LEDC_RES
-#define MKS_SERVO_LEDC_RES 8
-#endif
-
-#ifndef MKS_SERVO_LEDC_DUTY
-#define MKS_SERVO_LEDC_DUTY 128 // 50% for 8-bit (2^8 = 256)
-#endif
-
-// Microsteps per revolution (configured on MKS driver)
+// Microsteps per revolution (configured on MKS driver menu)
 // Used to calculate frequency of steps from target speed.
 #ifndef MKS_SERVO_STEPS_PER_REV
 #define MKS_SERVO_STEPS_PER_REV (200 * 32) // 200 pulses * 32 mstep
@@ -173,34 +185,13 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_CONTROL_SEND_DIVIDER 2
 #endif
 
-// Limit Step/Dir LEDC reconfiguration rate (Hz). Default 500Hz.
+// Limit Step/Dir LEDC reconfiguration rate (Hz). Default 1000Hz.
 // Higher values increase CPU usage on core 1.
 #ifndef MKS_SERVO_STEP_UPDATE_HZ
-#define MKS_SERVO_STEP_UPDATE_HZ 250
+#define MKS_SERVO_STEP_UPDATE_HZ 1000
 #endif
 
 // Throttle frequency updates: only update if change is > X Hz
-#ifndef MKS_SERVO_STEP_DEADBAND_HZ
-#define MKS_SERVO_STEP_DEADBAND_HZ 5
-#endif
-
-// Minimum time between two frames on the same serial bus.
-// Implemented as a non-blocking guard (no busy-wait): the task skips sending
-// new frames until this interval has elapsed.
-#ifndef MKS_SERVO_MIN_INTERFRAME_US
-#define MKS_SERVO_MIN_INTERFRAME_US 500
-#endif
-
-// Enable non-blocking ACK handling by default (1 = on, 0 = off).
-#ifndef MKS_SERVO_DEFAULT_WAIT_FOR_ACK
-#define MKS_SERVO_DEFAULT_WAIT_FOR_ACK 1
-#endif
-
-// Queue depth for function commands (mode, current, hold, etc.).
-#ifndef MKS_SERVO_FUNCTION_QUEUE_LEN
-#define MKS_SERVO_FUNCTION_QUEUE_LEN 8
-#endif
-
 // NOTE: Both motors are on SEPARATE RS485 buses (Left=Serial2, Right=Serial1).
 // Each bus has dedicated bandwidth. IDs can be different or identical - doesn't matter
 // since buses are independent. DO NOT CHANGE these IDs without user authorization.
@@ -209,7 +200,7 @@ enum class MksServoHoldCurrent : uint8_t {
 #endif
 
 #ifndef RIGHT_MOTOR_ID
-#define RIGHT_MOTOR_ID 0x02
+#define RIGHT_MOTOR_ID 0x01
 #endif
 
 // =============================================================================
@@ -268,6 +259,7 @@ enum class MksServoHoldCurrent : uint8_t {
 #define MKS_SERVO_ENCODER_UPDATE_HZ 25
 #endif
 
+
 // Enable/disable RS485 encoder telemetry (0x31) for A/B testing.
 #ifndef MKS_SERVO_TELEMETRY_ENABLED
 #define MKS_SERVO_TELEMETRY_ENABLED 1
@@ -281,7 +273,7 @@ enum class MksServoHoldCurrent : uint8_t {
 // Velocity estimator alpha (Smoothing). 
 // 0.05 at 100Hz = very smooth. Lowering this stops LQR "chatter".
 #ifndef MKS_SERVO_SPEED_ALPHA
-#define MKS_SERVO_SPEED_ALPHA 0.15f      // Increased from 0.05 to reduce phase lag (lag caused slow sway)
+#define MKS_SERVO_SPEED_ALPHA 0.05f      // Reverted to 0.05 for smoother 1000Hz operation
 #endif
 
 // Timeout for logging diagnostic errors (ms) to avoid console spam
@@ -294,6 +286,12 @@ enum class MksServoHoldCurrent : uint8_t {
 // Increased to 100ms to maximize bandwidth for balancing at 100Hz.
 #ifndef MKS_SERVO_ENCODER_READ_MS
 #define MKS_SERVO_ENCODER_READ_MS 100
+#endif
+
+// Periodic telemetry interval (ms) when using automatic upload (command 0x01).
+// This value should remain modest to avoid saturating the bus.
+#ifndef MKS_SERVO_PERIODIC_TELEMETRY_MS
+#define MKS_SERVO_PERIODIC_TELEMETRY_MS MKS_SERVO_ENCODER_READ_MS
 #endif
 
 // =============================================================================
@@ -312,9 +310,9 @@ enum class MksServoHoldCurrent : uint8_t {
 
 // Telemetry/Data timeout (e.g. reading position)
 // Position reads can take longer to process internally on MKS drivers.
-// Increased to 50000us (50ms) for diagnostic testing as requested.
+// Reduced to 2000us (2ms) for live balancing safety.
 #ifndef MKS_SERVO_TIMEOUT_DATA_US
-#define MKS_SERVO_TIMEOUT_DATA_US 50000 
+#define MKS_SERVO_TIMEOUT_DATA_US 2000 
 #endif
 
 // Heavy request timeout (e.g. scanning or register dump)
@@ -339,9 +337,11 @@ enum class MksServoHoldCurrent : uint8_t {
 // Some MKS firmwares stop responding to RS485 telemetry (0x31) while receiving
 // high-frequency Step/Dir pulses. Setting a small quiet window temporarily
 // disables step pulses around the telemetry request to allow the driver to
-// respond. Start with 2000us and adjust.
+// respond. 
+// WARNING: Setting this > 0 will stop the motors briefly during telemetry,
+// which can destabilize the balancer. Use only if necessary for diagnostics.
 #ifndef MKS_SERVO_TELEMETRY_QUIET_WINDOW_US
-#define MKS_SERVO_TELEMETRY_QUIET_WINDOW_US 5000
+#define MKS_SERVO_TELEMETRY_QUIET_WINDOW_US 0
 #endif
 
 // Turnaround delay for RS485 auto-direction hardware (us)

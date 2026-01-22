@@ -65,8 +65,9 @@
 
 // If the robot exceeds this absolute pitch (degrees), automatically stop the
 // balancer to avoid fighting on the ground after a fall.
+// Increased from 30.0 to 45.0 for better tuning headroom.
 #ifndef BALANCER_FALL_STOP_ANGLE_DEG
-#define BALANCER_FALL_STOP_ANGLE_DEG 30.0f
+#define BALANCER_FALL_STOP_ANGLE_DEG 45.0f
 #endif
 
 // Optional pitch-rate guard (deg/s). Set to 0 to disable rate-based stop.
