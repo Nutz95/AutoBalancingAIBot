@@ -37,9 +37,9 @@ public:
         // Discontinuity (the 'jump' or 'poil')
         float jump = (float)(position - predicted);
         
-        // Add current jump to our bleeding offset, but also account for existing decay
-        // so we don't accumulate double errors.
-        m_errorOffset.store(m_errorOffset.load() - jump);
+        // Ensure continuity: we want the new output (position + newOffset) to match 
+        // the previous output (predicted). Thus: newOffset = predicted - position = -jump.
+        m_errorOffset.store(-jump);
 
         m_lastPos.store(position);
         m_lastSpeed.store(speed);
@@ -61,8 +61,9 @@ public:
 
         uint32_t dt_us = now_us - last_us;
         
-        // Safety: Cap extrapolation to avoid runaway values if bus is lost
-        if (dt_us > max_extrapolate_us) {
+        // Safety: Cap extrapolation to avoid runaway values if bus is lost.
+        // Also stop predicting if data is older than 50ms (telemetry lost).
+        if (dt_us > max_extrapolate_us || dt_us > 50000) {
             return base_pos;
         }
 

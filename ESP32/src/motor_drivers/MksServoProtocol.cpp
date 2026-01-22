@@ -234,8 +234,8 @@ bool MksServoProtocol::parsePositionPayload(const uint8_t* buffer, int32_t& pos_
 }
 
 bool MksServoProtocol::parseTelemetryPayload(const uint8_t* buffer, int32_t& pos_out, int16_t& speed_out) {
-    // V1.0.9 (10-byte 0x31) only contains 48-bit position.
-    // Speed estimation is handled by our internal estimators.
+    // V1.0.9 (10-byte 0x31) contains 48-bit position.
+    // Speed estimation is handled by our internal estimators or deriving from 48-bit.
     uint8_t status;
     parsePositionPayload(buffer, pos_out, status);
     speed_out = 0;

@@ -497,6 +497,33 @@ def main():
                             filter_info = m_filter.group('filter') or m_filter.group('filter2')
                             print(f">>> Detected Filter: {filter_info}")
 
+                        # Detect balancer start to trigger clearing of old data
+                        if "BALANCER: started" in line or ("BALANCER_DBG" in line and not started):
+                            print(">>> Balancer START detected! Clearing pre-start data...")
+                            
+                            # Reset data collection to ensure we only save what happens after START
+                            for k in rows: rows[k].clear()
+                            motor_sync = {'bal': None, 'motor': None, 'offset_ms': None}
+                            udp_packet_count = 0
+
+                            # Re-parse recent history to catch metadata if missed
+                            for prev_line in recent_lines:
+                                m_f = FILTER_RE.search(prev_line)
+                                if m_f: 
+                                    filter_info = m_f.group('filter') or m_f.group('filter2')
+                                
+                                m_g_pid = GAIN_RE_PID.search(prev_line)
+                                m_g_lqr = GAIN_RE_LQR.search(prev_line)
+                                if m_g_pid:
+                                    gains = {k: float(m_g_pid.group(k)) for k in ['kp', 'ki', 'kd']}
+                                    gain_info = f"PID: Kp={gains['kp']} Ki={gains['ki']} Kd={gains['kd']}"
+                                    strategy_mode = 'PID'
+                                elif m_g_lqr:
+                                    gains = {k: float(m_g_lqr.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
+                                    gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
+                                    strategy_mode = 'LQR'
+                            started = True
+
                         # Detect trim info
                         if "using calibrated trim =" in line:
                             m = re.search(r"using calibrated trim = ([-0-9.]+) deg", line)
@@ -509,27 +536,6 @@ def main():
                                 trim_info = {"val": float(m.group(1)), "type": "dynamic", "detected": True}
                                 print(f">>> {trim_info['type'].upper()} TRIM detected: {trim_info['val']} deg")
 
-                        if not started:
-                            if "BALANCER: started" in line or "BALANCER_DBG" in line:
-                                print(">>> Balancer START detected! Catching up on history...")
-                                # Re-parse recent history to catch metadata if missed
-                                for prev_line in recent_lines:
-                                    m_f = FILTER_RE.search(prev_line)
-                                    if m_f: 
-                                        filter_info = m_f.group('filter') or m_f.group('filter2')
-                                    
-                                    m_g_pid = GAIN_RE_PID.search(prev_line)
-                                    m_g_lqr = GAIN_RE_LQR.search(prev_line)
-                                    if m_g_pid:
-                                        gains = {k: float(m_g_pid.group(k)) for k in ['kp', 'ki', 'kd']}
-                                        gain_info = f"PID: Kp={gains['kp']} Ki={gains['ki']} Kd={gains['kd']}"
-                                        strategy_mode = 'PID'
-                                    elif m_g_lqr:
-                                        gains = {k: float(m_g_lqr.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
-                                        gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
-                                        strategy_mode = 'LQR'
-                                started = True
-                        
                         should_parse = started
                         if not should_parse:
                             if line.startswith("CPU:") or line.startswith("MOTOR:"):
