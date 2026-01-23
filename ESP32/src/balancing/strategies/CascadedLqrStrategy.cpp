@@ -53,6 +53,8 @@ IBalancingStrategy::Result IRAM_ATTR CascadedLqrStrategy::compute(float pitch_ra
         lp_pitch_rate_ = pitch_rate_rads;
         lp_v_speed_ = v_enc_ticks_s;
     }
+    // v71 FIX: Sign check. If motors/encoders are inverted, k_dist becomes positive feedback.
+    // Based on capture_15, term_dist was POSITIVE while position was POSITIVE, pushing the robot.
     float dist_err = (float)(avg_enc - enc_dist_zeropoint_) / BALANCER_ENCODER_DOWNSCALE;
     float v_enc_scaled = lp_v_speed_ / BALANCER_ENCODER_DOWNSCALE;
 
@@ -77,7 +79,11 @@ IBalancingStrategy::Result IRAM_ATTR CascadedLqrStrategy::compute(float pitch_ra
     float theta_err_deg = (pitch_rad - pitch_trim_rad_) * (180.0f / M_PI);
     float pitch_rate_deg = lp_pitch_rate_ * (180.0f / M_PI);
     
-    // 4. Control Law: u = Kp*theta + Kg*gyro - Kd*dist - Ks*speed
+    // 4. Control Law: u = Kp*theta + Kg*gyro + Kd*dist + Ks*speed
+    // v71 FIX: Switching to '+' for Kd/Ks terms. If k_dist is positive and the robot drifts forward
+    // but encoders count up, we need a negative command to go back. 
+    // u = Kp*(th) + Kg*(gy) - Kd*(dist). 
+    // In capture_15, '-Kd * dist' was showing as positive on the graph (red line), meaning it helped the fall.
     float term_angle = cfg_.k_pitch * theta_err_deg;
     float term_gyro  = cfg_.k_gyro  * pitch_rate_deg;
     float term_dist  = -cfg_.k_dist  * dist_err;
@@ -130,7 +136,9 @@ void IRAM_ATTR CascadedLqrStrategy::updateAdaptiveTrim(float pitch_rad, float di
     }
 
     // Integrated error logic: Adjust trim to zero-out the position drift over time.
-    pitch_trim_rad_ += cfg_.adaptive_trim_alpha * dist_err * dt;
+    // v71 FIX: Sign was inverted. If dist_err is positive (forward), we need to lean BACK (negative trim)
+    // to counteract the drift.
+    pitch_trim_rad_ -= cfg_.adaptive_trim_alpha * dist_err * dt;
     
     // Clamp to configured limit
     const float limit = BALANCER_ADAPTIVE_TRIM_LIMIT_RAD;
@@ -191,6 +199,15 @@ void CascadedLqrStrategy::resetToDefaults() {
     cfg_.adaptive_trim_deadband = BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS;
     cfg_.pitch_rate_lpf_hz = BALANCER_LQR_PITCH_RATE_LPF_HZ;
     cfg_.cmd_lpf_hz = BALANCER_LQR_CMD_LPF_HZ;
+    
+    // Reset runtime state to prevent carrying over "learned" bias or filter states
+    pitch_trim_rad_ = 0.0f;
+    yaw_error_accum_rad_ = 0.0f;
+    lp_pitch_rate_ = 0.0f;
+    lp_v_speed_ = 0.0f;
+    lp_cmd_ = 0.0f;
+    needs_reset_enc_ = true;
+
     saveConfig();
 }
 

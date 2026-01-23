@@ -32,14 +32,15 @@
 // Angle limit (degrees) for auto-enabling motors when starting balancer.
 // If the absolute fused pitch is greater than this value, motors will not
 // be auto-enabled to avoid trying to balance a fallen robot.
+// Increased from 2.0 to 10.0 to be more permissive during tuning.
 #ifndef BALANCER_AUTO_ENABLE_ANGLE_DEG
-#define BALANCER_AUTO_ENABLE_ANGLE_DEG 2.0f
+#define BALANCER_AUTO_ENABLE_ANGLE_DEG 10.0f
 #endif
 
 // Smaller threshold (degrees) indicating the robot must be close to vertical
 // before permitting motors to enable after a start request.
 #ifndef BALANCER_START_STABLE_ANGLE_DEG
-#define BALANCER_START_STABLE_ANGLE_DEG 2.0f
+#define BALANCER_START_STABLE_ANGLE_DEG 10.0f
 #endif
 
 // Maximum absolute pitch rate (deg/s) allowed for the initial enable window.

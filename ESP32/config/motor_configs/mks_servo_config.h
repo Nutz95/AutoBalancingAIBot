@@ -196,9 +196,11 @@ enum class MksServoHoldCurrent : uint8_t {
 
 // Limit Step/Dir LEDC reconfiguration rate (Hz). Default 1000Hz.
 // Higher values increase CPU usage on core 1.
-// Recommended for balancing: 100-250Hz.
+// Limit Step/Dir RMT/LEDC reconfiguration rate (Hz). 
+// Higher values increase reactivity but can cause RMT peripheral instability or "stumbles".
+// 250-500Hz is a safe range for most ESP32 chips.
 #ifndef MKS_SERVO_STEP_UPDATE_HZ
-#define MKS_SERVO_STEP_UPDATE_HZ 125
+#define MKS_SERVO_STEP_UPDATE_HZ 400
 #endif
 
 // Throttle frequency updates: only update if change is > X Hz

@@ -9,41 +9,41 @@
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_ALPHA
-#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.0002f // v70: Smoother trim (2x v68, 0.4x v69)
+#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.000001f // v73: 100x slower to be stable
 #endif
 
 // Limits for adaptive trim activation
 #ifndef BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG
-#define BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG 20.0f   // v69: Increased window for capture
+#define BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG 15.0f   // v72: Reasonable window
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS
-#define BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS 20000.0f // v69: Allow it to learn even while moving
+#define BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS 2000000.0f // v72: Virtually unlimited to allow finding center
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_LIMIT_RAD
-#define BALANCER_ADAPTIVE_TRIM_LIMIT_RAD 0.4f // approx 23 degrees max (handling the 13.7 bias)
+#define BALANCER_ADAPTIVE_TRIM_LIMIT_RAD 0.4f // approx 23 degrees max
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS
-#define BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS 30.0f // Min dist error required to update trim
+#define BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS 30.0f 
 #endif
 
 // --- Cascaded LQR Gains ---
 #ifndef BALANCER_DEFAULT_K_PITCH
-#define BALANCER_DEFAULT_K_PITCH 0.045f     // v70: Back to baseline to reduce 10Hz resonance
+#define BALANCER_DEFAULT_K_PITCH 0.050f     // v76: Keep authority
 #endif
 
 #ifndef BALANCER_DEFAULT_K_GYRO
-#define BALANCER_DEFAULT_K_GYRO 0.025f      // v70: More damping to kill the buzz
+#define BALANCER_DEFAULT_K_GYRO 0.025f      // v76: reduced damping to favor recovery
 #endif
 
 #ifndef BALANCER_DEFAULT_K_DIST
-#define BALANCER_DEFAULT_K_DIST 0.000015f    // v70: Moderate anchor
+#define BALANCER_DEFAULT_K_DIST 0.000100f    // v76: softer anchor
 #endif
 
 #ifndef BALANCER_DEFAULT_K_SPEED
-#define BALANCER_DEFAULT_K_SPEED 0.000002f  // v69: Minimal speed damping
+#define BALANCER_DEFAULT_K_SPEED 0.000010f  // v76: much less speed damping (was fighting recovery)
 #endif
 
 // --- Yaw / Heading Control ---
@@ -79,7 +79,7 @@
 
 // Low-pass filter alpha for derivatives (500Hz)
 #ifndef BALANCER_PITCH_RATE_LPF_ALPHA
-#define BALANCER_PITCH_RATE_LPF_ALPHA 0.25f  // Back to 0.25 to reduce phase lag (approx 40Hz)
+#define BALANCER_PITCH_RATE_LPF_ALPHA 0.20f  // v76: more filtering for cleaner response
 #endif
 
 // Optional: Use a cutoff frequency (Hz) for pitch-rate low-pass instead of a fixed alpha.
@@ -107,7 +107,7 @@
 
 // Max command contribution from position error (Kd * dist)
 #ifndef BALANCER_LQR_SAT_DIST
-#define BALANCER_LQR_SAT_DIST 0.2f  // Lowered to avoid stealing authority from angle correction
+#define BALANCER_LQR_SAT_DIST 0.5f  // v73: Allow more authority to pull back (was 0.2)
 #endif
 
 // Max command contribution from speed error (Ks * vel)

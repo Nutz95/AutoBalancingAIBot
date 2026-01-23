@@ -61,6 +61,56 @@ The robot is now "Electronically Silent". All previous "poils" (telemetry jumps)
 | v68 | 0.048 | 0.022 | 2e-5 | 5e-6 | **Drift** | Activation Kd/Ks et Trim Adaptatif (Alpha=0.0001) pour stabiliser la position. Trim correct (+7.0) mais trop lent vers 13.7. |
 | v69 | 0.050 | 0.022 | 1e-5 | 2e-6 | **Unstable** | Turbo Trim overshot (reached 21°). Kp=0.05 caused 10Hz resonance. Fell in 0.3s. |
 | v70 | 0.045 | 0.025 | 1.5e-5 | 2e-6 | **TBD** | **Stability Patch & IRAM Fix**. Moved compute path to IRAM to fix NVS crash. Slowed alpha to 2e-4. Kp=0.045, Kg=0.025 to kill buzz. |
+| v71 | 0.050 | 0.035 | 5e-5 | 0.0 | **Sign Fix** | First sign correction. Position anchor ($K_d$) still too weak to stop drift. |
+| v72 | 0.050 | 0.035 | 5e-5 | 5e-6 | **Trim Fix** | Fixed Adaptive Trim sign error. Increased $K_s$. Trim was too fast (runaway). |
+| **v73** | 0.060 | 0.045 | 0.0001 | 5e-6 | **Chatter** | 5.4Hz oscillation. Command saturated in a solid block. Trim stable at -1.7°. |
+| **v74** | 0.045 | 0.035 | 0.0001 | 2e-5 | **Oscillation** | 6.08Hz oscillation. Command LPF 30Hz added too much lag. Actuation was throttled at 125Hz! |
+| **v75** | 0.050 | 0.030 | 1.5e-4 | 5e-5 | **Oscillation** | 13.45Hz vibration. Motors updated at 1000Hz (RMT jitter). Command was 0 in capture (not enabled). |
+| **v76** | 0.050 | 0.025 | 1.0e-4 | 1e-5 | **Current** | **Permissive Start**. Auto-enable at 10°. Motor update 400Hz. Reduced Kg/Kd/Ks to favor recovery. |
+
+---
+## Technical Analysis: Data Flow & Latency (v76 Logic)
+The following Mermaid diagram explains the synchronous loop used to drive the LQR controller.
+
+```mermaid
+graph TD
+    subgraph Sensors
+        IMU[BMI160 IMU 1000Hz]
+        ENC[RS485 Encoders 100Hz]
+    end
+
+    subgraph "Core 1 - High Priority"
+        Producer[IMU Producer Task]
+        Consumer[IMU Consumer Task 1000Hz]
+        Fusion[Fusion Complementary1D]
+        Interp[Encoder Interpolator]
+        LQR[Cascaded LQR Strategy]
+        StepGen[Step Gen RMT/MCPWM]
+    end
+
+    IMU -- "Raw SPI" --> Producer
+    Producer -- "Queue" --> Consumer
+    Consumer --> Fusion
+    ENC -- "RS485 Sub-task" --> Interp
+    
+    Fusion -- "Pitch / Rate" --> LQR
+    Interp -- "Smoothed Position/Speed" --> LQR
+    
+    LQR -- "Command (Normalized -1..1)" --> StepGen
+    StepGen -- "GPIO Step/Dir" --> Motors[MKS Motors]
+    
+    subgraph "Background Adaptation"
+        Trim[Adaptive Trim Integrator]
+    end
+    
+    LQR -. "Drift Error" .-> Trim
+    Trim -. "Shifted Setpoint" .-> LQR
+```
+
+## Observations v75
+1. **The 13Hz Barrier**: 13.45Hz is the phase lag limit. Every bit of filtering (LPF) or latency (Divider) pushes this peak lower. 
+2. **Auto-Enable Trap**: If starting > 2°, the motors don't enable, leading to a "dead" robot.
+3. **RMT Saturation**: Updating RMT frequency at 1000Hz while clk_div is 160 leads to resolution steps and peripheral stalls.
 
 ---
 ## Technical Analysis: The 12-14Hz Mystery (Resolved)
