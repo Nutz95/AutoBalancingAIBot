@@ -28,6 +28,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/queue.h>
 #include <freertos/task.h>
+#include <esp_attr.h>
 
 namespace abbot {
 
@@ -191,7 +192,7 @@ static void wifiConsoleTask(void *pvParameters) {
 // Helpers used: measureAndLogImuFrequency, mapSensorToRobotFrame,
 // finalizeWarmupIfDone, updateBiasEmaAndPersistIfNeeded, emitTuningOrStream,
 // emitImuDebugLogsIfEnabled.
-static void imuConsumerTask(void *pvParameters) {
+static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
   (void)pvParameters;
   IMUSample sample;
   uint32_t last_debug_print_ms = 0;
@@ -237,6 +238,10 @@ static void imuConsumerTask(void *pvParameters) {
     abbot::imu_consumer::mapSensorToRobotFrame(g_fusion_cfg, sample,
                                                g_consumer.gyro_bias,
                                                gyro_robot, accel_robot);
+
+    if (balancer::controller::isSuspended()) {
+        continue;
+    }
 
     // Store last mapped accel for filter reinitialization on balance START
     g_last_accel_robot[0] = accel_robot[0];

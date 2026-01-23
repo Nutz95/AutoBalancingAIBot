@@ -19,6 +19,7 @@ public:
         float k_speed;
         bool adaptive_trim_enabled;
         float adaptive_trim_alpha;
+        float adaptive_trim_deadband;
 
         // Optional filters (Hz). Set to 0 to disable.
         float pitch_rate_lpf_hz;

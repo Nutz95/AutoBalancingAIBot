@@ -18,7 +18,9 @@
 // =============================================================================
 
 namespace controller_config {
-
+// --- Controller Identification ---
+// The BLE name of the preferred controller to speed up connection.
+constexpr const char* CONTROLLER_NAME = "Xbox Wireless Controller";
 // --- Balance Toggle Button ---
 // Button to start/stop balancing. Action triggers on button RELEASE (falling edge).
 constexpr uint8_t BALANCE_TOGGLE_BYTE = 15;   // Byte index in HID report

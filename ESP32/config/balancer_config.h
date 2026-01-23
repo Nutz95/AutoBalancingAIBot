@@ -60,7 +60,7 @@
 // the current fused pitch at BALANCE START, clamp it to this value, and subtract
 // it from subsequent control to compensate for minor floor tilt or sensor bias.
 #ifndef BALANCER_TRIM_MAX_DEG
-#define BALANCER_TRIM_MAX_DEG 8.0f
+#define BALANCER_TRIM_MAX_DEG 20.0f
 #endif
 
 // If the robot exceeds this absolute pitch (degrees), automatically stop the

@@ -1,5 +1,6 @@
 #include <cmath>
 #include <cstring>
+#include <esp_attr.h>
 
 #include "../../config/imu_filter_config.h"
 #include "imu_filter.h"

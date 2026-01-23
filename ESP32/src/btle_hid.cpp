@@ -40,6 +40,10 @@ static uint32_t waitForStableAfterSecure(NimBLEClient *client,
       // disconnected -> stop waiting
       break;
     }
+    if (g_encrypted) {
+      // Encryption complete -> data can flow immediately
+      break;
+    }
     vTaskDelay(pdMS_TO_TICKS(step_ms));
     waited += step_ms;
   }
@@ -49,6 +53,7 @@ static uint32_t waitForStableAfterSecure(NimBLEClient *client,
 NimBLEClient *g_client = nullptr;
 NimBLEAdvertisedDevice *g_targetDevice = nullptr;
 volatile bool g_connected = false;
+volatile bool g_encrypted = false;
 
 // Track button states for edge detection (one byte per tracked button)
 static uint8_t g_lastBalanceButtonState = 0;
@@ -253,8 +258,8 @@ static void btleTask(void *pvParameters) {
   for (;;) {
     if (!g_connected) {
       g_targetDevice = nullptr;
-      LOG_PRINTLN(abbot::log::CHANNEL_BLE, "Scanning for HID devices (10s)...");
-      pScan->start(10, false);
+      LOG_PRINTLN(abbot::log::CHANNEL_BLE, "Scanning for HID devices (5s)...");
+      pScan->start(5, false);
 
       if (g_targetDevice) {
         LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Found target, connecting...");
@@ -278,12 +283,17 @@ static void btleTask(void *pvParameters) {
                       ">>> Initiating secure connection...");
           g_client->secureConnection();
 
-          // After requesting secure connection, wait up to 1000ms for the
-          // link to stabilise. Bail out early if the client disconnects.
+          // After requesting secure connection, wait up to 1500ms for the
+          // link to stabilise (pair/encrypt).
           {
-            const uint32_t waited = waitForStableAfterSecure(g_client, 1000);
+            const uint32_t waited = waitForStableAfterSecure(g_client, 1500);
             LOG_PRINTF(abbot::log::CHANNEL_BLE,
                        ">>> waited %ums after secureConnection\n", waited);
+          }
+
+          if (!g_connected) {
+            LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> Disconnected during security phase");
+            continue;
           }
 
           NimBLERemoteService *pService =
@@ -315,6 +325,7 @@ static void btleTask(void *pvParameters) {
             }
           } else {
             LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> HID service NOT found!");
+            g_client->disconnect();
           }
         } else {
           LOG_PRINTLN(abbot::log::CHANNEL_BLE, ">>> connect() returned FALSE!");
@@ -324,7 +335,7 @@ static void btleTask(void *pvParameters) {
                     ">>> No HID device found, retrying...");
       }
 
-      vTaskDelay(pdMS_TO_TICKS(2000));
+      vTaskDelay(pdMS_TO_TICKS(1000));
     } else {
       // Connected, just wait
       vTaskDelay(pdMS_TO_TICKS(1000));

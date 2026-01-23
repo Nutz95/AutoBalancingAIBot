@@ -12,6 +12,7 @@
 #include "TelemetryService.h"
 #include <cmath>
 #include <cstdio>
+#include <esp_attr.h>
 
 namespace abbot {
 namespace serialcmds {
@@ -20,7 +21,7 @@ extern bool tryGetCpuLoadPercent(float &cpu0, float &cpu1);
 
 namespace imu_consumer {
 
-float computeDt(ConsumerState &state, const IMUSample &sample,
+float IRAM_ATTR computeDt(ConsumerState &state, const IMUSample &sample,
                 float sample_rate_hz) {
   float dt = 1.0f / sample_rate_hz;
   if (state.last_sample_timestamp_us != 0) {
@@ -182,7 +183,7 @@ void updateBiasEmaAndPersistIfNeeded(ConsumerState &state,
 #endif
 }
 
-void publishFusedOutputsUnderMutex(ConsumerState &state,
+void IRAM_ATTR publishFusedOutputsUnderMutex(ConsumerState &state,
                                    float fused_pitch_local,
                                    float fused_pitch_rate_local,
                                    float &out_fused_pitch_rad,
@@ -197,7 +198,7 @@ void publishFusedOutputsUnderMutex(ConsumerState &state,
   }
 }
 
-void runBalancerCycleIfActive(float fused_pitch_local,
+void IRAM_ATTR runBalancerCycleIfActive(float fused_pitch_local,
                               float fused_pitch_rate_local, float dt,
                               const float accel_robot[3],
                               const float gyro_robot[3],
@@ -481,7 +482,7 @@ bool measureAndLogImuFrequency(ImuFrequencyMeasurement &freq_state,
   return false;
 }
 
-void mapSensorToRobotFrame(const fusion::FusionConfig &cfg,
+void IRAM_ATTR mapSensorToRobotFrame(const fusion::FusionConfig &cfg,
                            const IMUSample &sample,
                            const float gyro_bias[3],
                            float gyro_robot[3],
@@ -503,7 +504,7 @@ void getLastMotorCommands(float &left_cmd, float &right_cmd) {
   }
 }
 
-bool receiveLatestSample(QueueHandle_t queue, IMUSample &sample, uint32_t wait_ticks) {
+bool IRAM_ATTR receiveLatestSample(QueueHandle_t queue, IMUSample &sample, uint32_t wait_ticks) {
   if (!queue) {
     return false;
   }

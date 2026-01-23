@@ -3,6 +3,7 @@
 #include "balancing/strategies/CascadedLqrStrategy.h"
 #include "logging.h"
 #include <Preferences.h>
+#include <esp_attr.h>
 
 namespace abbot {
 namespace balancing {
@@ -37,7 +38,7 @@ void BalancingManager::setStrategy(StrategyType type) {
     saveActiveStrategy();
 }
 
-IBalancingStrategy* BalancingManager::getActiveStrategy() {
+IBalancingStrategy* IRAM_ATTR BalancingManager::getActiveStrategy() {
     return strategies_[static_cast<int>(current_type_)].get();
 }
 
@@ -45,7 +46,7 @@ IBalancingStrategy* BalancingManager::getStrategy(StrategyType type) {
     return strategies_[static_cast<int>(type)].get();
 }
 
-IBalancingStrategy::Result BalancingManager::compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
+IBalancingStrategy::Result IRAM_ATTR BalancingManager::compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
                               int32_t enc_l_ticks, int32_t enc_r_ticks,
                               float v_enc_ticks_s) {
     auto* active = getActiveStrategy();

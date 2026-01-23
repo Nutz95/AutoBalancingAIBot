@@ -22,6 +22,7 @@ void setGains(float kp, float ki, float kd);
 void getGains(float &kp, float &ki, float &kd);
 void resetGainsToDefaults(); // Reset gains to compile-time defaults from
                              // balancer_config.h
+bool isSuspended();         // Returns true if control loop is suspended (e.g. during NVS write)
 
 enum class ControllerMode {
     LEGACY_PID = 0,

@@ -18,6 +18,7 @@
 
 #include "SystemTasks.h"
 #include "filter_manager.h"
+#include <esp_attr.h>
 
 // Configs
 #include "../config/balancer_config.h"
@@ -49,6 +50,8 @@ static AutotuneController::Config g_autotune_cfg;
 static float g_left_motor_scale = BALANCER_LEFT_MOTOR_GAIN;
 static float g_right_motor_scale = BALANCER_RIGHT_MOTOR_GAIN;
 
+static bool g_suspended = false;
+
 // Adaptive start thresholds
 static bool g_adaptive_start_active = false;
 static float g_start_throttle_left = 0.0f;
@@ -76,7 +79,7 @@ static TelemetryState g_telemetry_state;
 static SemaphoreHandle_t g_telemetry_mutex = nullptr;
 static TaskHandle_t g_telemetry_task = nullptr;
 
-static void pollEncoders(float /*dt_sec*/) {
+static void IRAM_ATTR pollEncoders(float /*dt_sec*/) {
     auto driver = abbot::motor::getActiveMotorDriver();
     if (!driver) return;
     
@@ -215,7 +218,14 @@ void getGains(float &kp, float &ki, float &kd) {
 }
 
 void resetGainsToDefaults() {
+  g_suspended = true;
+  vTaskDelay(pdMS_TO_TICKS(2));
   abbot::balancing::BalancingManager::getInstance().getActiveStrategy()->resetToDefaults();
+  g_suspended = false;
+}
+
+bool isSuspended() {
+  return g_suspended;
 }
 
 void setDeadband(float db) {
@@ -237,7 +247,7 @@ void setLatestImuSample(const float a[3], const float g[3]) {
   if (g) memcpy(g_latest_gyro, g, sizeof(g_latest_gyro));
 }
 
-float processCycle(float pitch, float pitch_rate, float dt) {
+float IRAM_ATTR processCycle(float pitch, float pitch_rate, float dt) {
   if (g_autotune_active) {
       // Minimal autotune integration for compatibility (simplified)
       float out = g_autotune_engine.update(radToDeg(pitch), dt);
@@ -248,7 +258,7 @@ float processCycle(float pitch, float pitch_rate, float dt) {
       return out;
   }
 
-  if (!g_active) return 0.0f;
+  if (!g_active || g_suspended) return 0.0f;
 
   // Fall check
   if (fabsf(pitch) > degToRad(BALANCER_FALL_STOP_ANGLE_DEG)) {

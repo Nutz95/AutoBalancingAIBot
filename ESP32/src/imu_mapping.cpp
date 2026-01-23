@@ -1,9 +1,10 @@
 #include "imu_mapping.h"
+#include <esp_attr.h>
 
 namespace abbot {
 namespace imu_mapping {
 
-void mapSensorToRobot(const fusion::FusionConfig &cfg, const float raw_g[3],
+void IRAM_ATTR mapSensorToRobot(const fusion::FusionConfig &cfg, const float raw_g[3],
                       const float raw_a[3], const float gyro_bias[3],
                       float out_g[3], float out_a[3]) {
   float sensor_g[3] = {raw_g[0] - gyro_bias[0], raw_g[1] - gyro_bias[1],

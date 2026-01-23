@@ -4,6 +4,7 @@
 #include <Preferences.h>
 #include <algorithm>
 #include <cmath>
+#include <esp_attr.h>
 
 namespace abbot {
 namespace balancing {
@@ -26,12 +27,17 @@ void CascadedLqrStrategy::reset(float initial_pitch_rad) {
     needs_reset_enc_ = true;
 }
 
-IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
+IBalancingStrategy::Result IRAM_ATTR CascadedLqrStrategy::compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
                                  int32_t enc_l_ticks, int32_t enc_r_ticks,
                                  float v_enc_ticks_s) {
     
-    // Low-pass filter the pitch rate to reduce high-frequency vibrations in motor commands
-    const float alpha_pitch = BALANCER_PITCH_RATE_LPF_ALPHA;
+    // Low-pass filter the pitch rate to reduce high-frequency vibrations in motor commands.
+    // Use dynamic Hz if configured, otherwise fallback to macro-defined alpha.
+    float alpha_pitch = BALANCER_PITCH_RATE_LPF_ALPHA;
+    if (cfg_.pitch_rate_lpf_hz > 0.001f) {
+        float tau = 1.0f / (2.0f * (float)M_PI * cfg_.pitch_rate_lpf_hz);
+        alpha_pitch = dt_s / (tau + dt_s);
+    }
     lp_pitch_rate_ = (lp_pitch_rate_ * (1.0f - alpha_pitch)) + (pitch_rate_rads * alpha_pitch);
 
     // Filter noisy velocity from high-resolution encoders
@@ -61,7 +67,10 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
 
     // 3. Adaptive Trim (Navbot Pillar)
     if (cfg_.adaptive_trim_enabled) {
-        updateAdaptiveTrim(pitch_rad, dist_err, dt_s);
+        // Only adapt if we have a significant position error to stop chasing noise
+        if (fabsf(dist_err) > cfg_.adaptive_trim_deadband) {
+            updateAdaptiveTrim(pitch_rad, dist_err, dt_s);
+        }
     }
 
     // Convert to degrees for gain application (standard for this project)
@@ -81,6 +90,16 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
 
     float u = term_angle + term_gyro + term_dist + term_speed;
 
+    // Optional command LPF
+    if (cfg_.cmd_lpf_hz > 0.001f) {
+        float tau_c = 1.0f / (2.0f * (float)M_PI * cfg_.cmd_lpf_hz);
+        float alpha_c = dt_s / (tau_c + dt_s);
+        lp_cmd_ = (lp_cmd_ * (1.0f - alpha_c)) + (u * alpha_c);
+        u = lp_cmd_;
+    } else {
+        lp_cmd_ = u;
+    }
+
     return {
         u, 
         steer,
@@ -92,7 +111,7 @@ IBalancingStrategy::Result CascadedLqrStrategy::compute(float pitch_rad, float p
     }; 
 }
 
-void CascadedLqrStrategy::updateAdaptiveTrim(float pitch_rad, float dist_err, float dt) {
+void IRAM_ATTR CascadedLqrStrategy::updateAdaptiveTrim(float pitch_rad, float dist_err, float dt) {
     // Navbot Approach: Only adapt when the robot is stable and passive.
     // Enhanced safety: Must be reasonably close to vertical and not under major correction.
     float pitch_deg = (pitch_rad - pitch_trim_rad_) * (180.0f / M_PI);
@@ -137,6 +156,9 @@ void CascadedLqrStrategy::loadConfig() {
         cfg_.k_speed = prefs.getFloat("ks", BALANCER_DEFAULT_K_SPEED);
         cfg_.adaptive_trim_enabled = prefs.getBool("ate", (BALANCER_ENABLE_ADAPTIVE_TRIM != 0));
         cfg_.adaptive_trim_alpha = prefs.getFloat("ata", BALANCER_ADAPTIVE_TRIM_ALPHA);
+        cfg_.adaptive_trim_deadband = prefs.getFloat("atdb", BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS);
+        cfg_.pitch_rate_lpf_hz = prefs.getFloat("prhz", BALANCER_LQR_PITCH_RATE_LPF_HZ);
+        cfg_.cmd_lpf_hz = prefs.getFloat("cmdhz", BALANCER_LQR_CMD_LPF_HZ);
         prefs.end();
         LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: gains loaded (Kp=%.6f Kg=%.6f Kd=%.6f Ks=%.6f)\n", 
                    (double)cfg_.k_pitch, (double)cfg_.k_gyro, (double)cfg_.k_dist, (double)cfg_.k_speed);
@@ -152,6 +174,9 @@ void CascadedLqrStrategy::saveConfig() {
         prefs.putFloat("ks", cfg_.k_speed);
         prefs.putBool("ate", cfg_.adaptive_trim_enabled);
         prefs.putFloat("ata", cfg_.adaptive_trim_alpha);
+        prefs.putFloat("atdb", cfg_.adaptive_trim_deadband);
+        prefs.putFloat("prhz", cfg_.pitch_rate_lpf_hz);
+        prefs.putFloat("cmdhz", cfg_.cmd_lpf_hz);
         prefs.end();
     }
 }
@@ -163,6 +188,9 @@ void CascadedLqrStrategy::resetToDefaults() {
     cfg_.k_speed = BALANCER_DEFAULT_K_SPEED;
     cfg_.adaptive_trim_enabled = (BALANCER_ENABLE_ADAPTIVE_TRIM != 0);
     cfg_.adaptive_trim_alpha = BALANCER_ADAPTIVE_TRIM_ALPHA;
+    cfg_.adaptive_trim_deadband = BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS;
+    cfg_.pitch_rate_lpf_hz = BALANCER_LQR_PITCH_RATE_LPF_HZ;
+    cfg_.cmd_lpf_hz = BALANCER_LQR_CMD_LPF_HZ;
     saveConfig();
 }
 

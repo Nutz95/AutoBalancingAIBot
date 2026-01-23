@@ -12,6 +12,7 @@ void notifyCallback(NimBLERemoteCharacteristic *pChar, uint8_t *pData,
 extern NimBLEClient *g_client;
 extern NimBLEAdvertisedDevice *g_targetDevice;
 extern volatile bool g_connected;
+extern volatile bool g_encrypted;
 
 // Lightweight callback classes (definitions in btle_callbacks.cpp)
 class ClientCallbacks : public NimBLEClientCallbacks {

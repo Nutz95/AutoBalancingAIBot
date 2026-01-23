@@ -9,37 +9,41 @@
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_ALPHA
-#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.00005f // Extremely slow (Back to basics)
+#define BALANCER_ADAPTIVE_TRIM_ALPHA 0.0002f // v70: Smoother trim (2x v68, 0.4x v69)
 #endif
 
 // Limits for adaptive trim activation
 #ifndef BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG
-#define BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG 3.0f   // Only learn if very close to vertical
+#define BALANCER_ADAPTIVE_TRIM_MAX_PITCH_DEG 20.0f   // v69: Increased window for capture
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS
-#define BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS 1000.0f
+#define BALANCER_ADAPTIVE_TRIM_MAX_DIST_TICKS 20000.0f // v69: Allow it to learn even while moving
 #endif
 
 #ifndef BALANCER_ADAPTIVE_TRIM_LIMIT_RAD
 #define BALANCER_ADAPTIVE_TRIM_LIMIT_RAD 0.4f // approx 23 degrees max (handling the 13.7 bias)
 #endif
 
+#ifndef BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS
+#define BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS 30.0f // Min dist error required to update trim
+#endif
+
 // --- Cascaded LQR Gains ---
 #ifndef BALANCER_DEFAULT_K_PITCH
-#define BALANCER_DEFAULT_K_PITCH 0.045f     // Firm but safe
+#define BALANCER_DEFAULT_K_PITCH 0.045f     // v70: Back to baseline to reduce 10Hz resonance
 #endif
 
 #ifndef BALANCER_DEFAULT_K_GYRO
-#define BALANCER_DEFAULT_K_GYRO 0.028f
+#define BALANCER_DEFAULT_K_GYRO 0.025f      // v70: More damping to kill the buzz
 #endif
 
 #ifndef BALANCER_DEFAULT_K_DIST
-#define BALANCER_DEFAULT_K_DIST 0.0f        // DISABLE position anchor to isolate balance
+#define BALANCER_DEFAULT_K_DIST 0.000015f    // v70: Moderate anchor
 #endif
 
 #ifndef BALANCER_DEFAULT_K_SPEED
-#define BALANCER_DEFAULT_K_SPEED 0.0f       // Keep speed damping at 0
+#define BALANCER_DEFAULT_K_SPEED 0.000002f  // v69: Minimal speed damping
 #endif
 
 // --- Yaw / Heading Control ---
@@ -75,7 +79,7 @@
 
 // Low-pass filter alpha for derivatives (500Hz)
 #ifndef BALANCER_PITCH_RATE_LPF_ALPHA
-#define BALANCER_PITCH_RATE_LPF_ALPHA 0.25f  // Increased from 0.1 to 0.3 to reduce phase lag
+#define BALANCER_PITCH_RATE_LPF_ALPHA 0.25f  // Back to 0.25 to reduce phase lag (approx 40Hz)
 #endif
 
 // Optional: Use a cutoff frequency (Hz) for pitch-rate low-pass instead of a fixed alpha.

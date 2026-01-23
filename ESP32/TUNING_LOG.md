@@ -33,8 +33,37 @@
 | **v60** | 0.045 | 0.028 | 0.0 | 0.0 | **TBD** | Reduce chatter further: LPF alpha 0.3 -> 0.25 and Kg 0.030 -> 0.028. |
 
 ---
+# Phase 2: High-Performance Synchronous Loop (1000Hz)
 
-## Technical Analysis: The 12-14Hz Mystery
+## New System Baseline (v61+)
+A major architectural shift was completed to eliminate "System Noise" before tuning control gains.
+
+### Architectural Specs
+- **Control Loop**: 1000Hz Synchronous (1ms fixed $\Delta t$) on Core 1.
+- **Actuation**: Hardware RMT Step/Dir (Pulse-accurate, zero-latency).
+- **Telemetry**: RS485 Dual Bus (256kbps), 48-bit cumulative position.
+- **Interpolation**: "Convergent Smoothing" (Nudging) algorithm bridges 200Hz telemetry to 1000Hz loop.
+- **IMU Filter**: `COMPLEMENTARY1D` (Zero phase lag, extremely fast).
+- **Pitch Rate LPF**: Alpha = 0.15 (approx. 10ms time constant).
+
+### Initial State for Phase 2
+The robot is now "Electronically Silent". All previous "poils" (telemetry jumps) and step-jitter have been removed.
+
+| Version | Kp | Kg | Kd | Ks | Result | Observation |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **v61** | 0.045 | 0.028 | 0.0 | 0.0 | **Baseline** | LPF alpha 0.15. Baseline de survie ~2.2s. |
+| **v62** | 0.060 | 0.040 | 0.0 | 0.0 | **Vibrant** | Survie ~2.7s. Pic FFT à 22Hz. Meilleure tenue mais sature encore. |
+| **v63** | 0.080 | 0.045 | 0.0 | 0.0 | **Instable** | Survie 1.8s. Vibration 23Hz trop forte. Sature violemment et tombe. |
+| **v64** | 0.030 | 0.015 | 0.0 | 0.0 | **Sain (Moteur)** | Survie 2.3s. Pic FFT à 5.22Hz. Pas de saturation carrée. |
+| **v65** | 0.040 | 0.018 | 0.0 | 0.0 | **Prometteur** | Survie 2.4s. Alpha=0.25. Oscillation propre ~6Hz. |
+| **v66** | 0.055 | 0.025 | 0.0 | 0.0 | **Vibrant** | Survie 2.7s. **Buzz à 27.4Hz** (FFT). Gains trop hauts pour le filtrage actuel. |
+| **v67** | 0.048 | 0.022 | 0.0 | 0.0 | **Sain** | Bonne oscillation (5.1Hz). Dérive car pas de Kd/Ks. Tombe "des deux côtés". |
+| v68 | 0.048 | 0.022 | 2e-5 | 5e-6 | **Drift** | Activation Kd/Ks et Trim Adaptatif (Alpha=0.0001) pour stabiliser la position. Trim correct (+7.0) mais trop lent vers 13.7. |
+| v69 | 0.050 | 0.022 | 1e-5 | 2e-6 | **Unstable** | Turbo Trim overshot (reached 21°). Kp=0.05 caused 10Hz resonance. Fell in 0.3s. |
+| v70 | 0.045 | 0.025 | 1.5e-5 | 2e-6 | **TBD** | **Stability Patch & IRAM Fix**. Moved compute path to IRAM to fix NVS crash. Slowed alpha to 2e-4. Kp=0.045, Kg=0.025 to kill buzz. |
+
+---
+## Technical Analysis: The 12-14Hz Mystery (Resolved)
 The 12-14Hz (approx 70-80ms period) is the **Phase Lag limit** of the system.
 - **FFT Proof**: v55 clearly shows a dominant peak at **12.5Hz**.
 - **System Latency**: By switching to `COMPLEMENTARY1D`, we eliminate the filter lag. In v45, the filter was fighting itself; v46 fixes the gyro sign.
