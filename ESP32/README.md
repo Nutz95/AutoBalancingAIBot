@@ -93,11 +93,22 @@ Notes:
 
 ## IMU Selection & Configuration
 
-The project supports multiple IMU sensors via a modular driver system. You can select the active IMU in `src/main.cpp` using the `IMU_USE_BNO055` macro.
+The project supports multiple IMU sensors via a modular driver system. The active IMU is selected at compile time with `IMU_SELECTION`.
+
+Current repository default:
+- `platformio.ini`: `-DIMU_SELECTION=2`
+- `src/main.cpp`: `#define IMU_SELECTION 2`
+- Meaning: **BMI160 is the active IMU by default**.
 
 ### Supported Sensors
 - **BMI088** (SPI): High-performance industrial IMU.
+- **BMI160** (SPI in this project): Current default sensor used for balancing.
 - **BNO055** (I2C): Absolute orientation sensor with internal fusion.
+
+Selection mapping:
+- `0` = BMI088
+- `1` = BNO055
+- `2` = BMI160
 
 ### BNO055 Wiring (I2C)
 Connect the BNO055 to the ESP32-S3 using the following pins:
@@ -113,7 +124,7 @@ The I2C address and pins can be customized in `config/imu_configs/BNO055Config.h
 **Note (BMI160/SPI) :** Suite au passage à 500Hz et à l'inversion des axes (Forward = +Pitch), une recalibration est obligatoire.
 Placez le robot parfaitement vertical et immobile avant de lancer les commandes ci-dessous.
 
-This project includes a simple IMU calibration utility to capture and persist gyroscope bias and a single-position accelerometer offset. For the **BNO055**, the sensor performs internal calibration automatically, but you can still use these commands to apply additional software offsets if needed.
+This project includes a simple IMU calibration utility to capture and persist gyroscope bias and a single-position accelerometer offset. For the **BMI160**, this calibration is important because the balancing loop relies on low bias and consistent axis signs. For the **BNO055**, the sensor performs internal calibration automatically, but you can still use these commands to apply additional software offsets if needed.
 
 Commands (sent as plain text lines):
 
@@ -381,6 +392,12 @@ Run it from the `ESP32` folder like this (PowerShell):
 python .\tools\wifi_console_client.py <ESP_IP> [2333]
 ```
 
+Typical command for this robot:
+
+```powershell
+python .\tools\wifi_console_client.py 192.168.1.159 2333
+```
+
 Features of the provided client:
 - Enables TCP keepalive on the socket to help the OS detect dead peers.
 - Implements an automatic reconnect loop with exponential backoff when the
@@ -406,6 +423,40 @@ Usage notes and testing guidance
 		 followed by reconnect attempts and then `[Resent pending command]` if a
 		 command needed resending.
 
+Wi‑Fi telemetry capture workflow (current)
+-----------------------------------------
+
+For balancing captures, prefer the dedicated helper `tools/capture_balancer_dbg.py` instead of manually copying console logs.
+
+What it does:
+- connects to the Wi‑Fi console on TCP port `2333`
+- enables binary UDP telemetry (`SYS TELEM UDP AUTO`)
+- waits for `BALANCER: started`
+- records only the active balancing run
+- saves a `.txt`, `.csv`, and `.png`
+
+Recommended command from the `ESP32` folder:
+
+```powershell
+python .\tools\capture_balancer_dbg.py --host 192.168.1.159 --port 2333 --name capture_23
+```
+
+Useful variants:
+
+```powershell
+python .\tools\capture_balancer_dbg.py --host 192.168.1.159 --name capture_23 --cpu-telemetry-ms 100
+python .\tools\capture_balancer_dbg.py --host 192.168.1.159 --name capture_23 --motor-telemetry-ms 10
+python .\tools\capture_balancer_dbg.py --host 192.168.1.159 --name capture_23 --cpu-telemetry-ms 100 --motor-telemetry-ms 10
+```
+
+Recommended procedure:
+1. Power the robot and wait for IMU warmup / green LED.
+2. Start the capture script on the PC.
+3. Hold the robot near vertical.
+4. Trigger balancing with the joystick button.
+5. Let it run until the robot falls or you stop balancing.
+6. Share the generated `capture_23.csv` and `capture_23.png`.
+
 Security note
 -------------
 - Wi‑Fi credentials are persisted in NVS in plaintext; this is more convenient
@@ -424,7 +475,7 @@ Notes
 Pour valider la logique de contrôle et le système de "Queue Draining" (latence zéro) directement sur votre PC sans l'ESP32 :
 1. Ouvrez un terminal MSYS2/MinGW64.
 2. Exécutez `./test/build_test.sh`.
-3. Ce script compile et lance les tests de Fusion IMU, PID, et la logique de file d'attente.
+3. Ce script compile et lance les tests de Fusion IMU, PID, Driver Manager, ReadSpeed et logique de file d'attente.
 
 
 

@@ -29,6 +29,10 @@ public:
   void setMotorCommandBoth(float left_command, float right_command) override {
     last_left = left_command; last_right = right_command;
   }
+  void readEncodersBoth(int32_t& left, int32_t& right) override {
+    left = 0;
+    right = 0;
+  }
   void setMotorCommand(IMotorDriver::MotorSide side, float command) override {
     if (side == IMotorDriver::MotorSide::LEFT) last_left = command; else last_right = command;
   }

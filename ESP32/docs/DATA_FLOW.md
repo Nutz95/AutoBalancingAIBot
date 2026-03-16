@@ -1,56 +1,70 @@
-# Data Flow & Control Architecture
+# Architecture & Dual-Core Task Mapping
 
-This document describes the high-represenation synchronous control loop used by the AutoBalancingBot.
+This document describes how tasks are distributed between the two cores of the ESP32-S3 to ensure deterministic control.
 
-## Control Loop Architecture
+## Dual-Core Architecture
 
-The system uses a dual-core approach on the ESP32-S3:
-- **Core 1 (High Priority)**: Processes IMU data, sensor fusion, and the LQR control law at a strict 1000Hz.
-- **Core 0 (System)**: Handles Wi-Fi, Bluetooth (NimBLE), and low-priority background tasks.
+The system uses a "Split-Brain" design to protect the high-speed control loop from non-deterministic delays.
 
 ```mermaid
-graph TD
-    subgraph Sensors
-        IMU[BMI160 IMU 1000Hz]
-        ENC[RS485 Encoders 100Hz]
+flowchart TD
+    subgraph Core0 [Core 0 - System, Radio & I/O]
+        direction TB
+        WIFI[WiFi & OTA Handle]
+        BLE[NimBLE Gamepad]
+        MOT_TEL[RS485 Telemetry]
+        TEL_SER[Binary Telemetry]
+        LOG[Serial Menu]
     end
 
-    subgraph "Core 1 - Real-Time Control"
-        Producer[IMU Producer Task]
-        Consumer[IMU Consumer Task 1000Hz]
+    subgraph Core1 [Core 1 - Real-Time Control]
+        direction TB
+        Producer[IMU Producer]
+        Consumer[IMU Consumer 1kHz]
         Fusion[Fusion Complementary1D]
-        Interp[Encoder Interpolator]
         LQR[Cascaded LQR Strategy]
         StepGen[Step Gen RMT 400Hz]
     end
 
-    IMU -- "Raw SPI" --> Producer
-    Producer -- "Queue" --> Consumer
-    Consumer --> Fusion
-    ENC -- "RS485 Sub-task" --> Interp
-    
-    Fusion -- "Pitch / Rate" --> LQR
-    Interp -- "Smoothed Position/Speed" --> LQR
-    
-    LQR -- "Command (Normalized -1..1)" --> StepGen
-    StepGen -- "GPIO Step/Dir" --> Motors[MKS Motors]
-    
-    subgraph "Background Adaptation"
-        Trim[Adaptive Trim Integrator]
+    subgraph HW [Hardware Layers]
+        IMU_HW[(BMI160/BMI088)]
+        MOT_HW[(MKS Servo Motors)]
+        PAD_HW[(BLE Gamepad)]
     end
+
+    %% Interactions
+    IMU_HW -- SPI --> Producer
+    Producer -- Queue --> Consumer
+    Consumer --> Fusion
+    Fusion --> LQR
+    LQR -- Pulses --> StepGen
+    StepGen --> MOT_HW
     
-    LQR -. "Drift Error" .-> Trim
-    Trim -. "Shifted Setpoint" .-> LQR
+    PAD_HW -- BLE --> BLE
+    BLE -- "CMD" --> LQR
+    
+    MOT_HW -- RS485 --> MOT_TEL
+    MOT_TEL -- "Telemetry" --> LQR
+    
+    LQR -- "Log" --> TEL_SER
+    TEL_SER -- "WiFi" --> Remote[Tuning App]
 ```
 
-## Data Path Details
+## Task Priority & Core Assignment
 
-1. **IMU Path**: Raw data is read via SPI at 1kHz. The `Producer` task pushes samples to a queue for the `Consumer`.
-2. **Fusion Path**: `Complementary1D` filter computes pitch and pitch-rate with zero phase lag.
-3. **Odometry Path**: Encoders are read via RS485 at 100Hz on independent buses. A 1st-order hold `Interpolator` upsamples this to 1000Hz for the LQR.
-4. **Control Path**: The `CascadedLqrStrategy` computes the sum of four states:
-   - `Kp * angle_error`
-   - `Kg * pitch_rate`
-   - `Kd * position_error`
-   - `Ks * velocity_error`
-5. **Actuation Path**: The normalized command is converted to a pulse frequency and sent to the `RMT` (Remote Control) peripheral to generate hardware Step/Dir signals.
+| Core | Task Name | Priority | Role |
+| :--- | :--- | :--- | :--- |
+| **Core 1** | `IMUProducer` | 20 | Ultra-fast SPI reads. |
+| **Core 1** | `IMUConsumer` | 10 | Control Loop (Filter+LQR). |
+| **Core 0** | `WiFiConsole` | 5 | WiFi & OTA management. |
+| **Core 0** | `BTLETask` | 5 | Bluetooth Gamepad client. |
+| **Core 0** | `motorL_task` | 5 | RS485 Encoder reading. |
+| **Core 0** | `bal_tel` | 1 | Binary telemetry streaming. |
+
+### Why this split?
+- **Core 1 (Physics)**: Dedicated 1000Hz loop. Never blocked by radio or flash.
+- **Core 0 (System)**: Handles heavy stacks (Wi-Fi/BLE) and asynchronous I/O.
+
+### Communication
+1. **Downlink**: Core 0 (Gamepad) updates variables read by Core 1.
+2. **Uplink**: Core 1 (LQR) fills buffers sent by Core 0 (Telemetry).

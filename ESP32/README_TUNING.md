@@ -5,13 +5,31 @@ This README explains how to use the built-in telemetry and the new modular balan
 ## 1. Capture Tools
 We recommend using the advanced Python tool for diagnostics:
 ```bash
-python tools/capture_balancer_dbg.py COMx --duration 10 --plot
+python tools/capture_balancer_dbg.py --host 192.168.1.159 --port 2333 --name capture_23
 ```
 This tool:
-- Automatically enables the `BALANCER` log channel.
+- Connects to the Wi‑Fi console (`TCP 2333`).
+- Automatically enables binary UDP telemetry (`UDP 8888`).
 - Captures high-frequency diagnostics (Pitch, Rate, Encoders, Speed).
 - Performs FFT analysis to identify oscillation frequencies (e.g., limit cycles).
-- Calculates stability statistics (Standard Deviation, Peak-to-Peak).
+- Waits for `BALANCER: started`, then captures only the balancing run.
+- Saves three files with the same base name: `.txt`, `.csv`, `.png`.
+
+Recommended commands from the `ESP32` folder:
+
+```bash
+python tools/capture_balancer_dbg.py --host 192.168.1.159 --name capture_23
+python tools/capture_balancer_dbg.py --host 192.168.1.159 --name capture_23 --cpu-telemetry-ms 100
+python tools/capture_balancer_dbg.py --host 192.168.1.159 --name capture_23 --motor-telemetry-ms 10
+python tools/capture_balancer_dbg.py --host 192.168.1.159 --name capture_23 --cpu-telemetry-ms 100 --motor-telemetry-ms 10
+```
+
+Recommended operator sequence:
+1. Start the script on the PC.
+2. Place the robot near vertical.
+3. Press the joystick button that enables balancing.
+4. Let the script stop automatically when the balancer stops, or interrupt it manually.
+5. Review the generated `capture_23.png` and share `capture_23.csv` for analysis.
 
 ## 2. Balancer Commands
 The balancing system now supports multiple algorithms through a Strategy pattern.
@@ -55,7 +73,7 @@ How to enable
 CSV format
 - Header (example):
   - `timestamp_ms,pitch_deg,pitch_rad,pitch_rate_deg,pitch_rate_rad,ax,ay,az,gx,gy,gz,temperatureCelsius,left_cmd,right_cmd`
-- Rows: one CSV row per IMU cycle (sample rate derived from BMI088 sampling).
+- Rows: one CSV row per IMU cycle (current project default: BMI160).
 
 
 Startup warmup and safety sequence
@@ -70,11 +88,11 @@ This ensures safe startup and prevents the motors from activating with uninitial
 
 Recommended bench procedure
 1. Ensure the robot is securely mounted on a stable fixture where it cannot fall or cause damage.
-2. Power the system and confirm BMI088 shows reasonable gravity on one axis.
+2. Power the system and confirm BMI160 initializes cleanly and the warmup completes.
 3. Wait for the status LED to turn green (warmup complete) before issuing any balancing or tuning commands.
-4. Open serial monitor: `pio device monitor --baud 921600` (or use your terminal/serial app).
-5. Send `TUNING START` and capture the output to a file (or copy/paste). Example using `pio device monitor` piping is platform-specific — use your terminal's copy or a serial logger.
-6. Analyze the `pitch_deg` column: compute mean and stddev. Expected: stddev < 0.5° when stable and mean within ±2°.
+4. Start `python tools/capture_balancer_dbg.py --host 192.168.1.159 --name capture_23`.
+5. Put the robot near vertical and trigger balancing with the joystick.
+6. Analyze the generated `capture_23.csv` and `capture_23.png`.
 
 Beta tuning guidance
 - The `beta` parameter controls Madgwick responsiveness. Suggested starting range: `0.08`–`0.12`.
