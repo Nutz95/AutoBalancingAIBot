@@ -82,6 +82,7 @@ MOTOR_TLM_ONE_RE = re.compile(
 CPU_RE = re.compile(r"CPU:\s+t=(?P<t>\d+)ms\s+core0=(?P<cpu0>[-0-9.eE]+)%\s+core1=(?P<cpu1>[-0-9.eE]+)%")
 GAIN_RE_PID = re.compile(r"BALANCER: started \(PID\) \(Kp=(?P<kp>[-0-9.eE]+) Ki=(?P<ki>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+)\)")
 GAIN_RE_LQR = re.compile(r"BALANCER: started \(LQR\) \(Kp=(?P<kp>[-0-9.eE]+) Kg=(?P<kg>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+) Ks=(?P<ks>[-0-9.eE]+)\)")
+GAIN_RE_LQR_BOOT = re.compile(r"LQR: gains loaded \(Kp=(?P<kp>[-0-9.eE]+) Kg=(?P<kg>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+) Ks=(?P<ks>[-0-9.eE]+)\)")
 FILTER_RE = re.compile(r"FUSION: active filter=(?P<filter>[A-Za-z0-9_]+)|\[Filter: (?P<filter2>[A-Za-z0-9_]+)\]")
 
 
@@ -279,6 +280,49 @@ def parse_binary(data, rows, motor_sync):
     return True
 
 
+def update_gain_info_from_line(line, gains, gain_info, strategy_mode):
+    m_gain_pid = GAIN_RE_PID.search(line)
+    m_gain_lqr = GAIN_RE_LQR.search(line)
+    m_gain_lqr_boot = GAIN_RE_LQR_BOOT.search(line)
+
+    if m_gain_pid:
+        gains = {k: float(m_gain_pid.group(k)) for k in ['kp', 'ki', 'kd']}
+        gain_info = f"PID: Kp={gains['kp']} Ki={gains['ki']} Kd={gains['kd']}"
+        strategy_mode = 'PID'
+    elif m_gain_lqr:
+        gains = {k: float(m_gain_lqr.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
+        gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
+        strategy_mode = 'LQR'
+    elif m_gain_lqr_boot:
+        gains = {k: float(m_gain_lqr_boot.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
+        gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
+        strategy_mode = 'LQR'
+
+    return gains, gain_info, strategy_mode
+
+
+def update_fall_stop_state(sample, auto_stop_state, fall_angle_deg=45.0, settle_cmd_abs=0.05, hold_ms=300):
+    pitch = safe_float(sample.get('pitch'))
+    cmd = safe_float(sample.get('cmd'))
+    pid_out = safe_float(sample.get('pid_out'))
+    t = int(sample.get('time_ms', 0))
+
+    fallen = abs(pitch) >= fall_angle_deg
+    inactive_cmd = max(abs(cmd), abs(pid_out)) <= settle_cmd_abs
+
+    if fallen and inactive_cmd:
+        if auto_stop_state.get('candidate_t_ms') is None:
+            auto_stop_state['candidate_t_ms'] = t
+        elif t - auto_stop_state['candidate_t_ms'] >= hold_ms:
+            auto_stop_state['triggered'] = True
+            auto_stop_state['trigger_t_ms'] = t
+            return True
+    else:
+        auto_stop_state['candidate_t_ms'] = None
+
+    return False
+
+
 def main():
     p = argparse.ArgumentParser()
     p.add_argument('--host')
@@ -313,22 +357,14 @@ def main():
     strategy_mode = 'PID' # Default
     filter_info = "Unknown Filter"
     trim_info = {"val": 0.0, "type": "dynamic", "detected": False}
+    auto_stop_state = {'candidate_t_ms': None, 'triggered': False, 'trigger_t_ms': None}
     
     if args.from_log:
         print(f"Parsing log file: {args.from_log}")
         with open(args.from_log, 'r', encoding='utf8', errors='ignore') as f:
             for line in f:
                 line = line.strip()
-                m_gain_pid = GAIN_RE_PID.search(line)
-                m_gain_lqr = GAIN_RE_LQR.search(line)
-                if m_gain_pid:
-                    gains = {k: float(m_gain_pid.group(k)) for k in ['kp', 'ki', 'kd']}
-                    gain_info = f"PID: Kp={gains['kp']} Ki={gains['ki']} Kd={gains['kd']}"
-                    strategy_mode = 'PID'
-                elif m_gain_lqr:
-                    gains = {k: float(m_gain_lqr.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
-                    gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
-                    strategy_mode = 'LQR'
+                gains, gain_info, strategy_mode = update_gain_info_from_line(line, gains, gain_info, strategy_mode)
                 m_filter = FILTER_RE.search(line)
                 if m_filter:
                     filter_info = m_filter.group('filter') or m_filter.group('filter2')
@@ -407,6 +443,7 @@ def main():
             
             start_time = time.time()
             started = False
+            udp_stream_seen = False
             line_buf = ""
             recent_lines = [] 
             udp_packet_count = 0
@@ -426,9 +463,36 @@ def main():
                             data, addr = udp_sock.recvfrom(1024)
                             if parse_binary(data, rows, motor_sync):
                                 udp_packet_count += 1
-                                if not started:
+                                if not udp_stream_seen:
                                     print(f">>> Binary UDP stream detected from {addr}!")
-                                    started = True
+                                    udp_stream_seen = True
+
+                                latest_t = max(rows['bal'].keys()) if rows['bal'] else None
+                                latest_sample = None
+                                if latest_t is not None:
+                                    latest_sample = dict(rows['bal'][latest_t])
+                                    latest_sample['time_ms'] = latest_t
+
+                                if not started and latest_sample is not None:
+                                    active_control = max(
+                                        abs(safe_float(latest_sample.get('cmd'))),
+                                        abs(safe_float(latest_sample.get('pid_out'))),
+                                        abs(safe_float(latest_sample.get('iterm'))),
+                                        abs(safe_float(latest_sample.get('lqr_angle'))),
+                                        abs(safe_float(latest_sample.get('lqr_gyro'))),
+                                        abs(safe_float(latest_sample.get('lqr_dist'))),
+                                        abs(safe_float(latest_sample.get('lqr_speed'))),
+                                    ) > 1e-6
+
+                                    if active_control:
+                                        print(">>> Active control packet detected! Clearing pre-start telemetry...")
+                                        for k in rows:
+                                            rows[k].clear()
+                                        motor_sync = {'first_bal_t_ms': None, 'first_motor_ts_us': None, 'offset_ms': None}
+                                        auto_stop_state = {'candidate_t_ms': None, 'triggered': False, 'trigger_t_ms': None}
+                                        udp_packet_count = 1
+                                        parse_binary(data, rows, motor_sync)
+                                        started = True
                                 
                                 if udp_packet_count % 500 == 0:
                                     # Print status without flooding
@@ -479,17 +543,9 @@ def main():
                         if len(recent_lines) > 100: recent_lines.pop(0)
 
                         # Look for gains and filter in any line received
-                        m_gain_pid = GAIN_RE_PID.search(line)
-                        m_gain_lqr = GAIN_RE_LQR.search(line)
-                        if m_gain_pid:
-                            gains = {k: float(m_gain_pid.group(k)) for k in ['kp', 'ki', 'kd']}
-                            gain_info = f"PID: Kp={gains['kp']} Ki={gains['ki']} Kd={gains['kd']}"
-                            strategy_mode = 'PID'
-                            print(f">>> Detected Strategy: {gain_info}")
-                        elif m_gain_lqr:
-                            gains = {k: float(m_gain_lqr.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
-                            gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
-                            strategy_mode = 'LQR'
+                        prev_gain_info = gain_info
+                        gains, gain_info, strategy_mode = update_gain_info_from_line(line, gains, gain_info, strategy_mode)
+                        if gain_info != prev_gain_info and gain_info != "Unknown Gains":
                             print(f">>> Detected Strategy: {gain_info}")
 
                         m_filter = FILTER_RE.search(line)
@@ -503,7 +559,8 @@ def main():
                             
                             # Reset data collection to ensure we only save what happens after START
                             for k in rows: rows[k].clear()
-                            motor_sync = {'bal': None, 'motor': None, 'offset_ms': None}
+                            motor_sync = {'first_bal_t_ms': None, 'first_motor_ts_us': None, 'offset_ms': None}
+                            auto_stop_state = {'candidate_t_ms': None, 'triggered': False, 'trigger_t_ms': None}
                             udp_packet_count = 0
 
                             # Re-parse recent history to catch metadata if missed
@@ -512,16 +569,7 @@ def main():
                                 if m_f: 
                                     filter_info = m_f.group('filter') or m_f.group('filter2')
                                 
-                                m_g_pid = GAIN_RE_PID.search(prev_line)
-                                m_g_lqr = GAIN_RE_LQR.search(prev_line)
-                                if m_g_pid:
-                                    gains = {k: float(m_g_pid.group(k)) for k in ['kp', 'ki', 'kd']}
-                                    gain_info = f"PID: Kp={gains['kp']} Ki={gains['ki']} Kd={gains['kd']}"
-                                    strategy_mode = 'PID'
-                                elif m_g_lqr:
-                                    gains = {k: float(m_g_lqr.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
-                                    gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
-                                    strategy_mode = 'LQR'
+                                gains, gain_info, strategy_mode = update_gain_info_from_line(prev_line, gains, gain_info, strategy_mode)
                             started = True
 
                         # Detect trim info
@@ -548,6 +596,17 @@ def main():
                                 if time.time() - start_time > 1.0:
                                     print("\n>>> Balancer STOP detected. Ending capture.")
                                     raise StopIteration
+                            if started and ("disabling motors" in line or "Torque OFF" in line):
+                                print("\n>>> Motor disable detected. Ending capture.")
+                                raise StopIteration
+
+                    if started and rows['bal']:
+                        latest_t = max(rows['bal'].keys())
+                        latest_sample = dict(rows['bal'][latest_t])
+                        latest_sample['time_ms'] = latest_t
+                        if update_fall_stop_state(latest_sample, auto_stop_state):
+                            print(f"\n>>> Fallen pose detected with inactive command at t={auto_stop_state['trigger_t_ms']}ms. Ending capture.")
+                            raise StopIteration
         except (KeyboardInterrupt, StopIteration):
             print("\nCapture finished.")
         finally:

@@ -24,12 +24,21 @@ python tools/capture_balancer_dbg.py --host 192.168.1.159 --name capture_23 --mo
 python tools/capture_balancer_dbg.py --host 192.168.1.159 --name capture_23 --cpu-telemetry-ms 100 --motor-telemetry-ms 10
 ```
 
+Useful companion for quick read-only checks:
+
+```bash
+python tools/wifi_send_command.py --host 192.168.1.159 "BALANCE LQR GAINS"
+python tools/wifi_send_command.py --host 192.168.1.159 "FILTER STATUS" "BALANCE LQR TRIM"
+```
+
 Recommended operator sequence:
 1. Start the script on the PC.
 2. Place the robot near vertical.
 3. Press the joystick button that enables balancing.
 4. Let the script stop automatically when the balancer stops, or interrupt it manually.
 5. Review the generated `capture_23.png` and share `capture_23.csv` for analysis.
+
+The capture helper now also auto-stops if it detects a sustained fallen pose with the controller output back at zero, which covers cases where the firmware disables the motors without printing `BALANCER: stopped`.
 
 ## 2. Balancer Commands
 The balancing system now supports multiple algorithms through a Strategy pattern.

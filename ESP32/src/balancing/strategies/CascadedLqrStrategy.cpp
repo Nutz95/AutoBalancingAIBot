@@ -10,7 +10,28 @@ namespace abbot {
 namespace balancing {
 
 CascadedLqrStrategy::CascadedLqrStrategy() {
-    resetToDefaults();
+    // Initialize sane in-memory defaults without touching NVS.
+    // Persisted values must only be overwritten by an explicit reset
+    // or an intentional configuration update.
+    cfg_.k_pitch = BALANCER_DEFAULT_K_PITCH;
+    cfg_.k_gyro  = BALANCER_DEFAULT_K_GYRO;
+    cfg_.k_dist  = BALANCER_DEFAULT_K_DIST;
+    cfg_.k_speed = BALANCER_DEFAULT_K_SPEED;
+    cfg_.adaptive_trim_enabled = (BALANCER_ENABLE_ADAPTIVE_TRIM != 0);
+    cfg_.adaptive_trim_alpha = BALANCER_ADAPTIVE_TRIM_ALPHA;
+    cfg_.adaptive_trim_deadband = BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS;
+    cfg_.pitch_rate_lpf_hz = BALANCER_LQR_PITCH_RATE_LPF_HZ;
+    cfg_.cmd_lpf_hz = BALANCER_LQR_CMD_LPF_HZ;
+
+    pitch_trim_rad_ = 0.0f;
+    v_target_speed_ = 0.0f;
+    w_target_yaw_req_ = 0.0f;
+    yaw_error_accum_rad_ = 0.0f;
+    lp_pitch_rate_ = 0.0f;
+    lp_v_speed_ = 0.0f;
+    lp_cmd_ = 0.0f;
+    enc_dist_zeropoint_ = 0;
+    needs_reset_enc_ = true;
 }
 
 void CascadedLqrStrategy::init() {

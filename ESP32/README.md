@@ -398,6 +398,18 @@ Typical command for this robot:
 python .\tools\wifi_console_client.py 192.168.1.159 2333
 ```
 
+One-shot command helper
+-----------------------
+
+For read-only queries or small scripted actions, use the lightweight helper:
+
+```powershell
+python .\tools\wifi_send_command.py --host 192.168.1.159 "FILTER STATUS"
+python .\tools\wifi_send_command.py --host 192.168.1.159 "BALANCE LQR GAINS" "BALANCE LQR TRIM"
+```
+
+This is handy to inspect the current persisted state without opening an interactive session.
+
 Features of the provided client:
 - Enables TCP keepalive on the socket to help the OS detect dead peers.
 - Implements an automatic reconnect loop with exponential backoff when the
@@ -431,8 +443,9 @@ For balancing captures, prefer the dedicated helper `tools/capture_balancer_dbg.
 What it does:
 - connects to the Wi‑Fi console on TCP port `2333`
 - enables binary UDP telemetry (`SYS TELEM UDP AUTO`)
-- waits for `BALANCER: started`
+- waits for `BALANCER: started` when available, or for the first active control packet otherwise
 - records only the active balancing run
+- auto-stops on `BALANCER: stopped`, motor disable, or a sustained fallen pose with zero command
 - saves a `.txt`, `.csv`, and `.png`
 
 Recommended command from the `ESP32` folder:
