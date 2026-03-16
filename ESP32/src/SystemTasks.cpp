@@ -251,11 +251,17 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
     // Update active filter with mapped data
     uint32_t fusion_start_us = micros();
     {
+      if (g_fusion_mutex) {
+        xSemaphoreTake(g_fusion_mutex, portMAX_DELAY);
+      }
       auto active = abbot::filter::getActiveFilter();
       if (active) {
         active->update(gyro_robot[0], gyro_robot[1], gyro_robot[2],
                        accel_robot[0], accel_robot[1], accel_robot[2], dt,
                        sample.fused_pitch, sample.fused_roll, sample.fused_yaw);
+      }
+      if (g_fusion_mutex) {
+        xSemaphoreGive(g_fusion_mutex);
       }
     }
     prof.t_fusion = micros() - fusion_start_us;
@@ -280,10 +286,16 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
     float fused_pitch_local = 0.0f;
     float fused_pitch_rate_local = 0.0f;
     {
+      if (g_fusion_mutex) {
+        xSemaphoreTake(g_fusion_mutex, portMAX_DELAY);
+      }
       auto active = abbot::filter::getActiveFilter();
       if (active) {
         fused_pitch_local = active->getPitch();
         fused_pitch_rate_local = active->getPitchRate();
+      }
+      if (g_fusion_mutex) {
+        xSemaphoreGive(g_fusion_mutex);
       }
     }
 
@@ -529,15 +541,9 @@ void reinitFilterFromAccel() {
   if (g_last_sample_ms > 0 && (now - g_last_sample_ms > 500)) {
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
                "FILTER: WARNING - IMU data is STALE (%lu ms old). IMU "
-               "Producer should be auto-recovering soon...\n",
+               "Producer should be auto-recovering soon; skipping manual "
+               "driver reinit here to avoid SPI races.\n",
                (unsigned long)(now - g_last_sample_ms));
-    
-    // We try a manual begin here only as a last resort, but risky if producer
-    // is mid-mutex. With Wire.setTimeOut it should be safer now.
-    auto drv = abbot::imu::getActiveIMUDriver();
-    if (drv) {
-      drv->begin();
-    }
   }
 
   // Reinitialize the active filter's orientation from the last mapped
@@ -547,8 +553,14 @@ void reinitFilterFromAccel() {
   // to converge with low beta).
   auto filter = abbot::filter::getActiveFilter();
   if (filter) {
+    if (g_fusion_mutex) {
+      xSemaphoreTake(g_fusion_mutex, portMAX_DELAY);
+    }
     filter->setFromAccel(g_last_accel_robot[0], g_last_accel_robot[1],
                          g_last_accel_robot[2]);
+    if (g_fusion_mutex) {
+      xSemaphoreGive(g_fusion_mutex);
+    }
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
                "FILTER: reinitialized from accel (ax=%.2f ay=%.2f az=%.2f)\n",
                g_last_accel_robot[0], g_last_accel_robot[1],

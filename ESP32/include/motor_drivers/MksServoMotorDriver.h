@@ -127,8 +127,11 @@ private:
         std::atomic<uint32_t> ack_pending_time_us{0};
         std::atomic<bool> last_reported_enabled{true}; // Init to true to force torque sync at boot
 
-        // Time when a speed frame was last written to the motor (microseconds).
+        // Time when a speed frame was last written on the RS485 link.
         std::atomic<uint32_t> last_cmd_send_time_us{0};
+        // Time when the control loop last refreshed the motor command target.
+        // In Step/Dir hybrid mode this is the freshest command-age signal.
+        std::atomic<uint32_t> last_cmd_update_time_us{0};
         // Time when telemetry (encoder) was last successfully read (microseconds).
         std::atomic<uint32_t> last_encoder_time_us{0};
 

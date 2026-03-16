@@ -602,12 +602,16 @@ void MksServoMotorDriver::dumpConfig() {
 }
 
 void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_command) {
+    uint32_t now_cmd_us = (uint32_t)esp_timer_get_time();
+
     // 1. Update targets (Atomics for background tasks telemetry/config)
     m_left_async.target_speed.store(left_command);
     m_left_async.speed_dirty.store(true);
+    m_left_async.last_cmd_update_time_us.store(now_cmd_us);
     
     m_right_async.target_speed.store(right_command);
     m_right_async.speed_dirty.store(true);
+    m_right_async.last_cmd_update_time_us.store(now_cmd_us);
 
     m_left.last_command = left_command;
     m_right.last_command = right_command;
@@ -716,9 +720,12 @@ int32_t MksServoMotorDriver::getInterpolatedEncoder(const AsyncState& async) con
 }
 
 void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
+    uint32_t now_cmd_us = (uint32_t)esp_timer_get_time();
+
     if (side == MotorSide::LEFT) {
         m_left_async.target_speed.store(command);
         m_left_async.speed_dirty.store(true);
+        m_left_async.last_cmd_update_time_us.store(now_cmd_us);
 #if !MKS_SERVO_USE_STEP_DIR
         if (m_left_async.task_handle) {
             xTaskNotifyGive(m_left_async.task_handle);
@@ -764,6 +771,7 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
     } else {
         m_right_async.target_speed.store(command);
         m_right_async.speed_dirty.store(true);
+        m_right_async.last_cmd_update_time_us.store(now_cmd_us);
 #if !MKS_SERVO_USE_STEP_DIR
         if (m_right_async.task_handle) {
             xTaskNotifyGive(m_right_async.task_handle);
@@ -837,9 +845,16 @@ void MksServoMotorDriver::resetPositionTracking() {
 }
 
 uint64_t MksServoMotorDriver::getLastCommandTimeUs(MotorSide side) const {
-    // Return timestamp of last *hardware* send (not queue time)
+    // In Step/Dir hybrid mode, the meaningful command freshness is the last
+    // control-side target update, not the age of the last RS485 speed frame.
+    // In pure serial mode, keep returning the transport timestamp.
+#if MKS_SERVO_USE_STEP_DIR
+    return (side == MotorSide::LEFT) ? m_left_async.last_cmd_update_time_us.load()
+                                    : m_right_async.last_cmd_update_time_us.load();
+#else
     return (side == MotorSide::LEFT) ? m_left_async.last_cmd_send_time_us.load()
                                     : m_right_async.last_cmd_send_time_us.load();
+#endif
 }
 
 int MksServoMotorDriver::getMotorId(MotorSide side) const {

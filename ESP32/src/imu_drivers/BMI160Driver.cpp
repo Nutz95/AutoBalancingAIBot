@@ -7,11 +7,19 @@
 namespace abbot {
 
 BMI160Driver::BMI160Driver(const BMI160Config &cfg) : cfg_(cfg) {
+  spi_mutex_ = xSemaphoreCreateMutex();
 }
 
 bool BMI160Driver::begin() {
+  if (spi_mutex_ && xSemaphoreTake(spi_mutex_, pdMS_TO_TICKS(250)) != pdTRUE) {
+    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                "BMI160: WARN - SPI mutex busy, skipping begin()");
+    return false;
+  }
+
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: starting initialization (SPI mode)...");
 
+  bool ok = false;
   if (cfg_.use_spi) {
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI160: Initializing SPI (SCK=%d, MOSI=%d, MISO=%d, CS=%d)\n",
                cfg_.spi_sck, cfg_.spi_mosi, cfg_.spi_miso, cfg_.spi_cs);
@@ -66,91 +74,93 @@ bool BMI160Driver::begin() {
     
     if (chip_id != 0xD1) {
       LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: ERROR - Sensor not found on SPI bus.");
-      return false;
+    } else {
+      // On effectue un soft-reset MANUEL
+      auto manual_write = [&](uint8_t reg, uint8_t val) {
+          digitalWrite(cfg_.spi_cs, LOW);
+          SPI.transfer(reg & 0x7F); // Bit Write = 0
+          SPI.transfer(val);
+          digitalWrite(cfg_.spi_cs, HIGH);
+          delay(2);
+      };
+
+      auto manual_read = [&](uint8_t reg) -> uint8_t {
+          digitalWrite(cfg_.spi_cs, LOW);
+          SPI.transfer(reg | 0x80); // Bit Read = 1
+          if (has_dummy_) {
+              SPI.transfer(0x00); // Dummy byte
+          }
+          uint8_t val = SPI.transfer(0x00);
+          digitalWrite(cfg_.spi_cs, HIGH);
+          return val;
+      };
+      
+      manual_write(0x7E, 0xB6); // Soft Reset CMD
+      delay(100);               // Attente de sécurité (datasheet préconise 80ms)
+      
+      // On réveille le capteur MANUELLEMENT
+      // Note: Datasheet préconise d'attendre entre les commandes de mode
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: Awakening sensors (Accel+Gyro)...");
+      manual_write(0x7E, 0x11); // ACCEL normal mode
+      delay(50);                // Transition accel
+      manual_write(0x7E, 0x15); // GYRO normal mode
+      delay(100);               // Transition gyro (80ms min)
+      
+      // Attente du statut stable (Accel Normal + Gyro Normal = 0x14)
+      uint8_t pmu_status = 0;
+      for (int i = 0; i < 20; i++) {
+          pmu_status = manual_read(0x03);
+          if (pmu_status == 0x14) {
+              break;
+          }
+          // Si ça ne marche pas, on renvoie les commandes juste au cas où
+          if (i == 10) {
+              manual_write(0x7E, 0x11);
+              delay(10);
+              manual_write(0x7E, 0x15);
+          }
+          delay(20);
+      }
+      LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI160: PMU_STATUS = 0x%02X (Expected 0x14)\n", pmu_status);
+
+      // Configuration des registres (ODR et Plages)
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: Configuring 1600Hz ODR...");
+      // 0x40 (ACC_CONF): 0x2C = normal filter (OSR4), ODR 1600Hz
+      // 0x42 (GYR_CONF): 0x2C = normal filter (OSR4), ODR 1600Hz
+      manual_write(0x40, 0x2C); 
+      manual_write(0x42, 0x2C);
+      manual_write(0x41, 0x03); // ±2g 
+      manual_write(0x43, 0x00); // ±2000 deg/s
+
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: SPI initialization successful.");
+      last_read_us_ = micros();
+      ok = true;
     }
-
-    // On effectue un soft-reset MANUEL
-    auto manual_write = [&](uint8_t reg, uint8_t val) {
-        digitalWrite(cfg_.spi_cs, LOW);
-        SPI.transfer(reg & 0x7F); // Bit Write = 0
-        SPI.transfer(val);
-        digitalWrite(cfg_.spi_cs, HIGH);
-        delay(2);
-    };
-
-    auto manual_read = [&](uint8_t reg) -> uint8_t {
-        digitalWrite(cfg_.spi_cs, LOW);
-        SPI.transfer(reg | 0x80); // Bit Read = 1
-        if (has_dummy_) {
-            SPI.transfer(0x00); // Dummy byte
-        }
-        uint8_t val = SPI.transfer(0x00);
-        digitalWrite(cfg_.spi_cs, HIGH);
-        return val;
-    };
-    
-    manual_write(0x7E, 0xB6); // Soft Reset CMD
-    delay(100);               // Attente de sécurité (datasheet préconise 80ms)
-    
-    // On réveille le capteur MANUELLEMENT
-    // Note: Datasheet préconise d'attendre entre les commandes de mode
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: Awakening sensors (Accel+Gyro)...");
-    manual_write(0x7E, 0x11); // ACCEL normal mode
-    delay(50);                // Transition accel
-    manual_write(0x7E, 0x15); // GYRO normal mode
-    delay(100);               // Transition gyro (80ms min)
-    
-    // Attente du statut stable (Accel Normal + Gyro Normal = 0x14)
-    uint8_t pmu_status = 0;
-    for (int i = 0; i < 20; i++) {
-        pmu_status = manual_read(0x03);
-        if (pmu_status == 0x14) {
-            break;
-        }
-        // Si ça ne marche pas, on renvoie les commandes juste au cas où
-        if (i == 10) {
-            manual_write(0x7E, 0x11);
-            delay(10);
-            manual_write(0x7E, 0x15);
-        }
-        delay(20);
-    }
-    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BMI160: PMU_STATUS = 0x%02X (Expected 0x14)\n", pmu_status);
-
-    // Configuration des registres (ODR et Plages)
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: Configuring 1600Hz ODR...");
-    // 0x40 (ACC_CONF): 0x2C = normal filter (OSR4), ODR 1600Hz
-    // 0x42 (GYR_CONF): 0x2C = normal filter (OSR4), ODR 1600Hz
-    manual_write(0x40, 0x2C); 
-    manual_write(0x42, 0x2C);
-    manual_write(0x41, 0x03); // ±2g 
-    manual_write(0x43, 0x00); // ±2000 deg/s
-
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: SPI initialization successful.");
-    last_read_us_ = micros();
-    return true;
   } else {
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: I2C mode requested...");
     Wire.setPins(cfg_.sda_pin, cfg_.scl_pin);
-    if (!BMI160.begin(BMI160GenClass::I2C_MODE, Wire, cfg_.i2c_addr, -1)) {
-        return false;
+    if (BMI160.begin(BMI160GenClass::I2C_MODE, Wire, cfg_.i2c_addr, -1)) {
+      // 1. Configure sensor ranges
+      BMI160.setAccelerometerRange(2); // ±2g 
+      BMI160.setGyroRange(2000);       // ±2000°/s
+      
+      // 2. Set high frequency ODR (Output Data Rate)
+      // BMI160Gen supports setGyroRate and setAccelerometerRate
+      // 400Hz matches BMI160_GYRO_RATE_400HZ (0x0A)
+      BMI160.setGyroRate(400); 
+      BMI160.setAccelerometerRate(400);
+      
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: ranges set to 2g, 2000 deg/s, ODR=400Hz");
+      
+      last_read_us_ = micros();
+      ok = true;
     }
   }
 
-  // 1. Configure sensor ranges
-  BMI160.setAccelerometerRange(2); // ±2g 
-  BMI160.setGyroRange(2000);       // ±2000°/s
-  
-  // 2. Set high frequency ODR (Output Data Rate)
-  // BMI160Gen supports setGyroRate and setAccelerometerRate
-  // 400Hz matches BMI160_GYRO_RATE_400HZ (0x0A)
-  BMI160.setGyroRate(400); 
-  BMI160.setAccelerometerRate(400);
-  
-  LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BMI160: ranges set to 2g, 2000 deg/s, ODR=400Hz");
-  
-  last_read_us_ = micros();
-  return true;
+  if (spi_mutex_) {
+    xSemaphoreGive(spi_mutex_);
+  }
+  return ok;
 }
 
 bool BMI160Driver::read(IMUSample &out) {
@@ -183,6 +193,20 @@ bool BMI160Driver::read(IMUSample &out) {
 }
 
 bool BMI160Driver::readRaw(IMUSample &out) {
+  if (spi_mutex_ && xSemaphoreTake(spi_mutex_, pdMS_TO_TICKS(5)) != pdTRUE) {
+    return false;
+  }
+
+  bool ok = false;
+  int16_t gx_raw = 0;
+  int16_t gy_raw = 0;
+  int16_t gz_raw = 0;
+  int16_t ax_raw = 0;
+  int16_t ay_raw = 0;
+  int16_t az_raw = 0;
+  const float ACCEL_SCALE = 9.80665f / 16384.0f;
+  const float GYRO_SCALE = (1.0f / 16.384f) * (3.14159265f / 180.0f);
+
   // BMI160 SPI Read requires a dummy byte after the register address.
   // We read 12 bytes in burst: Gyro (6 bytes) + Accel (6 bytes), starting from 0x0C.
   // Register 0x0C is DATA_GYRO_X_LSB
@@ -206,41 +230,41 @@ bool BMI160Driver::readRaw(IMUSample &out) {
 
   // If all 12 bytes are zero, something is wrong with the SPI bus or sensor.
   // Return false to trigger the auto-recovery in SystemTasks.
-  if (zero_check == 0) {
-      return false;
+  if (zero_check != 0) {
+    // Format: LSB, MSB
+    // Data alignment verification:
+    // 0,1: GX | 2,3: GY | 4,5: GZ | 6,7: AX | 8,9: AY | 10,11: AZ
+    gx_raw = (int16_t)((raw_data[1]  << 8) | raw_data[0]);
+    gy_raw = (int16_t)((raw_data[3]  << 8) | raw_data[2]);
+    gz_raw = (int16_t)((raw_data[5]  << 8) | raw_data[4]);
+    ax_raw = (int16_t)((raw_data[7]  << 8) | raw_data[6]);
+    ay_raw = (int16_t)((raw_data[9]  << 8) | raw_data[8]);
+    az_raw = (int16_t)((raw_data[11] << 8) | raw_data[10]);
+
+    // Convert raw values to SI units
+    // ±2g -> 16384 LSB/g.
+    // ±2000 deg/s -> 16.384 LSB/(deg/s).
+    out.ax = (float)ax_raw * ACCEL_SCALE;
+    out.ay = (float)ay_raw * ACCEL_SCALE;
+    out.az = (float)az_raw * ACCEL_SCALE;
+    out.gx = (float)gx_raw * GYRO_SCALE;
+    out.gy = (float)gy_raw * GYRO_SCALE;
+    out.gz = (float)gz_raw * GYRO_SCALE;
+
+    // Sign correction from config
+    applySigns(out);
+
+    out.temperatureCelsius = 23.0f; // Placeholder
+    out.ts_ms = millis();
+    out.ts_us = micros();
+
+    ok = true;
   }
 
-  // Format: LSB, MSB
-  // Data alignment verification:
-  // 0,1: GX | 2,3: GY | 4,5: GZ | 6,7: AX | 8,9: AY | 10,11: AZ
-  int16_t gx_raw = (int16_t)((raw_data[1]  << 8) | raw_data[0]);
-  int16_t gy_raw = (int16_t)((raw_data[3]  << 8) | raw_data[2]);
-  int16_t gz_raw = (int16_t)((raw_data[5]  << 8) | raw_data[4]);
-  int16_t ax_raw = (int16_t)((raw_data[7]  << 8) | raw_data[6]);
-  int16_t ay_raw = (int16_t)((raw_data[9]  << 8) | raw_data[8]);
-  int16_t az_raw = (int16_t)((raw_data[11] << 8) | raw_data[10]);
-
-  // Convert raw values to SI units
-  // ±2g -> 16384 LSB/g. 
-  // ±2000 deg/s -> 16.384 LSB/(deg/s).
-  const float ACCEL_SCALE = 9.80665f / 16384.0f; 
-  const float GYRO_SCALE = (1.0f / 16.384f) * (3.14159265f / 180.0f);
-
-  out.ax = (float)ax_raw * ACCEL_SCALE;
-  out.ay = (float)ay_raw * ACCEL_SCALE;
-  out.az = (float)az_raw * ACCEL_SCALE;
-  out.gx = (float)gx_raw * GYRO_SCALE;
-  out.gy = (float)gy_raw * GYRO_SCALE;
-  out.gz = (float)gz_raw * GYRO_SCALE;
-
-  // Sign correction from config
-  applySigns(out);
-
-  out.temperatureCelsius = 23.0f; // Placeholder
-  out.ts_ms = millis();
-  out.ts_us = micros();
-
-  return true;
+  if (spi_mutex_) {
+    xSemaphoreGive(spi_mutex_);
+  }
+  return ok;
 }
 
 void BMI160Driver::applySigns(IMUSample &out) {

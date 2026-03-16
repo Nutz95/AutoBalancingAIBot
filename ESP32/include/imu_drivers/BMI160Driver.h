@@ -5,6 +5,7 @@
 #include "IIMUDriver.h"
 #include <Arduino.h>
 #include <BMI160Gen.h>
+#include <freertos/semphr.h>
 #include <Wire.h>
 
 namespace abbot {
@@ -41,6 +42,7 @@ private:
   BMI160Config cfg_;
   unsigned long last_read_us_ = 0;
   bool has_dummy_ = true;
+  SemaphoreHandle_t spi_mutex_ = nullptr;
   
   // Internal helper to map gyro/accel signs
   void applySigns(IMUSample &out);
