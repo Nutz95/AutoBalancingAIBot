@@ -22,7 +22,7 @@ public:
      * @param is_left True for left motor, false for right
      * @param freq_hz Frequency in Hz (0 to stop)
      */
-    virtual void setFrequency(bool is_left, uint32_t freq_hz) = 0;
+    virtual bool setFrequency(bool is_left, uint32_t freq_hz) = 0;
 
     /**
      * @brief Stop all pulse generation immediately.

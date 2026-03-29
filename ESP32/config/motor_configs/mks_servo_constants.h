@@ -65,10 +65,10 @@
 
 // Enable non-blocking ACK handling by default (1 = on, 0 = off).
 #ifndef MKS_SERVO_DEFAULT_WAIT_FOR_ACK
-#define MKS_SERVO_DEFAULT_WAIT_FOR_ACK 1
+#define MKS_SERVO_DEFAULT_WAIT_FOR_ACK 0
 #endif
 
 // Queue depth for function commands (mode, current, hold, etc.).
 #ifndef MKS_SERVO_FUNCTION_QUEUE_LEN
-#define MKS_SERVO_FUNCTION_QUEUE_LEN 8
+#define MKS_SERVO_FUNCTION_QUEUE_LEN 32
 #endif

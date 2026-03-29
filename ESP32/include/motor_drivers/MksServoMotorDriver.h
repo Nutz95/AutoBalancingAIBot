@@ -143,6 +143,17 @@ private:
         std::atomic<uint32_t> speed_ack_error{0};
         std::atomic<uint32_t> encoder_ok{0};
         std::atomic<uint32_t> encoder_timeout{0};
+        std::atomic<uint32_t> bus_mutex_miss{0};
+        std::atomic<uint32_t> step_apply_ok{0};
+        std::atomic<uint32_t> step_mutex_miss{0};
+        std::atomic<uint32_t> step_freq_requested{0};
+        std::atomic<uint32_t> step_poll_count{0};
+        std::atomic<uint32_t> task_notify_wake{0};
+        std::atomic<uint32_t> task_timeout_wake{0};
+        std::atomic<uint32_t> function_queue_full{0};
+        std::atomic<uint32_t> periodic_rearm{0};
+        std::atomic<uint32_t> desired_periodic_interval_ms{0xFFFFFFFFu};
+        std::atomic<uint32_t> runtime_reset_epoch{0};
 
         // Per-task safety zeroing timer (milliseconds). Only accessed by the
         // corresponding motor task, so no atomic needed.
@@ -178,7 +189,7 @@ private:
 
     MotorState m_left;
     MotorState m_right;
-    bool m_enabled;
+    std::atomic<bool> m_enabled{false};
     SemaphoreHandle_t m_leftBusMutex;
     SemaphoreHandle_t m_rightBusMutex;
     QueueHandle_t m_leftCommandQueue = nullptr;
@@ -208,6 +219,7 @@ private:
 
     static void motorTaskEntry(void* pvParameters);
     void runMotorTask(MotorSide side);
+    void applyStepDirCommand(MotorSide side, float command, bool enabled);
     // Protocol helpers
     void sendSpeedCommand(MotorSide side, float normalized_speed, bool invert, bool wait_for_ack = false);
     void sendFunctionCommand(MotorSide side, uint8_t function_code, const uint8_t* data, size_t length);
@@ -219,6 +231,7 @@ private:
     void setHoldCurrent(MotorSide side, MksServoHoldCurrent hold_pct);
     void setEnable(MotorSide side, bool enable);
     void queuePeriodicTelemetry(MotorSide side, uint8_t code, uint16_t interval_ms);
+    void resetRuntimeStateForSide(MotorSide side, bool target_enabled);
     bool verifyConfig(MotorSide side, uint8_t function_code, uint8_t expected_value, const char* label);
     QueueHandle_t getQueueForMotor(MotorSide side);
     int scanBusOnCurrentBaud();

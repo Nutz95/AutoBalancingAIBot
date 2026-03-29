@@ -9,12 +9,25 @@ namespace abbot {
 namespace motor {
 
 McpwmStepGenerator::McpwmStepGenerator() {}
-McpwmStepGenerator::~McpwmStepGenerator() { stopAll(); }
+McpwmStepGenerator::~McpwmStepGenerator() {
+    stopAll();
+    if (m_hw_mutex) {
+        vSemaphoreDelete(m_hw_mutex);
+        m_hw_mutex = nullptr;
+    }
+}
 
 bool McpwmStepGenerator::init(int left_step_pin, int right_step_pin, bool common_anode) {
     m_left_pin = left_step_pin;
     m_right_pin = right_step_pin;
     m_common_anode = common_anode;
+
+    if (!m_hw_mutex) {
+        m_hw_mutex = xSemaphoreCreateMutex();
+        if (!m_hw_mutex) {
+            return false;
+        }
+    }
 
     // 1. Initial configuration of GPIOs for MCPWM Unit 0
     mcpwm_gpio_init(MCPWM_UNIT_0, MCPWM0A, (gpio_num_t)m_left_pin);
@@ -38,8 +51,12 @@ bool McpwmStepGenerator::init(int left_step_pin, int right_step_pin, bool common
     return true;
 }
 
-void McpwmStepGenerator::setFrequency(bool is_left, uint32_t freq_hz) {
+bool McpwmStepGenerator::setFrequency(bool is_left, uint32_t freq_hz) {
 #if !defined(UNIT_TEST)
+    if (m_hw_mutex && xSemaphoreTake(m_hw_mutex, pdMS_TO_TICKS(1)) != pdTRUE) {
+        return false;
+    }
+
     mcpwm_timer_t timer = is_left ? MCPWM_TIMER_0 : MCPWM_TIMER_1;
     uint32_t& current_freq = is_left ? m_current_freq_l : m_current_freq_r;
 
@@ -53,7 +70,10 @@ void McpwmStepGenerator::setFrequency(bool is_left, uint32_t freq_hz) {
             mcpwm_set_duty(MCPWM_UNIT_0, timer, MCPWM_OPR_A, 0.0);
             current_freq = 0;
         }
-        return;
+        if (m_hw_mutex) {
+            xSemaphoreGive(m_hw_mutex);
+        }
+        return true;
     }
 
     if (current_freq == 0) {
@@ -65,7 +85,13 @@ void McpwmStepGenerator::setFrequency(bool is_left, uint32_t freq_hz) {
         mcpwm_set_frequency(MCPWM_UNIT_0, timer, freq_hz);
         current_freq = freq_hz;
     }
+
+    if (m_hw_mutex) {
+        xSemaphoreGive(m_hw_mutex);
+    }
 #endif
+
+    return true;
 }
 
 void McpwmStepGenerator::stopAll() {

@@ -8,7 +8,29 @@
 #include "filter_manager.h"
 #include "tuning_capture.h"
 #include "SystemTasks.h"
+#include "motor_drivers/driver_manager.h"
+#include "../../config/balancing/lqr_config.h"
 #include <Arduino.h>
+
+namespace {
+
+void startBalanceControlSession(float start_pitch) {
+    if (auto driver = abbot::motor::getActiveMotorDriver()) {
+        driver->disableMotors();
+        driver->clearCommandState();
+        driver->enableMotors();
+    }
+    abbot::balancer::controller::start(start_pitch);
+}
+
+void stopBalanceControlSession() {
+    abbot::balancer::controller::stop();
+    if (auto driver = abbot::motor::getActiveMotorDriver()) {
+        driver->disableMotors();
+    }
+}
+
+}
 
 namespace abbot {
 namespace serialcmds {
@@ -21,7 +43,7 @@ BalancerCommandHandler::BalancerCommandHandler(IFusionService* fusionService)
     m_menu->addEntry(1, "BALANCE START [FORCE]",
                   [this](const String &p) { balancerStartHandler(p); });
     m_menu->addEntry(2, "BALANCE STOP",
-                  [](const String &) { abbot::balancer::controller::stop(); });
+                  [](const String &) { stopBalanceControlSession(); });
     
     // Strategy selection
     m_menu->addEntry(3, "BALANCE STRATEGY <PID|LQR>", [](const String &p) {
@@ -136,6 +158,53 @@ BalancerCommandHandler::BalancerCommandHandler(IFusionService* fusionService)
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE LQR FILTER [SHOW|SET <pitch_rate_hz> <cmd_hz>|RESET]");
     });
 
+    m_menu->addEntry(23, "BALANCE LQR YAW [SHOW|SET <ky> <kyr>|RESET]", [](const String &p) {
+        auto* strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
+        if (!strategy) {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: Error - Strategy not found");
+            return;
+        }
+        auto* lqr = static_cast<abbot::balancing::CascadedLqrStrategy*>(strategy);
+
+        String s = p;
+        s.trim();
+        String s_upper = s;
+        s_upper.toUpperCase();
+
+        if (s_upper.length() == 0 || s_upper == "SHOW") {
+            auto cfg = lqr->getConfig();
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: yaw gains Ky=%.6f Kyr=%.6f\n",
+                       (double)cfg.k_yaw, (double)cfg.k_yaw_rate);
+            return;
+        }
+
+        if (s_upper == "RESET") {
+            auto cfg = lqr->getConfig();
+            cfg.k_yaw = BALANCER_DEFAULT_K_YAW;
+            cfg.k_yaw_rate = BALANCER_DEFAULT_K_YAW_RATE;
+            lqr->setConfig(cfg);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: yaw gains reset Ky=%.6f Kyr=%.6f\n",
+                       (double)cfg.k_yaw, (double)cfg.k_yaw_rate);
+            return;
+        }
+
+        if (s_upper.startsWith("SET")) {
+            float ky = 0.0f;
+            float kyr = 0.0f;
+            if (sscanf(s.c_str(), "SET %f %f", &ky, &kyr) == 2) {
+                auto cfg = lqr->getConfig();
+                cfg.k_yaw = ky;
+                cfg.k_yaw_rate = kyr;
+                lqr->setConfig(cfg);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: yaw gains updated Ky=%.6f Kyr=%.6f\n",
+                           (double)cfg.k_yaw, (double)cfg.k_yaw_rate);
+                return;
+            }
+        }
+
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE LQR YAW [SHOW|SET <ky> <kyr>|RESET]");
+    });
+
     // Shared settings (Motors, Trim, Deadband)
     m_menu->addEntry(30, "BALANCE DEADBAND <GET|SET <v>|CALIBRATE>", [](const String &p) {
         String s = p; s.trim(); s.toUpperCase();
@@ -202,7 +271,7 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
     s.trim();
     if (s == "BALANCE") {
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
-            "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> <kd>] | BALANCE DEADBAND GET|SET | BALANCE STRATEGY <PID|LQR>");
+            "BALANCE usage: BALANCE START | BALANCE STOP | BALANCE GAINS [<kp> <ki> <kd>] | BALANCE DEADBAND GET|SET | BALANCE STRATEGY <PID|LQR> | BALANCE LQR YAW [SHOW|SET <ky> <kyr>|RESET]");
         return true;
     }
 
@@ -210,13 +279,24 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
         balancerStartHandler(line.substring(13));
         return true;
     } else if (s == "BALANCE STOP") {
-        abbot::balancer::controller::stop();
+        stopBalanceControlSession();
+        return true;
+    } else if (s == "BALANCE DEADBAND GET") {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: deadband=%.6f\n", (double)abbot::balancer::controller::getDeadband());
         return true;
     } else if (s.startsWith("BALANCE DEADBAND SET ")) {
         balancerDeadbandSetHandler(line.substring(21));
         return true;
+    } else if (s == "BALANCE MIN_CMD GET") {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "BALANCER: min_cmd=%.6f\n", (double)abbot::balancer::controller::getMinCmd());
+        return true;
     } else if (s.startsWith("BALANCE MIN_CMD SET ")) {
         balancerMinCmdSetHandler(line.substring(20));
+        return true;
+    } else if (s == "BALANCE MOTOR_GAINS" || s == "BALANCE MOTOR_GAINS GET") {
+        float l, r;
+        abbot::balancer::controller::getMotorGains(l, r);
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "MOTOR_GAINS: L=%.3f R=%.3f\n", (double)l, (double)r);
         return true;
     } else if (s.startsWith("BALANCE MOTOR_GAINS SET ")) {
         balancerMotorGainsSetHandler(line.substring(24));
@@ -317,6 +397,53 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
 
         LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE LQR FILTER [SHOW|SET <pitch_rate_hz> <cmd_hz>|RESET]");
         return true;
+    } else if (s.startsWith("BALANCE LQR YAW")) {
+        String p = line.substring(16);
+        p.trim();
+
+        auto* strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
+        if (!strategy) {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "LQR: Error - Strategy not found");
+            return true;
+        }
+        auto* lqr = static_cast<abbot::balancing::CascadedLqrStrategy*>(strategy);
+
+        String p_upper = p;
+        p_upper.toUpperCase();
+
+        if (p_upper.length() == 0 || p_upper == "SHOW") {
+            auto cfg = lqr->getConfig();
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: yaw gains Ky=%.6f Kyr=%.6f\n",
+                       (double)cfg.k_yaw, (double)cfg.k_yaw_rate);
+            return true;
+        }
+
+        if (p_upper == "RESET") {
+            auto cfg = lqr->getConfig();
+            cfg.k_yaw = BALANCER_DEFAULT_K_YAW;
+            cfg.k_yaw_rate = BALANCER_DEFAULT_K_YAW_RATE;
+            lqr->setConfig(cfg);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: yaw gains reset Ky=%.6f Kyr=%.6f\n",
+                       (double)cfg.k_yaw, (double)cfg.k_yaw_rate);
+            return true;
+        }
+
+        if (p_upper.startsWith("SET ")) {
+            float ky = 0.0f;
+            float kyr = 0.0f;
+            if (sscanf(p.c_str(), "SET %f %f", &ky, &kyr) == 2) {
+                auto cfg = lqr->getConfig();
+                cfg.k_yaw = ky;
+                cfg.k_yaw_rate = kyr;
+                lqr->setConfig(cfg);
+                LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: yaw gains updated Ky=%.6f Kyr=%.6f\n",
+                           (double)cfg.k_yaw, (double)cfg.k_yaw_rate);
+                return true;
+            }
+        }
+
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "Usage: BALANCE LQR YAW [SHOW|SET <ky> <kyr>|RESET]");
+        return true;
     }
 
     return false;
@@ -325,6 +452,14 @@ bool BalancerCommandHandler::handleBalance(const String& line, const String& up)
 void BalancerCommandHandler::balancerStartHandler(const String &p) {
   bool force = (p.indexOf("FORCE") >= 0);
   float start_pitch = 0.0f;
+
+    if (!abbot::isImuDataFresh(500)) {
+        abbot::requestImuReinitialize();
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                                "ERROR: IMU data is stale. Reinit requested; wait a moment and retry BALANCE START.");
+        return;
+    }
+
   if (m_fusionService) {
     start_pitch = m_fusionService->getPitch();
   }
@@ -334,7 +469,7 @@ void BalancerCommandHandler::balancerStartHandler(const String &p) {
       return;
   }
   
-  abbot::balancer::controller::start(start_pitch);
+    startBalanceControlSession(start_pitch);
 }
 
 void BalancerCommandHandler::balancerSetGainsHandler(const String &p) {

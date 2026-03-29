@@ -6,12 +6,29 @@ namespace abbot {
 namespace motor {
 
 RmtStepGenerator::RmtStepGenerator() {}
-RmtStepGenerator::~RmtStepGenerator() { stopAll(); }
+RmtStepGenerator::~RmtStepGenerator() {
+    stopAll();
+#if !defined(UNIT_TEST_HOST)
+    if (m_left_mutex)  { vSemaphoreDelete(m_left_mutex);  m_left_mutex  = nullptr; }
+    if (m_right_mutex) { vSemaphoreDelete(m_right_mutex); m_right_mutex = nullptr; }
+#endif
+}
 
 bool RmtStepGenerator::init(int left_step_pin, int right_step_pin, bool common_anode) {
     m_left_pin = left_step_pin;
     m_right_pin = right_step_pin;
     m_common_anode = common_anode;
+
+#if !defined(UNIT_TEST_HOST)
+    if (!m_left_mutex) {
+        m_left_mutex = xSemaphoreCreateMutex();
+        if (!m_left_mutex) return false;
+    }
+    if (!m_right_mutex) {
+        m_right_mutex = xSemaphoreCreateMutex();
+        if (!m_right_mutex) return false;
+    }
+#endif
 
     rmt_config_t config_l = {};
     config_l.rmt_mode = RMT_MODE_TX;
@@ -44,7 +61,14 @@ bool RmtStepGenerator::init(int left_step_pin, int right_step_pin, bool common_a
     return true;
 }
 
-void RmtStepGenerator::setFrequency(bool is_left, uint32_t freq_hz) {
+bool RmtStepGenerator::setFrequency(bool is_left, uint32_t freq_hz) {
+#if !defined(UNIT_TEST_HOST)
+    SemaphoreHandle_t chan_mutex = is_left ? m_left_mutex : m_right_mutex;
+    if (chan_mutex && xSemaphoreTake(chan_mutex, pdMS_TO_TICKS(2)) != pdTRUE) {
+        return false;
+    }
+#endif
+
     uint32_t& current_freq = is_left ? m_current_freq_l : m_current_freq_r;
     rmt_channel_t chan = is_left ? m_left_chan : m_right_chan;
 
@@ -53,18 +77,26 @@ void RmtStepGenerator::setFrequency(bool is_left, uint32_t freq_hz) {
     }
 
     // Stop if frequency is too low or zero
-    if (freq_hz < 8) { 
+    if (freq_hz < 8) {
         if (current_freq != 0) {
             rmt_tx_stop(chan);
             current_freq = 0;
         }
-        return;
+#if !defined(UNIT_TEST_HOST)
+        if (chan_mutex) xSemaphoreGive(chan_mutex);
+#endif
+        return true;
     }
 
     if (current_freq != freq_hz) {
         updateHardware(chan, freq_hz);
         current_freq = freq_hz;
     }
+
+#if !defined(UNIT_TEST_HOST)
+    if (chan_mutex) xSemaphoreGive(chan_mutex);
+#endif
+    return true;
 }
 
 void RmtStepGenerator::updateHardware(rmt_channel_t channel, uint32_t freq) {
@@ -95,11 +127,12 @@ void RmtStepGenerator::updateHardware(rmt_channel_t channel, uint32_t freq) {
         {{{ (uint16_t)half_period_ticks, level1, (uint16_t)half_period_ticks, level2 }}}
     };
 
-    // 4. Write and start. We use wait_tx_done=false as we use loop_en.
-    esp_err_t err = rmt_write_items(channel, items, 1, false);
-    if (err == ESP_OK) {
-        rmt_tx_start(channel, false);
-    }
+    // 4. Write directly into RMT memory (non-blocking) and restart.
+    // rmt_fill_tx_items is a direct memcpy with no internal semaphore,
+    // avoiding the potential blocking found in rmt_write_items on ESP32-S3
+    // when loop_en=true (tx_sem may never be signalled in that mode).
+    rmt_fill_tx_items(channel, items, 1, 0);
+    rmt_tx_start(channel, false);
 }
 
 void RmtStepGenerator::stopAll() {

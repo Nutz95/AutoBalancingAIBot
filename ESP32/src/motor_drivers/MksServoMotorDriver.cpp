@@ -13,14 +13,28 @@ namespace motor {
 
 namespace {
 
-SemaphoreHandle_t g_step_dir_mutex = nullptr;
+void setHardwareEnablePin(abbot::motor::IMotorDriver::MotorSide side, bool enable) {
+#if MKS_SERVO_USE_STEP_DIR
+    bool pin_level = enable ? LOW : HIGH;
+#if !MKS_SERVO_COMMON_ANODE
+    pin_level = !pin_level;
+#endif
+    if (side == abbot::motor::IMotorDriver::MotorSide::LEFT) {
+        digitalWrite(MKS_SERVO_P1_EN_PIN, pin_level);
+    } else {
+        digitalWrite(MKS_SERVO_P2_EN_PIN, pin_level);
+    }
+#else
+    (void)side;
+    (void)enable;
+#endif
+}
 
 } // namespace
 
 MksServoMotorDriver::MksServoMotorDriver()
     : m_left{LEFT_MOTOR_ID, LEFT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(MKS_SERVO_SPEED_ALPHA)},
       m_right{RIGHT_MOTOR_ID, RIGHT_MOTOR_INVERT != 0, 0.0f, 0, 0, 0, 0, 0, false, SpeedEstimator(MKS_SERVO_SPEED_ALPHA)},
-      m_enabled(false),
       m_leftBusMutex(xSemaphoreCreateRecursiveMutex()),
       m_rightBusMutex(xSemaphoreCreateRecursiveMutex()) {
 #if !defined(UNIT_TEST_HOST)
@@ -116,10 +130,6 @@ void MksServoMotorDriver::initMotorDriver() {
     m_stepGenerator.init(MKS_SERVO_P1_STEP_PIN, MKS_SERVO_P2_STEP_PIN, MKS_SERVO_COMMON_ANODE != 0);
 
     LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "mks_servo: Step/Dir (Hybrid) Hardware Initialized");
-
-    if (!g_step_dir_mutex) {
-        g_step_dir_mutex = xSemaphoreCreateMutex();
-    }
 #endif
 
     // Stage 3: Initial Configuration Injection
@@ -162,6 +172,69 @@ void MksServoMotorDriver::motorTaskEntry(void* pvParameters) {
     driver->runMotorTask(side);
 }
 
+void MksServoMotorDriver::applyStepDirCommand(MotorSide side, float command, bool enabled) {
+#if MKS_SERVO_USE_STEP_DIR
+    AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
+    MotorState& state = (side == MotorSide::LEFT) ? m_left : m_right;
+
+    bool dir = (command >= 0.0f);
+    if (state.invert) {
+        dir = !dir;
+    }
+#if MKS_SERVO_PULSE_DIR_INVERT
+    dir = !dir;
+#endif
+#if MKS_SERVO_COMMON_ANODE
+    dir = !dir;
+#endif
+
+    const int dir_pin = (side == MotorSide::LEFT) ? MKS_SERVO_P1_DIR_PIN : MKS_SERVO_P2_DIR_PIN;
+    digitalWrite(dir_pin, dir ? HIGH : LOW);
+
+    float abs_cmd = fabsf(command);
+    uint32_t freq = 0;
+    if (abs_cmd >= 0.001f && enabled) {
+        freq = (uint32_t)((abs_cmd * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
+    }
+
+    uint32_t now_us = micros();
+    uint32_t step_interval_us = 0;
+#if MKS_SERVO_STEP_UPDATE_HZ > 0
+    step_interval_us = (uint32_t)(1000000UL / (uint32_t)MKS_SERVO_STEP_UPDATE_HZ);
+#endif
+    async.step_freq_requested.store(freq);
+    bool time_ok = (step_interval_us == 0U) ||
+                   ((int32_t)(now_us - async.last_ledc_update_us) >= (int32_t)step_interval_us);
+    bool should_update = false;
+    const uint32_t applied_freq = async.last_ledc_freq;
+
+    if (freq == 0U) {
+        should_update = (async.last_ledc_freq != 0U) || !enabled;
+    } else if (enabled && time_ok && abs((int)freq - (int)async.last_ledc_freq) > MKS_SERVO_STEP_DEADBAND_HZ) {
+        should_update = true;
+    } else if (enabled && freq > 0U && applied_freq > 0U &&
+               (applied_freq < (freq / 4U) || applied_freq > (freq * 4U))) {
+        should_update = true;
+    }
+
+    if (!should_update) {
+        return;
+    }
+
+    if (!m_stepGenerator.setFrequency(side == MotorSide::LEFT, freq)) {
+        async.step_mutex_miss.fetch_add(1);
+        return;
+    }
+    async.last_ledc_freq = freq;
+    async.last_ledc_update_us = now_us;
+    async.step_apply_ok.fetch_add(1);
+#else
+    (void)side;
+    (void)command;
+    (void)enabled;
+#endif
+}
+
 void MksServoMotorDriver::runMotorTask(MotorSide side) {
     AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
     MotorState& state = (side == MotorSide::LEFT) ? m_left : m_right;
@@ -180,6 +253,8 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
     MksServoProtocol::AckParser ack_parser;
     bool function_pending = false;
     FunctionCommandItem pending_function;
+    uint32_t seen_reset_epoch = async.runtime_reset_epoch.load();
+    uint32_t applied_periodic_interval_ms = 0xFFFFFFFFu;
 
     auto canTransmitNow = [&]() -> bool {
         uint32_t now_us = micros();
@@ -194,20 +269,43 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
             next_tx_allowed_us = now_us;
         }
     };
-    
+
     while (true) {
+        uint32_t current_reset_epoch = async.runtime_reset_epoch.load();
+        if (current_reset_epoch != seen_reset_epoch) {
+            seen_reset_epoch = current_reset_epoch;
+            ack_pending = false;
+            ack_deadline_us = 0;
+            ack_start_us = 0;
+            ack_expected_function = 0xF6;
+            ack_parser.received = 0;
+            function_pending = false;
+            pending_function = FunctionCommandItem{};
+            next_tx_allowed_us = 0;
+            applied_periodic_interval_ms = 0xFFFFFFFFu;
+            async.ack_pending_time_us.store(0);
+            LOG_PRINTF_TRY(abbot::log::CHANNEL_MOTOR,
+                           "mks_servo: task state reset %s epoch=%lu\n",
+                           (side == MotorSide::LEFT ? "LEFT" : "RIGHT"),
+                           (unsigned long)current_reset_epoch);
+        }
+
         // In Hybrid (Step/Dir) mode, we don't need 1000Hz RS485 reactivity because 
         // pulses are hardware-generated. We wait for the telemetry interval.
         // In Serial mode, we wait 1ms to process speed commands with low latency.
         uint32_t wait_ms = 1;
 #if MKS_SERVO_USE_STEP_DIR
-        // If we are waiting for an ACK, wake up often (1ms). 
-        // Otherwise, we can wait until the next telemetry interval (20ms).
-        if (!ack_pending) {
-            wait_ms = telemetry_interval_ms;
-        }
+        // In hybrid Step/Dir mode, keep the motor task on a short periodic cadence
+        // even if notifications are missed/coalesced. This prevents one side from
+        // falling behind purely because its task wasn't explicitly woken.
+        wait_ms = ack_pending ? 1 : 2;
 #endif
-        ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms)); 
+        uint32_t wake_count = ulTaskNotifyTake(pdTRUE, pdMS_TO_TICKS(wait_ms));
+        if (wake_count > 0) {
+            async.task_notify_wake.fetch_add(1);
+        } else {
+            async.task_timeout_wake.fetch_add(1);
+        }
 
         uint32_t now_ms = millis();
         if (xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(10)) == pdTRUE) {
@@ -317,7 +415,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                 continue;
             }
 
-            bool current_enabled = m_enabled;
+            bool current_enabled = m_enabled.load();
             bool enabled_changed = (current_enabled != async.last_reported_enabled.load());
             bool speed_dirty = async.speed_dirty.exchange(false);
             
@@ -331,15 +429,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     markTransmitted();
 
                     // Update physical EN pins (Now mandatory with Step/Dir hybrid)
-                    bool pin_level = target_en ? LOW : HIGH;
-#if !MKS_SERVO_COMMON_ANODE
-                    pin_level = !pin_level;
-#endif
-                    if (side == MotorSide::LEFT) {
-                        digitalWrite(MKS_SERVO_P1_EN_PIN, pin_level);
-                    } else {
-                        digitalWrite(MKS_SERVO_P2_EN_PIN, pin_level);
-                    }
+                    setHardwareEnablePin(side, target_en);
 
                     async.last_reported_enabled.store(target_en);
                     speed_dirty = true;
@@ -348,12 +438,50 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                 }
             }
 
+            // 1b. Apply desired periodic telemetry state from within the motor task
+            // so ordering stays deterministic relative to torque enable/disable.
+            const uint32_t desired_periodic_interval_ms =
+                async.desired_periodic_interval_ms.load();
+            if (desired_periodic_interval_ms != applied_periodic_interval_ms) {
+                const bool can_disable_periodic = (desired_periodic_interval_ms == 0u);
+                const bool can_enable_periodic =
+                    current_enabled && !enabled_changed &&
+                    (async.last_reported_enabled.load() == current_enabled);
+                if ((can_disable_periodic || can_enable_periodic) &&
+                    canTransmitNow()) {
+                    MksServoProtocol::StatusCode status =
+                        MksServoProtocol::StatusCode::Ok;
+                    protocol.setPeriodicReadParameter(
+                        state.id,
+                        MksServoProtocol::FUNC_READ_TELEMETRY,
+                        (uint16_t)desired_periodic_interval_ms,
+                        status);
+                    markTransmitted();
+                    applied_periodic_interval_ms = desired_periodic_interval_ms;
+                    async.last_telemetry_ms = now_ms;
+                    LOG_PRINTF_TRY(
+                        abbot::log::CHANNEL_MOTOR,
+                        "mks_servo: periodic applied %s id=0x%02X interval=%lu ms\n",
+                        (side == MotorSide::LEFT ? "LEFT" : "RIGHT"),
+                        state.id,
+                        (unsigned long)desired_periodic_interval_ms);
+                }
+            }
+
             // 2. Send Speed Command
 #if MKS_SERVO_USE_STEP_DIR
-            // Speed is handled by hardware pulses (Zero Latency). 
-            // We skip sending RS485 speed packets to avoid bus congestion and mode conflicts.
-            if (speed_dirty) {
-                async.speed_cmd_sent.fetch_add(1);
+            // In hybrid Step/Dir mode, apply hardware pulse updates from the dedicated
+            // motor task instead of the IMU consumer thread. This keeps any potentially
+            // blocking peripheral interaction off the 1kHz fusion/control path.
+            bool should_poll_step_dir = speed_dirty || enabled_changed || current_enabled ||
+                                        (async.last_ledc_freq != 0U);
+            if (should_poll_step_dir) {
+                float cmd = current_enabled ? async.target_speed.load() : 0.0f;
+                async.step_poll_count.fetch_add(1);
+                applyStepDirCommand(side, cmd, current_enabled);
+                if (speed_dirty || enabled_changed) {
+                    async.speed_cmd_sent.fetch_add(1);
+                }
             }
 #else
             if (speed_dirty || (enabled_changed && current_enabled)) {
@@ -423,8 +551,32 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     async.encoder_ok.fetch_add(1);
                 }
             }
+
+            if (current_enabled && desired_periodic_interval_ms > 0) {
+                uint32_t enc_age_ms = getLastEncoderAgeMs(side);
+                if (enc_age_ms > 250 &&
+                    (now_ms - async.last_telemetry_ms) >= 1000 &&
+                    canTransmitNow()) {
+                    MksServoProtocol::StatusCode status = MksServoProtocol::StatusCode::Ok;
+                    protocol.setPeriodicReadParameter(
+                        state.id,
+                        MksServoProtocol::FUNC_READ_TELEMETRY,
+                        (uint16_t)desired_periodic_interval_ms,
+                        status);
+                    markTransmitted();
+                    async.last_telemetry_ms = now_ms;
+                    async.periodic_rearm.fetch_add(1);
+                    LOG_PRINTF_TRY(abbot::log::CHANNEL_MOTOR,
+                                   "mks_servo: rearm telemetry %s id=0x%02X enc_age=%lu ms\n",
+                                   (side == MotorSide::LEFT ? "LEFT" : "RIGHT"),
+                                   state.id,
+                                   (unsigned long)enc_age_ms);
+                }
+            }
 #endif
             xSemaphoreGiveRecursive(mutex);
+        } else {
+            async.bus_mutex_miss.fetch_add(1);
         }
 
         // Cooperative yield to avoid Watchdog triggers, especially if telemetry is failing.
@@ -453,13 +605,100 @@ MksServoTelemetryIngest& MksServoMotorDriver::getTelemetryIngestForSide(MotorSid
     return *m_rightTelemetryIngest;
 }
 
+void MksServoMotorDriver::resetRuntimeStateForSide(MotorSide side, bool target_enabled) {
+    AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
+    MotorState& state = (side == MotorSide::LEFT) ? m_left : m_right;
+    HardwareSerial& serial = (side == MotorSide::LEFT) ? Serial2 : Serial1;
+    MksServoTelemetryIngest* ingest = (side == MotorSide::LEFT) ? m_leftTelemetryIngest : m_rightTelemetryIngest;
+    QueueHandle_t queue = getQueueForMotor(side);
+    SemaphoreHandle_t mutex = getMutexForMotor(side);
+    const uint32_t now_us = (uint32_t)esp_timer_get_time();
+
+    if (queue) {
+        xQueueReset(queue);
+    }
+
+    if (mutex && xSemaphoreTakeRecursive(mutex, pdMS_TO_TICKS(20)) == pdTRUE) {
+        while (serial.available() > 0) {
+            serial.read();
+        }
+
+        if (ingest) {
+            ingest->reset();
+        }
+
+        xSemaphoreGiveRecursive(mutex);
+    } else if (ingest) {
+        ingest->reset();
+    }
+
+    async.target_speed.store(0.0f);
+    async.speed_dirty.store(true);
+    // NOTE: encoder_value is intentionally NOT reset to 0 here.
+    // The MKS servo encoder is absolute (hardware position persists between runs).
+    // Resetting to 0 creates a spurious "dist_err" jump when the next telemetry
+    // packet arrives with the real hardware position, causing immediate LQR saturation.
+    // The stale guard (last_encoder_time_us = 0 below) is sufficient to mark data as untrustworthy.
+    async.speed_value.store(0.0f);
+    async.encoder_dirty.store(false);
+    async.last_latency_us.store(0);
+    async.last_latency_age_ms.store(0);
+    async.ack_pending_time_us.store(0);
+    async.last_cmd_send_time_us.store(0);
+    async.last_cmd_update_time_us.store(now_us);
+    async.last_encoder_time_us.store(0);
+    async.last_reported_enabled.store(!target_enabled);
+    async.step_freq_requested.store(0);
+    async.desired_periodic_interval_ms.store(0xFFFFFFFFu);
+    async.interpolator.reset();
+    async.last_zero_ms = 0;
+    async.last_ledc_freq = 0;
+    async.last_ledc_update_us = 0;
+    async.last_telemetry_ms = 0;
+
+    // Reset per-run diagnostic counters so each run's stats are visible independently.
+    async.speed_cmd_sent.store(0);
+    async.speed_ack_timeout.store(0);
+    async.speed_ack_error.store(0);
+    async.encoder_ok.store(0);
+    async.encoder_timeout.store(0);
+    async.bus_mutex_miss.store(0);
+    async.step_apply_ok.store(0);
+    async.step_mutex_miss.store(0);
+    async.step_poll_count.store(0);
+    async.task_notify_wake.store(0);
+    async.task_timeout_wake.store(0);
+    async.function_queue_full.store(0);
+    async.periodic_rearm.store(0);
+
+    async.runtime_reset_epoch.fetch_add(1);
+
+    state.last_command = 0.0f;
+    state.enabled = target_enabled;
+    state.last_encoder = 0;
+    state.last_command_time_us = 0;
+    state.last_encoder_read_ms = 0;
+    state.speedEstimator.reset();
+
+#if MKS_SERVO_USE_STEP_DIR
+    if (!m_stepGenerator.setFrequency(side == MotorSide::LEFT, 0)) {
+        async.step_mutex_miss.fetch_add(1);
+    }
+#endif
+}
+
 void MksServoMotorDriver::queuePeriodicTelemetry(MotorSide side, uint8_t code, uint16_t interval_ms) {
 #if MKS_SERVO_TELEMETRY_ENABLED
-    uint8_t payload[3];
-    payload[0] = code;
-    payload[1] = (uint8_t)((interval_ms >> 8) & 0xFF);
-    payload[2] = (uint8_t)(interval_ms & 0xFF);
-    sendFunctionCommand(side, MksServoProtocol::FUNC_SET_PERIODIC, payload, 3);
+    AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
+    uint32_t previous_interval = async.desired_periodic_interval_ms.load();
+    if (previous_interval == (uint32_t)interval_ms) {
+        return;
+    }
+    async.desired_periodic_interval_ms.store((uint32_t)interval_ms);
+    TaskHandle_t h = (side == MotorSide::LEFT) ? m_left_async.task_handle : m_right_async.task_handle;
+    if (h) {
+        xTaskNotifyGive(h);
+    }
 #else
     (void)side;
     (void)code;
@@ -479,16 +718,19 @@ float MksServoMotorDriver::getLastMotorCommand(MotorSide side) {
 }
 
 void MksServoMotorDriver::enableMotors() {
-    if (m_enabled) {
-        return;
+    if (m_enabled.load()) {
+        LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: enable requested while already enabled; forcing motor state resync");
+    } else {
+        LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: enabling motors (Queueing Torque ON)");
     }
-    
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: enabling motors (Queueing Torque ON)");
-    m_enabled = true;
+    m_enabled.store(true);
+    resetRuntimeStateForSide(MotorSide::LEFT, true);
+    resetRuntimeStateForSide(MotorSide::RIGHT, true);
+    setHardwareEnablePin(MotorSide::LEFT, true);
+    setHardwareEnablePin(MotorSide::RIGHT, true);
 
     uint16_t interval = (uint16_t)MKS_SERVO_PERIODIC_TELEMETRY_MS;
     queuePeriodicTelemetry(MotorSide::LEFT, MksServoProtocol::FUNC_READ_TELEMETRY, interval);
-    delay(10);
     queuePeriodicTelemetry(MotorSide::RIGHT, MksServoProtocol::FUNC_READ_TELEMETRY, interval);
     
     // Notify background tasks to perform Torque ON and initial speed sync
@@ -501,17 +743,23 @@ void MksServoMotorDriver::enableMotors() {
 }
 
 void MksServoMotorDriver::disableMotors() {
-    if (!m_enabled) {
-        return;
+    if (!m_enabled.load()) {
+        LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: disable requested while already disabled; forcing motor state reset");
+    } else {
+        LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: disabling motors (Queueing Torque OFF)");
     }
+    m_enabled.store(false);
+    resetRuntimeStateForSide(MotorSide::LEFT, false);
+    resetRuntimeStateForSide(MotorSide::RIGHT, false);
+    setHardwareEnablePin(MotorSide::LEFT, false);
+    setHardwareEnablePin(MotorSide::RIGHT, false);
 
-    LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "mks_servo: disabling motors (Queueing Torque OFF)");
-    m_enabled = false;
+#if MKS_SERVO_USE_STEP_DIR
+    m_stepGenerator.stopAll();
+#endif
 
     queuePeriodicTelemetry(MotorSide::LEFT, MksServoProtocol::FUNC_READ_TELEMETRY, 0);
-    delay(2);
     queuePeriodicTelemetry(MotorSide::RIGHT, MksServoProtocol::FUNC_READ_TELEMETRY, 0);
-    delay(2);
 
     // Notify background tasks to perform Torque OFF
     if (m_left_async.task_handle) {
@@ -572,14 +820,14 @@ uint32_t MksServoMotorDriver::getLastEncoderAgeMs(MotorSide side) const {
 }
 
 bool MksServoMotorDriver::areMotorsEnabled() {
-    return m_enabled;
+    return m_enabled.load();
 }
 
 void MksServoMotorDriver::printStatus() {
     uint32_t lat_us = getLastBusLatencyUs();
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
                "mks_servo: enabled=%d ack=%d accel=%u bus_lat_us=%lu L_cmd=%.3f R_cmd=%.3f\n",
-               m_enabled, (int)m_wait_for_ack.load(), (unsigned)m_speed_accel.load(), (unsigned long)lat_us,
+               (int)m_enabled.load(), (int)m_wait_for_ack.load(), (unsigned)m_speed_accel.load(), (unsigned long)lat_us,
                (double)m_left.last_command, (double)m_right.last_command);
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
                "mks_servo: L sent=%lu ack_to=%lu ack_err=%lu enc_ok=%lu enc_to=%lu | R sent=%lu ack_to=%lu ack_err=%lu enc_ok=%lu enc_to=%lu\n",
@@ -593,6 +841,58 @@ void MksServoMotorDriver::printStatus() {
                (unsigned long)m_right_async.speed_ack_error.load(),
                (unsigned long)m_right_async.encoder_ok.load(),
                (unsigned long)m_right_async.encoder_timeout.load());
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "mks_servo: L step_ok=%lu step_miss=%lu req_freq=%lu poll=%lu notify=%lu timeout=%lu bus_miss=%lu qfull=%lu rearm=%lu periodic=%lu | R step_ok=%lu step_miss=%lu req_freq=%lu poll=%lu notify=%lu timeout=%lu bus_miss=%lu qfull=%lu rearm=%lu periodic=%lu\n",
+               (unsigned long)m_left_async.step_apply_ok.load(),
+               (unsigned long)m_left_async.step_mutex_miss.load(),
+               (unsigned long)m_left_async.step_freq_requested.load(),
+               (unsigned long)m_left_async.step_poll_count.load(),
+               (unsigned long)m_left_async.task_notify_wake.load(),
+               (unsigned long)m_left_async.task_timeout_wake.load(),
+               (unsigned long)m_left_async.bus_mutex_miss.load(),
+               (unsigned long)m_left_async.function_queue_full.load(),
+               (unsigned long)m_left_async.periodic_rearm.load(),
+               (unsigned long)m_left_async.desired_periodic_interval_ms.load(),
+               (unsigned long)m_right_async.step_apply_ok.load(),
+               (unsigned long)m_right_async.step_mutex_miss.load(),
+               (unsigned long)m_right_async.step_freq_requested.load(),
+               (unsigned long)m_right_async.step_poll_count.load(),
+               (unsigned long)m_right_async.task_notify_wake.load(),
+               (unsigned long)m_right_async.task_timeout_wake.load(),
+               (unsigned long)m_right_async.bus_mutex_miss.load(),
+               (unsigned long)m_right_async.function_queue_full.load(),
+               (unsigned long)m_right_async.periodic_rearm.load(),
+               (unsigned long)m_right_async.desired_periodic_interval_ms.load());
+
+    unsigned long left_stack = 0;
+    unsigned long right_stack = 0;
+    int left_state = -1;
+    int right_state = -1;
+    if (m_left_async.task_handle) {
+        left_stack = (unsigned long)uxTaskGetStackHighWaterMark(m_left_async.task_handle);
+        left_state = (int)eTaskGetState(m_left_async.task_handle);
+    }
+    if (m_right_async.task_handle) {
+        right_stack = (unsigned long)uxTaskGetStackHighWaterMark(m_right_async.task_handle);
+        right_state = (int)eTaskGetState(m_right_async.task_handle);
+    }
+
+    LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
+               "mks_servo: L tgt=%.3f cmd=%.3f freq=%lu en_sync=%d enc_age=%lums task_state=%d stack_hw=%lu | R tgt=%.3f cmd=%.3f freq=%lu en_sync=%d enc_age=%lums task_state=%d stack_hw=%lu\n",
+               (double)m_left_async.target_speed.load(),
+               (double)m_left.last_command,
+               (unsigned long)m_left_async.last_ledc_freq,
+               (int)m_left_async.last_reported_enabled.load(),
+               (unsigned long)getLastEncoderAgeMs(MotorSide::LEFT),
+               left_state,
+               left_stack,
+               (double)m_right_async.target_speed.load(),
+               (double)m_right.last_command,
+               (unsigned long)m_right_async.last_ledc_freq,
+               (int)m_right_async.last_reported_enabled.load(),
+               (unsigned long)getLastEncoderAgeMs(MotorSide::RIGHT),
+               right_state,
+               right_stack);
 }
 
 void MksServoMotorDriver::dumpConfig() {
@@ -616,94 +916,16 @@ void MksServoMotorDriver::setMotorCommandBoth(float left_command, float right_co
     m_left.last_command = left_command;
     m_right.last_command = right_command;
 
-#if MKS_SERVO_USE_STEP_DIR
-    // 2. Immediate Step/Dir hardware update (Zero Latency)
-    // We update even if a telemetry quiet window is requested; the quiet window
-    // will temporarily override this, but hardware settings must remain up-to-date.
-
-    // Left Motor (Channel 0)
-    {
-        bool left_dir = (left_command >= 0);
-        if (m_left.invert) { left_dir = !left_dir; }
-#if MKS_SERVO_PULSE_DIR_INVERT
-        left_dir = !left_dir;
-#endif
-#if MKS_SERVO_COMMON_ANODE
-        left_dir = !left_dir; 
-#endif
-        digitalWrite(MKS_SERVO_P1_DIR_PIN, left_dir ? HIGH : LOW);
-
-        float left_abs = fabsf(left_command);
-        if (left_abs < 0.001f || !m_enabled) {
-            m_left_async.last_ledc_freq = 0;
-            m_stepGenerator.setFrequency(true, 0);
-            m_left_async.last_ledc_update_us = micros();
-        } else {
-            uint32_t freq = (uint32_t)((left_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
-            
-            uint32_t now_us = micros();
-            uint32_t ledc_interval_us = 0;
-#if MKS_SERVO_STEP_UPDATE_HZ > 0
-            ledc_interval_us = (uint32_t)(1000000UL / (uint32_t)MKS_SERVO_STEP_UPDATE_HZ);
-#endif
-            bool time_ok = (ledc_interval_us == 0U) || ((int32_t)(now_us - m_left_async.last_ledc_update_us) >= (int32_t)ledc_interval_us);
-            if (time_ok && abs((int)freq - (int)m_left_async.last_ledc_freq) > MKS_SERVO_STEP_DEADBAND_HZ) {
-                m_left_async.last_ledc_freq = freq;
-                m_left_async.last_ledc_update_us = now_us;
-                m_stepGenerator.setFrequency(true, freq);
-            }
-        }
-    }
-    
-    // Right Motor (Channel 2)
-    {
-        bool right_dir = (right_command >= 0);
-        if (m_right.invert) { right_dir = !right_dir; }
-#if MKS_SERVO_PULSE_DIR_INVERT
-        right_dir = !right_dir;
-#endif
-#if MKS_SERVO_COMMON_ANODE
-        right_dir = !right_dir;
-#endif
-        digitalWrite(MKS_SERVO_P2_DIR_PIN, right_dir ? HIGH : LOW);
-
-        float right_abs = fabsf(right_command);
-        if (right_abs < 0.001f || !m_enabled) {
-            m_right_async.last_ledc_freq = 0;
-            m_stepGenerator.setFrequency(false, 0);
-            m_right_async.last_ledc_update_us = micros();
-        } else {
-            uint32_t freq = (uint32_t)((right_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
-            
-            uint32_t now_us = micros();
-            uint32_t ledc_interval_us = 0;
-#if MKS_SERVO_STEP_UPDATE_HZ > 0
-            ledc_interval_us = (uint32_t)(1000000UL / (uint32_t)MKS_SERVO_STEP_UPDATE_HZ);
-#endif
-            bool time_ok = (ledc_interval_us == 0U) || ((int32_t)(now_us - m_right_async.last_ledc_update_us) >= (int32_t)ledc_interval_us);
-            if (time_ok && abs((int)freq - (int)m_right_async.last_ledc_freq) > MKS_SERVO_STEP_DEADBAND_HZ) {
-                m_right_async.last_ledc_freq = freq;
-                m_right_async.last_ledc_update_us = now_us;
-                m_stepGenerator.setFrequency(false, freq);
-            }
-        }
-    }
-#endif
-
-    // 3. Notify background tasks to process RS485
-    // In Hybrid mode (Step/Dir), we don't notify the task for every speed update 
-    // because speed is handled by hardware PWM. The task will still run periodically 
-    // for telemetry via its internal timeout.
-#if !MKS_SERVO_USE_STEP_DIR
+    // Notify background tasks to process RS485 and, in hybrid mode, apply Step/Dir
+    // hardware updates off the IMU consumer thread.
     if (m_left_async.task_handle) {
         xTaskNotifyGive(m_left_async.task_handle);
     }
     if (m_right_async.task_handle) {
         xTaskNotifyGive(m_right_async.task_handle);
     }
-#endif
 
-    // 3. Update legacy state for monitoring/logging
+    // Update legacy state for monitoring/logging
     m_left.last_command = left_command;
     m_right.last_command = right_command;
 }
@@ -732,42 +954,6 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
         }
 #endif
         m_left.last_command = command;
-
-#if MKS_SERVO_USE_STEP_DIR
-    // Immediate hardware pulse update for single motor command
-    bool left_dir = (command >= 0);
-    if (m_left.invert) {
-        left_dir = !left_dir;
-    }
-#if MKS_SERVO_PULSE_DIR_INVERT
-    left_dir = !left_dir;
-#endif
-#if MKS_SERVO_COMMON_ANODE
-    left_dir = !left_dir;
-#endif
-    digitalWrite(MKS_SERVO_P1_DIR_PIN, left_dir ? HIGH : LOW);
-
-    float left_abs = fabsf(command);
-    if (left_abs < 0.001f || !m_enabled) {
-        m_left_async.last_ledc_freq = 0;
-        m_stepGenerator.setFrequency(true, 0);
-        m_left_async.last_ledc_update_us = micros();
-    } else {
-        uint32_t freq = (uint32_t)((left_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
-        
-        uint32_t now_us = micros();
-        uint32_t ledc_interval_us = 0;
-#if MKS_SERVO_STEP_UPDATE_HZ > 0
-        ledc_interval_us = (uint32_t)(1000000UL / (uint32_t)MKS_SERVO_STEP_UPDATE_HZ);
-#endif
-        bool time_ok = (ledc_interval_us == 0U) || ((int32_t)(now_us - m_left_async.last_ledc_update_us) >= (int32_t)ledc_interval_us);
-        if (time_ok && abs((int)freq - (int)m_left_async.last_ledc_freq) > MKS_SERVO_STEP_DEADBAND_HZ) {
-            m_left_async.last_ledc_freq = freq;
-            m_left_async.last_ledc_update_us = now_us;
-            m_stepGenerator.setFrequency(true, freq);
-        }
-    }
-#endif
     } else {
         m_right_async.target_speed.store(command);
         m_right_async.speed_dirty.store(true);
@@ -778,42 +964,11 @@ void MksServoMotorDriver::setMotorCommand(MotorSide side, float command) {
         }
 #endif
         m_right.last_command = command;
-
-#if MKS_SERVO_USE_STEP_DIR
-    // Immediate hardware pulse update for single motor command
-    bool right_dir = (command >= 0);
-    if (m_right.invert) {
-        right_dir = !right_dir;
     }
-#if MKS_SERVO_PULSE_DIR_INVERT
-    right_dir = !right_dir;
-#endif
-#if MKS_SERVO_COMMON_ANODE
-    right_dir = !right_dir;
-#endif
-    digitalWrite(MKS_SERVO_P2_DIR_PIN, right_dir ? HIGH : LOW);
 
-    float right_abs = fabsf(command);
-    if (right_abs < 0.001f || !m_enabled) {
-        m_right_async.last_ledc_freq = 0;
-        m_stepGenerator.setFrequency(false, 0);
-        m_right_async.last_ledc_update_us = micros();
-    } else {
-        uint32_t freq = (uint32_t)((right_abs * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
-        
-        uint32_t now_us = micros();
-        uint32_t ledc_interval_us = 0;
-#if MKS_SERVO_STEP_UPDATE_HZ > 0
-        ledc_interval_us = (uint32_t)(1000000UL / (uint32_t)MKS_SERVO_STEP_UPDATE_HZ);
-#endif
-        bool time_ok = (ledc_interval_us == 0U) || ((int32_t)(now_us - m_right_async.last_ledc_update_us) >= (int32_t)ledc_interval_us);
-        if (time_ok && abs((int)freq - (int)m_right_async.last_ledc_freq) > MKS_SERVO_STEP_DEADBAND_HZ) {
-            m_right_async.last_ledc_freq = freq;
-            m_right_async.last_ledc_update_us = now_us;
-            m_stepGenerator.setFrequency(false, freq);
-        }
-    }
-#endif
+    TaskHandle_t h = (side == MotorSide::LEFT) ? m_left_async.task_handle : m_right_async.task_handle;
+    if (h) {
+        xTaskNotifyGive(h);
     }
 }
 
@@ -1322,15 +1477,7 @@ void MksServoMotorDriver::setEnable(MotorSide side, bool enable) {
     }
 
     // Support for physical EN pins
-    bool pin_level = enable ? LOW : HIGH;
-#if !MKS_SERVO_COMMON_ANODE
-    pin_level = !pin_level;
-#endif
-    if (side == MotorSide::LEFT) {
-        digitalWrite(MKS_SERVO_P1_EN_PIN, pin_level);
-    } else {
-        digitalWrite(MKS_SERVO_P2_EN_PIN, pin_level);
-    }
+    setHardwareEnablePin(side, enable);
 
     uint8_t data = enable ? 0x01 : 0x00;
     sendFunctionCommand(side, MksServoProtocol::FUNC_TORQUE_ENABLE, &data, 1);
@@ -1340,6 +1487,7 @@ void MksServoMotorDriver::sendFunctionCommand(MotorSide side, uint8_t function_c
     uint8_t id = getMotorId(side);
     QueueHandle_t queue = getQueueForMotor(side);
     if (queue) {
+        AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
         FunctionCommandItem item;
         item.id = id;
         item.function_code = function_code;
@@ -1348,6 +1496,7 @@ void MksServoMotorDriver::sendFunctionCommand(MotorSide side, uint8_t function_c
             item.data[i] = data[i];
         }
         if (xQueueSend(queue, &item, 0) != pdTRUE) {
+            async.function_queue_full.fetch_add(1);
             LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
                        "mks_servo: WARN: func queue full (%s ID=0x%02X FUNC=0x%02X)\n",
                        (side == MotorSide::LEFT ? "LEFT" : "RIGHT"), id, function_code);

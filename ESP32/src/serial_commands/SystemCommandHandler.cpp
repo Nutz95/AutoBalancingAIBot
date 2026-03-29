@@ -8,6 +8,7 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 
+#include <esp_attr.h>
 #include <esp_freertos_hooks.h>
 
 namespace abbot {
@@ -20,28 +21,40 @@ static volatile uint32_t g_cpu_total_ticks_core0 = 0;
 static volatile uint32_t g_cpu_idle_ticks_core0 = 0;
 static volatile uint32_t g_cpu_total_ticks_core1 = 0;
 static volatile uint32_t g_cpu_idle_ticks_core1 = 0;
+static volatile bool g_cpu_idle_seen_core0 = false;
+static volatile bool g_cpu_idle_seen_core1 = false;
 
 static uint32_t g_cpu_prev_total_ticks_core0 = 0;
 static uint32_t g_cpu_prev_idle_ticks_core0 = 0;
 static uint32_t g_cpu_prev_total_ticks_core1 = 0;
 static uint32_t g_cpu_prev_idle_ticks_core1 = 0;
 
-static TaskHandle_t g_idle_task_core0 = nullptr;
-static TaskHandle_t g_idle_task_core1 = nullptr;
 static bool g_cpu_tick_hooks_installed = false;
 
-static void cpuTickHookCore0() {
+static void IRAM_ATTR cpuTickHookCore0() {
     g_cpu_total_ticks_core0++;
-    if (g_idle_task_core0 && xTaskGetCurrentTaskHandle() == g_idle_task_core0) {
+    if (g_cpu_idle_seen_core0) {
         g_cpu_idle_ticks_core0++;
+        g_cpu_idle_seen_core0 = false;
     }
 }
 
-static void cpuTickHookCore1() {
+static void IRAM_ATTR cpuTickHookCore1() {
     g_cpu_total_ticks_core1++;
-    if (g_idle_task_core1 && xTaskGetCurrentTaskHandle() == g_idle_task_core1) {
+    if (g_cpu_idle_seen_core1) {
         g_cpu_idle_ticks_core1++;
+        g_cpu_idle_seen_core1 = false;
     }
+}
+
+static bool IRAM_ATTR cpuIdleHookCore0() {
+    g_cpu_idle_seen_core0 = true;
+    return false;
+}
+
+static bool IRAM_ATTR cpuIdleHookCore1() {
+    g_cpu_idle_seen_core1 = true;
+    return false;
 }
 
 static bool ensureCpuTickHooksInstalled() {
@@ -49,20 +62,23 @@ static bool ensureCpuTickHooksInstalled() {
         return true;
     }
 
-    g_idle_task_core0 = xTaskGetIdleTaskHandleForCPU(0);
-#if (portNUM_PROCESSORS >= 2)
-    g_idle_task_core1 = xTaskGetIdleTaskHandleForCPU(1);
-#else
-    g_idle_task_core1 = nullptr;
-#endif
-
     esp_err_t err0 = esp_register_freertos_tick_hook_for_cpu(cpuTickHookCore0, 0);
+    if (err0 != ESP_OK) {
+        return false;
+    }
+
+    err0 = esp_register_freertos_idle_hook_for_cpu(cpuIdleHookCore0, 0);
     if (err0 != ESP_OK) {
         return false;
     }
 
 #if (portNUM_PROCESSORS >= 2)
     esp_err_t err1 = esp_register_freertos_tick_hook_for_cpu(cpuTickHookCore1, 1);
+    if (err1 != ESP_OK) {
+        return false;
+    }
+
+    err1 = esp_register_freertos_idle_hook_for_cpu(cpuIdleHookCore1, 1);
     if (err1 != ESP_OK) {
         return false;
     }

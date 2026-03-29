@@ -51,9 +51,16 @@ static float g_filter_sample_rate_hz = 1000.0f;
 static float g_fused_pitch_rad = 0.0f;
 static float g_fused_pitch_rate_rads = 0.0f;
 static SemaphoreHandle_t g_fusion_mutex = nullptr;
+static uint32_t g_fusion_lock_skip_log_ms = 0;
 // Last mapped accelerometer values (robot frame) for filter reinitialization
 static float g_last_accel_robot[3] = {0.0f, 0.0f, 9.8f};
+static uint32_t g_last_mapped_sample_ms = 0;
+static uint32_t g_last_producer_sample_ms = 0;
 static uint32_t g_last_sample_ms = 0;
+static volatile bool g_imu_reinit_requested = false;
+static volatile uint32_t g_consumer_stage = 0;
+static TaskHandle_t g_imu_producer_task_handle = nullptr;
+static TaskHandle_t g_imu_consumer_task_handle = nullptr;
 // Consumer mutable state (warmup, bias, persistence) moved into a dedicated
 // struct
 static abbot::imu_consumer::ConsumerState g_consumer;
@@ -121,22 +128,41 @@ static void applyComplementaryParamsFromPrefs(Preferences &prefs,
 static void imuProducerTask(void *pvParameters) {
   IIMUDriver *driver = reinterpret_cast<IIMUDriver *>(pvParameters);
   IMUSample sample;
-  static uint32_t drop_count = 0;
-  static uint32_t last_drop_log = 0;
   static uint32_t consecutive_errors = 0;
+  static uint32_t last_consumer_stall_log_ms = 0;
+
+  g_imu_producer_task_handle = xTaskGetCurrentTaskHandle();
 
   const TickType_t xFrequency = pdMS_TO_TICKS(1); // 1000Hz (Oversampling for cleaner gyro)
   TickType_t xLastWakeTime = xTaskGetTickCount();
 
   for (;;) {
+    if (g_imu_reinit_requested) {
+      g_imu_reinit_requested = false;
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "IMU_PRODUCER: explicit reinit requested");
+      if (!driver->begin()) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                    "IMU_PRODUCER: reinit failed");
+      } else {
+        consecutive_errors = 0;
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                    "IMU_PRODUCER: reinit successful");
+      }
+      vTaskDelay(pdMS_TO_TICKS(20));
+      continue;
+    }
+
     // Attempt to read; driver->read will enforce sampling interval (µs precision)
     if (driver->read(sample)) {
       consecutive_errors = 0;
-      // Push to queue (non-blocking).
+      g_last_producer_sample_ms = millis();
+      // Publish the freshest sample only.
+      // The consumer already drains to the most recent sample, so a single-slot
+      // mailbox avoids backlog growth and keeps latency bounded if the consumer
+      // is briefly delayed.
       if (imuQueue) {
-        if (xQueueSend(imuQueue, &sample, 0) != pdTRUE) {
-          drop_count++;
-        }
+        xQueueOverwrite(imuQueue, &sample);
       }
       if (calibQueue) {
         xQueueOverwrite(calibQueue, &sample);
@@ -158,19 +184,33 @@ static void imuProducerTask(void *pvParameters) {
       last_success_ms = now;
     }
 
+    if (g_last_producer_sample_ms > 0 && g_last_sample_ms > 0 &&
+        (now - g_last_producer_sample_ms) < 100 &&
+        (now - g_last_sample_ms) > 1000 &&
+        (now - last_consumer_stall_log_ms) > 1000) {
+      unsigned long stack_words = 0;
+      int consumer_state = -1;
+      unsigned long balancer_stage = 0;
+      if (g_imu_consumer_task_handle) {
+        stack_words = (unsigned long)uxTaskGetStackHighWaterMark(g_imu_consumer_task_handle);
+        consumer_state = (int)eTaskGetState(g_imu_consumer_task_handle);
+      }
+      balancer_stage = (unsigned long)abbot::balancer::controller::getDebugStage();
+      LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                 "IMU_PRODUCER: consumer appears stalled while producer is alive (consumer_age=%lu ms producer_age=%lu ms stage=%lu bal_stage=%lu task_state=%d stack_hw_words=%lu)\n",
+                 (unsigned long)(now - g_last_sample_ms),
+                 (unsigned long)(now - g_last_producer_sample_ms),
+                 (unsigned long)g_consumer_stage,
+                 balancer_stage,
+                 consumer_state,
+                 stack_words);
+      last_consumer_stall_log_ms = now;
+    }
+
     // Yield to let other tasks (like IMUConsumer) run on Core 1.
     // We wait 1 tick (1ms) regardless of success/fail. 
     // This provides a 1kHz polling rhythm.
     vTaskDelay(xFrequency);
-
-    // Log drops periodically
-    if (drop_count > 0 && (now - last_drop_log > 5000)) {
-      char buf[64];
-      snprintf(buf, sizeof(buf), "IMU: dropped %lu samples (queue full)", (unsigned long)drop_count);
-      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, buf);
-      drop_count = 0;
-      last_drop_log = now;
-    }
   }
 }
 
@@ -199,8 +239,11 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
   
   // IMU frequency measurement state
   abbot::imu_consumer::ImuFrequencyMeasurement freq_measurement;
+  uint32_t last_slow_cycle_log_ms = 0;
+  g_imu_consumer_task_handle = xTaskGetCurrentTaskHandle();
   
   for (;;) {
+    g_consumer_stage = 1;
     // LATENCY FIX: Drain the queue to get the freshest sample using helper.
     if (!abbot::imu_consumer::receiveLatestSample(imuQueue, sample, pdMS_TO_TICKS(1000))) {
       uint32_t now = millis();
@@ -214,6 +257,7 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
     }
     
     // Measure and log actual IMU frequency (of the samples we actually process)
+    g_consumer_stage = 2;
     abbot::imu_consumer::measureAndLogImuFrequency(freq_measurement,
                                                    g_filter_sample_rate_hz);
     
@@ -233,6 +277,7 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
                                           sample.gx, sample.gy, sample.gz);
 
     // Map sensor frame -> robot frame (with gyro bias compensation)
+    g_consumer_stage = 3;
     float gyro_robot[3];
     float accel_robot[3];
     abbot::imu_consumer::mapSensorToRobotFrame(g_fusion_cfg, sample,
@@ -247,12 +292,24 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
     g_last_accel_robot[0] = accel_robot[0];
     g_last_accel_robot[1] = accel_robot[1];
     g_last_accel_robot[2] = accel_robot[2];
+    g_last_mapped_sample_ms = g_last_sample_ms;
 
     // Update active filter with mapped data
+    g_consumer_stage = 4;
     uint32_t fusion_start_us = micros();
     {
+      bool have_fusion_lock = true;
       if (g_fusion_mutex) {
-        xSemaphoreTake(g_fusion_mutex, portMAX_DELAY);
+        have_fusion_lock = (xSemaphoreTake(g_fusion_mutex, pdMS_TO_TICKS(2)) == pdTRUE);
+      }
+      if (!have_fusion_lock) {
+        uint32_t now = millis();
+        if (now - g_fusion_lock_skip_log_ms > 1000) {
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                      "IMU_CONSUMER: WARN - fusion mutex busy, skipping sample update");
+          g_fusion_lock_skip_log_ms = now;
+        }
+        continue;
       }
       auto active = abbot::filter::getActiveFilter();
       if (active) {
@@ -283,11 +340,22 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
                                                          gyro_robot);
 
     // Get fused pitch outputs from active filter
+    g_consumer_stage = 5;
     float fused_pitch_local = 0.0f;
     float fused_pitch_rate_local = 0.0f;
     {
+      bool have_fusion_lock = true;
       if (g_fusion_mutex) {
-        xSemaphoreTake(g_fusion_mutex, portMAX_DELAY);
+        have_fusion_lock = (xSemaphoreTake(g_fusion_mutex, pdMS_TO_TICKS(2)) == pdTRUE);
+      }
+      if (!have_fusion_lock) {
+        uint32_t now = millis();
+        if (now - g_fusion_lock_skip_log_ms > 1000) {
+          LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                      "IMU_CONSUMER: WARN - fusion mutex busy, skipping fused output read");
+          g_fusion_lock_skip_log_ms = now;
+        }
+        continue;
       }
       auto active = abbot::filter::getActiveFilter();
       if (active) {
@@ -300,6 +368,7 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
     }
 
     // Publish fused outputs under mutex for other tasks
+    g_consumer_stage = 6;
     abbot::imu_consumer::publishFusedOutputsUnderMutex(
         g_consumer, fused_pitch_local, fused_pitch_rate_local,
         g_fused_pitch_rad, g_fused_pitch_rate_rads, &g_fusion_mutex);
@@ -310,6 +379,7 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
     abbot::imu_consumer::getLastMotorCommands(left_cmd, right_cmd);
 
     // Run balancer control cycle if active (Throttled relative to IMU frequency)
+    g_consumer_stage = 7;
     static uint8_t balancer_divider = 0;
     uint32_t lqr_start_us = micros();
     if (++balancer_divider >= BALANCER_CONTROL_DIVIDER) {
@@ -320,7 +390,24 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
     }
     prof.t_lqr = micros() - lqr_start_us;
 
+    if (abbot::balancer::controller::isActive() && prof.t_lqr > 3000) {
+      uint32_t now_ms = millis();
+      if ((now_ms - last_slow_cycle_log_ms) >= 1000) {
+        int motors_enabled = 0;
+        if (auto d = abbot::motor::getActiveMotorDriver()) {
+          motors_enabled = d->areMotorsEnabled() ? 1 : 0;
+        }
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                   "IMU_CONSUMER: WARN slow balancer path (%lu us, pitch=%.2f deg rate=%.2f deg/s motors_enabled=%d)\n",
+                   (unsigned long)prof.t_lqr,
+                   (double)radToDeg(fused_pitch_local),
+                   (double)radToDeg(fused_pitch_rate_local), motors_enabled);
+        last_slow_cycle_log_ms = now_ms;
+      }
+    }
+
     // Emit tuning stream or capture outputs
+    g_consumer_stage = 8;
     uint32_t log_start_us = micros();
     abbot::imu_consumer::emitTuningOrStream(
         g_consumer, sample, fused_pitch_local, fused_pitch_rate_local,
@@ -328,6 +415,7 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
     prof.t_logging = micros() - log_start_us;
 
     // Get motor bus latency for diagnostics
+    g_consumer_stage = 9;
     uint32_t bus_lat = 0;
     uint32_t ack_pending_left_us = 0;
     uint32_t ack_pending_right_us = 0;
@@ -354,6 +442,7 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
     float inst_freq = (dt > 0.0f) ? (1.0f / dt) : 0.0f;
 
     prof.t_total = micros() - loop_start_us;
+    g_consumer_stage = 10;
     abbot::imu_consumer::emitDiagnosticsIfEnabled(
         sample.ts_ms, fused_pitch_local, fused_pitch_rate_local,
         left_cmd, right_cmd, accel_robot, gyro_robot, inst_freq, bus_lat,
@@ -363,7 +452,9 @@ static void IRAM_ATTR imuConsumerTask(void *pvParameters) {
       last_encoder_age_ms, prof);
 
     // Emit raw IMU debug logs (throttled)
-    abbot::imu_consumer::emitImuDebugLogsIfEnabled(sample, last_debug_print_ms);
+    g_consumer_stage = 11;
+    abbot::imu_consumer::emitImuDebugLogsIfEnabled(
+        sample, fused_pitch_local, fused_pitch_rate_local, last_debug_print_ms);
   }
 }
 
@@ -373,7 +464,7 @@ bool startIMUTasks(IIMUDriver *driver) {
   }
   g_driver = driver;
   if (!imuQueue) {
-    imuQueue = xQueueCreate(50, sizeof(IMUSample));
+    imuQueue = xQueueCreate(1, sizeof(IMUSample));
     if (!imuQueue) {
       return false;
     }
@@ -486,10 +577,10 @@ bool startIMUTasks(IIMUDriver *driver) {
 
   // Create producer task (higher priority) - Pinned to Core 1 (APP_CPU)
   BaseType_t r1 = xTaskCreatePinnedToCore(imuProducerTask, "IMUProducer", 4096, driver,
-                              configMAX_PRIORITIES - 2, nullptr, 1);
+                              configMAX_PRIORITIES - 2, &g_imu_producer_task_handle, 1);
   // Create consumer task (lower priority) - Pinned to Core 1 (APP_CPU)
-  BaseType_t r2 = xTaskCreatePinnedToCore(imuConsumerTask, "IMUConsumer", 4096, nullptr,
-                              configMAX_PRIORITIES - 3, nullptr, 1);
+  BaseType_t r2 = xTaskCreatePinnedToCore(imuConsumerTask, "IMUConsumer", 8192, nullptr,
+                              configMAX_PRIORITIES - 3, &g_imu_consumer_task_handle, 1);
 
   // Create serial command task for calibration UI (low priority)
   BaseType_t r3 = xTaskCreate(abbot::serialcmds::serialTaskEntry, "IMUSerial",
@@ -535,15 +626,60 @@ float getFusedPitchRate() {
   return out;
 }
 
+bool getFusedStateSnapshot(float &pitch_rad, float &pitch_rate_rads) {
+  pitch_rad = 0.0f;
+  pitch_rate_rads = 0.0f;
+  if (!g_fusion_mutex) {
+    return false;
+  }
+  if (xSemaphoreTake(g_fusion_mutex, pdMS_TO_TICKS(5)) != pdTRUE) {
+    return false;
+  }
+
+  auto active = abbot::filter::getActiveFilter();
+  if (active) {
+    pitch_rad = active->getPitch();
+    pitch_rate_rads = active->getPitchRate();
+  } else {
+    pitch_rad = g_fused_pitch_rad;
+    pitch_rate_rads = g_fused_pitch_rate_rads;
+  }
+
+  xSemaphoreGive(g_fusion_mutex);
+  return active != nullptr;
+}
+
 void reinitFilterFromAccel() {
   // Check if data is stale (indicates IMU task/driver hang)
   uint32_t now = millis();
-  if (g_last_sample_ms > 0 && (now - g_last_sample_ms > 500)) {
+  if (g_last_producer_sample_ms > 0 &&
+      (now - g_last_producer_sample_ms > 500)) {
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
                "FILTER: WARNING - IMU data is STALE (%lu ms old). IMU "
-               "Producer should be auto-recovering soon; skipping manual "
-               "driver reinit here to avoid SPI races.\n",
-               (unsigned long)(now - g_last_sample_ms));
+               "Producer reinit requested; skipping accel reinit for now to "
+               "avoid SPI races.\n",
+               (unsigned long)(now - g_last_producer_sample_ms));
+    g_imu_reinit_requested = true;
+    return;
+  }
+
+  if (g_last_mapped_sample_ms == 0 || (now - g_last_mapped_sample_ms > 250)) {
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "FILTER: WARNING - mapped accel sample is stale (%lu ms old); skipping accel reinit\n",
+               (unsigned long)(g_last_mapped_sample_ms == 0 ? 0 : (now - g_last_mapped_sample_ms)));
+    return;
+  }
+
+  const float accel_norm =
+      sqrtf(g_last_accel_robot[0] * g_last_accel_robot[0] +
+            g_last_accel_robot[1] * g_last_accel_robot[1] +
+            g_last_accel_robot[2] * g_last_accel_robot[2]);
+  if (fabsf(accel_norm - 9.80665f) > 0.35f) {
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "FILTER: WARNING - accel norm not stationary enough for reinit (|a|=%.2f m/s^2 ax=%.2f ay=%.2f az=%.2f); skipping accel reinit\n",
+               (double)accel_norm, (double)g_last_accel_robot[0],
+               (double)g_last_accel_robot[1], (double)g_last_accel_robot[2]);
+    return;
   }
 
   // Reinitialize the active filter's orientation from the last mapped
@@ -553,8 +689,14 @@ void reinitFilterFromAccel() {
   // to converge with low beta).
   auto filter = abbot::filter::getActiveFilter();
   if (filter) {
+    bool have_fusion_lock = true;
     if (g_fusion_mutex) {
-      xSemaphoreTake(g_fusion_mutex, portMAX_DELAY);
+      have_fusion_lock = (xSemaphoreTake(g_fusion_mutex, pdMS_TO_TICKS(10)) == pdTRUE);
+    }
+    if (!have_fusion_lock) {
+      LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                  "FILTER: WARN - fusion mutex busy, skipping accel reinit");
+      return;
     }
     filter->setFromAccel(g_last_accel_robot[0], g_last_accel_robot[1],
                          g_last_accel_robot[2]);
@@ -634,6 +776,18 @@ bool isFusionReady() {
 
 unsigned long getFusionWarmupRemaining() {
   return (unsigned long)g_consumer.warmup_samples_remaining;
+}
+
+bool isImuDataFresh(uint32_t maxAgeMs) {
+  if (g_last_producer_sample_ms == 0) {
+    return false;
+  }
+  uint32_t now = millis();
+  return (uint32_t)(now - g_last_producer_sample_ms) <= maxAgeMs;
+}
+
+void requestImuReinitialize() {
+  g_imu_reinit_requested = true;
 }
 
 } // namespace abbot

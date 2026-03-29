@@ -170,7 +170,10 @@ bool receiveLatestSample(QueueHandle_t queue, IMUSample &sample, uint32_t wait_t
  * @param last_print_ms mutable timestamp used to enforce throttle
  * @param interval_ms throttling interval in milliseconds (default 1000)
  */
-void emitImuDebugLogsIfEnabled(const IMUSample &sample, uint32_t &last_print_ms,
+void emitImuDebugLogsIfEnabled(const IMUSample &sample,
+                               float fused_pitch_local,
+                               float fused_pitch_rate_local,
+                               uint32_t &last_print_ms,
                                uint32_t interval_ms = 1000);
 
 } // namespace imu_consumer

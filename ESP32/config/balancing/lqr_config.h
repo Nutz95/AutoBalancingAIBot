@@ -31,19 +31,19 @@
 
 // --- Cascaded LQR Gains ---
 #ifndef BALANCER_DEFAULT_K_PITCH
-#define BALANCER_DEFAULT_K_PITCH 0.050f     // v76: Keep authority
+#define BALANCER_DEFAULT_K_PITCH 0.10f      // v77: ×4 vs v76 to compensate VELOCITY_MAX_SPEED 1200→300
 #endif
 
 #ifndef BALANCER_DEFAULT_K_GYRO
-#define BALANCER_DEFAULT_K_GYRO 0.025f      // v76: reduced damping to favor recovery
+#define BALANCER_DEFAULT_K_GYRO 0.04f       // v77: ×4 vs v76, start conservatively
 #endif
 
 #ifndef BALANCER_DEFAULT_K_DIST
-#define BALANCER_DEFAULT_K_DIST 0.000100f    // v76: softer anchor
+#define BALANCER_DEFAULT_K_DIST 0.000000f   // v77: keep at 0 until angle+gyro stable
 #endif
 
 #ifndef BALANCER_DEFAULT_K_SPEED
-#define BALANCER_DEFAULT_K_SPEED 0.000010f  // v76: much less speed damping (was fighting recovery)
+#define BALANCER_DEFAULT_K_SPEED 0.000000f  // v77: keep at 0 until angle+gyro stable
 #endif
 
 // --- Yaw / Heading Control ---

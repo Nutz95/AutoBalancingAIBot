@@ -2,6 +2,11 @@
 
 #include "IStepGenerator.h"
 
+#if !defined(UNIT_TEST)
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#endif
+
 namespace abbot {
 namespace motor {
 
@@ -28,7 +33,7 @@ public:
      * @param is_left True for left motor, false for right
      * @param freq_hz Frequency in Hz (0 to stop)
      */
-    void setFrequency(bool is_left, uint32_t freq_hz) override;
+    bool setFrequency(bool is_left, uint32_t freq_hz) override;
 
     /**
      * @brief Stop pulse generation immediately.
@@ -41,6 +46,10 @@ private:
     bool m_common_anode = false;
     uint32_t m_current_freq_l = 0;
     uint32_t m_current_freq_r = 0;
+
+#if !defined(UNIT_TEST)
+    SemaphoreHandle_t m_hw_mutex = nullptr;
+#endif
 
     void updateHardware(int timer_idx, uint32_t freq);
 };

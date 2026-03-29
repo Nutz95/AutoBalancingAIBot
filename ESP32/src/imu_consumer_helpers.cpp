@@ -415,6 +415,13 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
       pkt.prof_l = profiler.t_lqr;
       pkt.prof_t = profiler.t_total;
       pkt.prof_log = profiler.t_logging;
+        pkt.cmd_raw = diag.cmd_raw;
+        pkt.cmd_final = diag.cmd_final;
+        pkt.left_preclip = diag.left_preclip;
+        pkt.right_preclip = diag.right_preclip;
+        pkt.left_postclip = diag.left_postclip;
+        pkt.right_postclip = diag.right_postclip;
+        pkt.sat_flags = diag.sat_flags;
       abbot::telemetry::TelemetryService::getInstance().send(pkt);
       }
   }
@@ -445,11 +452,13 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
   abbot::balancer::controller::getDiagnostics(diag);
 
   LOG_PRINTF(abbot::log::CHANNEL_BALANCER,
-             "BALANCER_DBG t=%lums pitch=%.3fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.3f cmd=%.3f steer=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f lp_hz=%.1f encL=%ld encR=%ld termA=%.6f termG=%.6f termD=%.6f termS=%.6f prof_f=%lu prof_l=%lu prof_t=%lu\n",
+             "BALANCER_DBG t=%lums pitch=%.3fdeg pid_in=%.3fdeg pid_out=%.3f iterm=%.3f cmd=%.3f steer=%.3f lat=%luus ax=%.3f ay=%.3f az=%.3f gx=%.3f gy=%.3f gz=%.3f lp_hz=%.1f encL=%ld encR=%ld termA=%.6f termG=%.6f termD=%.6f termS=%.6f cmdRaw=%.6f cmdFinal=%.6f leftPre=%.6f rightPre=%.6f leftPost=%.6f rightPost=%.6f sat=0x%02lX prof_f=%lu prof_l=%lu prof_t=%lu\n",
              (unsigned long)ts_ms, pitch_deg, pitch_deg, avg_cmd, diag.iterm, avg_cmd, steer,
              (unsigned long)lat_us, accel_robot[0], accel_robot[1], accel_robot[2], 
              gyro_robot[0], gyro_robot[1], gyro_robot[2], freq_hz, (long)diag.enc_l, (long)diag.enc_r,
              diag.lqr_angle, diag.lqr_gyro, diag.lqr_dist, diag.lqr_speed,
+             diag.cmd_raw, diag.cmd_final, diag.left_preclip, diag.right_preclip,
+             diag.left_postclip, diag.right_postclip, (unsigned long)diag.sat_flags,
              (unsigned long)profiler.t_fusion, (unsigned long)profiler.t_lqr, (unsigned long)profiler.t_total);
 }
 
@@ -523,7 +532,10 @@ bool IRAM_ATTR receiveLatestSample(QueueHandle_t queue, IMUSample &sample, uint3
   return true;
 }
 
-void emitImuDebugLogsIfEnabled(const IMUSample &sample, uint32_t &last_print_ms,
+void emitImuDebugLogsIfEnabled(const IMUSample &sample,
+                               float fused_pitch_local,
+                               float fused_pitch_rate_local,
+                               uint32_t &last_print_ms,
                                uint32_t interval_ms) {
 #if defined(ENABLE_DEBUG_LOGS)
   // Suppress debug logs while calibration runs
@@ -535,13 +547,17 @@ void emitImuDebugLogsIfEnabled(const IMUSample &sample, uint32_t &last_print_ms,
     last_print_ms = now;
     LOG_PRINTF(
         abbot::log::CHANNEL_IMU,
-        "IMU ts_ms=%lu ax=%.4f ay=%.4f az=%.4f gx=%.4f gy=%.4f gz=%.4f fp=%.2f fr=%.2f fy=%.2f\n",
+        "IMU ts_ms=%lu ax=%.4f ay=%.4f az=%.4f gx=%.4f gy=%.4f gz=%.4f fp=%.2f pr=%.2f fr=%.2f fy=%.2f\n",
         sample.ts_ms, sample.ax, sample.ay, sample.az, sample.gx, sample.gy,
-        sample.gz, sample.fused_pitch * 57.2957795f, sample.fused_roll * 57.2957795f,
+        sample.gz, fused_pitch_local * 57.2957795f,
+        fused_pitch_rate_local * 57.2957795f,
+        sample.fused_roll * 57.2957795f,
         sample.fused_yaw * 57.2957795f);
   }
 #else
   (void)sample;
+  (void)fused_pitch_local;
+  (void)fused_pitch_rate_local;
   (void)last_print_ms;
   (void)interval_ms;
 #endif

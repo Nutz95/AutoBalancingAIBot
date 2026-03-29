@@ -34,6 +34,13 @@ namespace abbot {
 namespace balancer {
 namespace controller {
 
+static void stopControlAndDisableMotors() {
+  stop();
+  if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    driver->disableMotors();
+  }
+}
+
 static bool g_active = false;
 static float g_last_cmd = 0.0f;
 static const float g_command_slew_rate = BALANCER_CMD_SLEW_LIMIT;
@@ -72,12 +79,23 @@ struct TelemetryState {
   float lqr_gyro = 0.0f;
   float lqr_dist = 0.0f;
   float lqr_speed = 0.0f;
+  float cmd_raw = 0.0f;
+  float cmd_final = 0.0f;
+  float steer = 0.0f;
+  float left_preclip = 0.0f;
+  float right_preclip = 0.0f;
+  float left_postclip = 0.0f;
+  float right_postclip = 0.0f;
+  uint32_t sat_flags = 0;
   bool is_init = false;
 };
 
 static TelemetryState g_telemetry_state;
 static SemaphoreHandle_t g_telemetry_mutex = nullptr;
 static TaskHandle_t g_telemetry_task = nullptr;
+static volatile uint32_t g_process_cycle_stage = 0;
+static uint32_t g_control_start_ts_ms = 0;
+static bool g_encoder_telemetry_seen_since_start = false;
 
 static void IRAM_ATTR pollEncoders(float /*dt_sec*/) {
     auto driver = abbot::motor::getActiveMotorDriver();
@@ -87,9 +105,11 @@ static void IRAM_ATTR pollEncoders(float /*dt_sec*/) {
     int32_t l = 0, r = 0;
     driver->readEncodersBoth(l, r);
     
-    if (g_telemetry_mutex && xSemaphoreTake(g_telemetry_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-        // Use the driver's own filtered speed estimation which is updated by the background 
-        // motor tasks at a stable rate (~50-100Hz), avoiding 1000Hz quantization noise.
+    if (g_telemetry_mutex && xSemaphoreTake(g_telemetry_mutex, 0) == pdTRUE) {
+        // Snapshot the driver's latest asynchronously maintained encoder/speed state.
+        // For the MKS driver this is NOT a synchronous RS485 bus poll: values come from
+        // per-motor background tasks fed by periodic telemetry + interpolation.
+        // Keeping this helper in the control path just refreshes our local telemetry cache.
         g_telemetry_state.vel_l_ticks_s = driver->readSpeed(abbot::motor::IMotorDriver::MotorSide::LEFT);
         g_telemetry_state.vel_r_ticks_s = driver->readSpeed(abbot::motor::IMotorDriver::MotorSide::RIGHT);
 
@@ -98,6 +118,14 @@ static void IRAM_ATTR pollEncoders(float /*dt_sec*/) {
         g_telemetry_state.last_update_us = now_us;
         g_telemetry_state.is_init = true;
         xSemaphoreGive(g_telemetry_mutex);
+      } else {
+        static uint32_t s_last_poll_skip_log_ms = 0;
+        uint32_t now_ms = millis();
+        if ((now_ms - s_last_poll_skip_log_ms) >= 1000) {
+          LOG_PRINTF_TRY(abbot::log::CHANNEL_DEFAULT,
+                   "BALANCER: encoder snapshot skipped (telemetry mutex busy)\n");
+          s_last_poll_skip_log_ms = now_ms;
+        }
     }
 }
 
@@ -114,8 +142,10 @@ static void telemetryTask(void *pv) {
 
 static float g_target_forward = 0.0f;
 static float g_target_turn = 0.0f;
-static uint32_t g_auto_enable_ts = 0;
 static int g_prev_cmd_sign = 0;
+static constexpr uint32_t kMotorEncoderStaleStopMs = 250;
+static constexpr uint32_t kMotorEncoderStartupGraceMs = 1500;
+static constexpr uint32_t kMotorEncoderNoDataSentinelMs = 1000000;
 
 void init() {
   if (!g_telemetry_mutex) g_telemetry_mutex = xSemaphoreCreateMutex();
@@ -155,21 +185,39 @@ void setDriveSetpoints(float v, float w) {
 
 void start(float pitch_rad) {
   if (g_active) return;
-  g_active = true;
   // Previously we enabled text logging here, but it's too slow for 1000Hz.
   // We now rely on Binary UDP Telemetry.
-  
-  auto& manager = abbot::balancing::BalancingManager::getInstance();
-  manager.reset(pitch_rad);
-  
-  if (fabsf(radToDeg(pitch_rad)) <= BALANCER_AUTO_ENABLE_ANGLE_DEG) {
-    g_auto_enable_ts = millis() + 250;
-  } else {
-    g_auto_enable_ts = 0;
+  abbot::reinitFilterFromAccel();
+
+  float start_pitch_rad = 0.0f;
+  float start_pitch_rate_rads = 0.0f;
+  bool have_snapshot =
+      abbot::getFusedStateSnapshot(start_pitch_rad, start_pitch_rate_rads);
+  if (!have_snapshot || !std::isfinite(start_pitch_rad)) {
+    start_pitch_rad = pitch_rad;
+  }
+  if (!std::isfinite(start_pitch_rate_rads)) {
+    start_pitch_rate_rads = 0.0f;
   }
 
+  g_suspended = false;
+  g_active = true;
+  g_control_start_ts_ms = millis();
+  g_encoder_telemetry_seen_since_start = false;
+  
+  auto& manager = abbot::balancing::BalancingManager::getInstance();
+  manager.reset(start_pitch_rad);
+
   g_last_cmd = 0.0f;
-  abbot::reinitFilterFromAccel();
+
+  LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+             "BALANCER: start pitch=%.2f deg rate=%.2f deg/s | motor scales L=%.3f R=%.3f deadband=%.3f min_cmd=%.3f\n",
+             (double)radToDeg(start_pitch_rad),
+             (double)radToDeg(start_pitch_rate_rads),
+             (double)g_left_motor_scale,
+             (double)g_right_motor_scale,
+             (double)g_deadband,
+             (double)g_min_command_output);
 
   // Print gains for telemetry capture analysis
   if (manager.getActiveType() == abbot::balancing::StrategyType::CASCADED_LQR) {
@@ -187,13 +235,13 @@ void start(float pitch_rad) {
 void stop() {
   if (!g_active) return;
   g_active = false;
+  g_control_start_ts_ms = 0;
+  g_encoder_telemetry_seen_since_start = false;
   // Channels are no longer toggled here to avoid impacting the system performance.
   if (auto driver = abbot::motor::getActiveMotorDriver()) {
     driver->setMotorCommandBoth(0.0f, 0.0f);
-    driver->disableMotors();
   }
   g_last_cmd = 0.0f;
-  g_auto_enable_ts = 0;
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: stopped");
 }
 
@@ -247,7 +295,10 @@ void setLatestImuSample(const float a[3], const float g[3]) {
   if (g) memcpy(g_latest_gyro, g, sizeof(g_latest_gyro));
 }
 
+uint32_t getDebugStage() { return g_process_cycle_stage; }
+
 float IRAM_ATTR processCycle(float pitch, float pitch_rate, float dt) {
+  g_process_cycle_stage = 1;
   if (g_autotune_active) {
       // Minimal autotune integration for compatibility (simplified)
       float out = g_autotune_engine.update(radToDeg(pitch), dt);
@@ -261,44 +312,83 @@ float IRAM_ATTR processCycle(float pitch, float pitch_rate, float dt) {
   if (!g_active || g_suspended) return 0.0f;
 
   // Fall check
+  g_process_cycle_stage = 2;
   if (fabsf(pitch) > degToRad(BALANCER_FALL_STOP_ANGLE_DEG)) {
-    stop();
+    int motors_enabled = 0;
+    if (auto d = abbot::motor::getActiveMotorDriver()) {
+      motors_enabled = d->areMotorsEnabled() ? 1 : 0;
+    }
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "BALANCER: stop reason=fall pitch=%.2f deg rate=%.2f deg/s threshold=%.2f deg motors_enabled=%d\n",
+               (double)radToDeg(pitch), (double)radToDeg(pitch_rate),
+               (double)BALANCER_FALL_STOP_ANGLE_DEG, motors_enabled);
+    stopControlAndDisableMotors();
     return 0.0f;
   }
 
-  // Refresh encoder data immediately before control computation.
-  // This ensures the LQR/PID sees the most recent wheel positions.
-  pollEncoders(dt);
+  if (auto d = abbot::motor::getActiveMotorDriver()) {
+    if (d->areMotorsEnabled()) {
+      const uint32_t enc_age_left_ms = d->getLastEncoderAgeMs(abbot::motor::IMotorDriver::MotorSide::LEFT);
+      const uint32_t enc_age_right_ms = d->getLastEncoderAgeMs(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+      const bool have_left_encoder = enc_age_left_ms < kMotorEncoderNoDataSentinelMs;
+      const bool have_right_encoder = enc_age_right_ms < kMotorEncoderNoDataSentinelMs;
+      const uint32_t since_enable_ms =
+          (g_control_start_ts_ms > 0) ? (millis() - g_control_start_ts_ms) : 0;
 
-  // Auto-enable
-  if (g_auto_enable_ts > 0 && (int32_t)(millis() - g_auto_enable_ts) >= 0) {
-    if (auto d = abbot::motor::getActiveMotorDriver()) d->enableMotors();
-    g_auto_enable_ts = 0;
+      if (have_left_encoder && have_right_encoder) {
+        g_encoder_telemetry_seen_since_start = true;
+      }
+
+      const bool startup_grace_active =
+          !g_encoder_telemetry_seen_since_start &&
+          since_enable_ms < kMotorEncoderStartupGraceMs;
+
+      if (!startup_grace_active &&
+          (enc_age_left_ms > kMotorEncoderStaleStopMs ||
+           enc_age_right_ms > kMotorEncoderStaleStopMs)) {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                   "BALANCER: stop reason=encoder_stale left=%lu ms right=%lu ms threshold=%lu ms seen=%d since_enable=%lu ms\n",
+                   (unsigned long)enc_age_left_ms,
+                   (unsigned long)enc_age_right_ms,
+                   (unsigned long)kMotorEncoderStaleStopMs,
+                   g_encoder_telemetry_seen_since_start ? 1 : 0,
+                   (unsigned long)since_enable_ms);
+        d->printStatus();
+        stopControlAndDisableMotors();
+        return 0.0f;
+      }
+    }
   }
 
+  // Refresh the controller snapshot from the driver's async encoder state.
+  // This does not synchronously poll the motor buses on the current MKS implementation.
+#if BALANCER_ENABLE_ENCODER_UPDATES
+  g_process_cycle_stage = 3;
+  pollEncoders(dt);
+#endif
+
   // Strategy compute
+  g_process_cycle_stage = 4;
   int32_t el = 0, er = 0;
   float v_enc = 0.0f;
+#if BALANCER_ENABLE_ENCODER_UPDATES
   if (g_telemetry_mutex && xSemaphoreTake(g_telemetry_mutex, 0) == pdTRUE) {
     el = g_telemetry_state.last_enc_l;
     er = g_telemetry_state.last_enc_r;
     v_enc = (g_telemetry_state.vel_l_ticks_s + g_telemetry_state.vel_r_ticks_s) / 2.0f;
     xSemaphoreGive(g_telemetry_mutex);
   }
+#endif
 
   auto res = abbot::balancing::BalancingManager::getInstance().compute(pitch, pitch_rate, g_latest_gyro[2], dt, el, er, v_enc);
   float cmd = res.command;
   float steer = res.steer;
-  
-  g_telemetry_state.pid_iterm = res.iterm; // Store for diagnostics
-  g_telemetry_state.lqr_angle = res.lqr_angle;
-  g_telemetry_state.lqr_gyro = res.lqr_gyro;
-  g_telemetry_state.lqr_dist = res.lqr_dist;
-  g_telemetry_state.lqr_speed = res.lqr_speed;
+  const float cmd_raw = cmd;
 
   // Slew
   float max_d = g_command_slew_rate * dt;
   cmd = std::max(g_last_cmd - max_d, std::min(g_last_cmd + max_d, cmd));
+  const bool cmd_clipped = (cmd > 1.0f) || (cmd < -1.0f);
   cmd = std::max(-1.0f, std::min(1.0f, cmd));
 
   // Deadband
@@ -309,19 +399,78 @@ float IRAM_ATTR processCycle(float pitch, float pitch_rate, float dt) {
 
   g_last_cmd = cmd;
 
+  float left_preclip = 0.0f;
+  float right_preclip = 0.0f;
+  float left_postclip = 0.0f;
+  float right_postclip = 0.0f;
+  uint32_t sat_flags = cmd_clipped ? 0x1u : 0u;
+
+  g_process_cycle_stage = 5;
   if (auto d = abbot::motor::getActiveMotorDriver()) {
     if (d->areMotorsEnabled()) {
-      float left = (cmd + steer) * g_left_motor_scale;
-      float right = (cmd - steer) * g_right_motor_scale;
+      left_preclip = (cmd + steer) * g_left_motor_scale;
+      right_preclip = (cmd - steer) * g_right_motor_scale;
+      float left = left_preclip;
+      float right = right_preclip;
       
       // Final clamp to +/- 1.0
       left = std::max(-1.0f, std::min(1.0f, left));
       right = std::max(-1.0f, std::min(1.0f, right));
-      
+      left_postclip = left;
+      right_postclip = right;
+      if (left != left_preclip) sat_flags |= 0x2u;
+      if (right != right_preclip) sat_flags |= 0x4u;
+
+      static uint32_t s_last_asymmetry_log_ms = 0;
+      uint32_t now_ms = millis();
+      if ((fabsf(left) > 0.12f || fabsf(right) > 0.12f) &&
+          fabsf(left - right) > 0.20f &&
+          (now_ms - s_last_asymmetry_log_ms) >= 500) {
+        LOG_PRINTF_TRY(abbot::log::CHANNEL_DEFAULT,
+                       "BALANCER: asymmetric output left=%.3f right=%.3f cmd=%.3f steer=%.3f pitch=%.2f rate=%.2f\n",
+                       (double)left,
+                       (double)right,
+                       (double)cmd,
+                       (double)steer,
+                       (double)radToDeg(pitch),
+                       (double)radToDeg(pitch_rate));
+        s_last_asymmetry_log_ms = now_ms;
+      }
+
+      uint32_t motor_cmd_start_us = micros();
       d->setMotorCommandBoth(left, right);
+      uint32_t motor_cmd_elapsed_us = micros() - motor_cmd_start_us;
+      static uint32_t s_last_slow_motor_cmd_log_ms = 0;
+      if (motor_cmd_elapsed_us > 2000 &&
+          (now_ms - s_last_slow_motor_cmd_log_ms) >= 1000) {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                   "BALANCER: WARN slow motor command path (%lu us, left=%.3f right=%.3f cmd=%.3f steer=%.3f)\n",
+                   (unsigned long)motor_cmd_elapsed_us, (double)left,
+                   (double)right, (double)cmd, (double)steer);
+        s_last_slow_motor_cmd_log_ms = now_ms;
+      }
     }
   }
 
+  g_process_cycle_stage = 6;
+  if (g_telemetry_mutex && xSemaphoreTake(g_telemetry_mutex, 0) == pdTRUE) {
+    g_telemetry_state.pid_iterm = res.iterm;
+    g_telemetry_state.lqr_angle = res.lqr_angle;
+    g_telemetry_state.lqr_gyro = res.lqr_gyro;
+    g_telemetry_state.lqr_dist = res.lqr_dist;
+    g_telemetry_state.lqr_speed = res.lqr_speed;
+    g_telemetry_state.cmd_raw = cmd_raw;
+    g_telemetry_state.cmd_final = cmd;
+    g_telemetry_state.steer = steer;
+    g_telemetry_state.left_preclip = left_preclip;
+    g_telemetry_state.right_preclip = right_preclip;
+    g_telemetry_state.left_postclip = left_postclip;
+    g_telemetry_state.right_postclip = right_postclip;
+    g_telemetry_state.sat_flags = sat_flags;
+    xSemaphoreGive(g_telemetry_mutex);
+  }
+
+  g_process_cycle_stage = 7;
   return cmd;
 }
 
@@ -329,7 +478,6 @@ float IRAM_ATTR processCycle(float pitch, float pitch_rate, float dt) {
 void startAutotune() { 
     g_autotune_engine.start(&g_autotune_cfg); 
     g_autotune_active = true; 
-    if (auto d = abbot::motor::getActiveMotorDriver()) d->enableMotors();
 }
 void stopAutotune() { g_autotune_engine.stop(); g_autotune_active = false; }
 bool isAutotuning() { return g_autotune_active; }
@@ -358,10 +506,22 @@ void getDiagnostics(Diagnostics &d) {
         d.lqr_gyro = g_telemetry_state.lqr_gyro;
         d.lqr_dist = g_telemetry_state.lqr_dist;
         d.lqr_speed = g_telemetry_state.lqr_speed;
+        d.cmd_raw = g_telemetry_state.cmd_raw;
+        d.cmd_final = g_telemetry_state.cmd_final;
+        d.steer = g_telemetry_state.steer;
+        d.left_preclip = g_telemetry_state.left_preclip;
+        d.right_preclip = g_telemetry_state.right_preclip;
+        d.left_postclip = g_telemetry_state.left_postclip;
+        d.right_postclip = g_telemetry_state.right_postclip;
+        d.sat_flags = g_telemetry_state.sat_flags;
         xSemaphoreGive(g_telemetry_mutex);
     } else {
         d.enc_l = 0; d.enc_r = 0; d.iterm = 0.0f;
         d.lqr_angle = 0.0f; d.lqr_gyro = 0.0f; d.lqr_dist = 0.0f; d.lqr_speed = 0.0f;
+        d.cmd_raw = 0.0f; d.cmd_final = 0.0f; d.steer = 0.0f;
+        d.left_preclip = 0.0f; d.right_preclip = 0.0f;
+        d.left_postclip = 0.0f; d.right_postclip = 0.0f;
+        d.sat_flags = 0u;
     }
 }
 

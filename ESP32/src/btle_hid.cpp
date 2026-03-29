@@ -8,6 +8,7 @@
 #include "logging.h"
 #include "motor_drivers/driver_manager.h"
 #include <NimBLEDevice.h>
+#include <atomic>
 #include <cstdio>
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
@@ -55,6 +56,35 @@ NimBLEAdvertisedDevice *g_targetDevice = nullptr;
 volatile bool g_connected = false;
 volatile bool g_encrypted = false;
 
+static constexpr uint32_t kPendingActionBalanceToggle = 0x1u;
+static constexpr uint32_t kPendingActionTrimCalibrate = 0x2u;
+static std::atomic<uint32_t> g_pendingControllerActions{0};
+
+static bool tryStartBalanceFromController() {
+  if (!abbot::isImuDataFresh(500)) {
+    abbot::requestImuReinitialize();
+    LOG_PRINTLN(abbot::log::CHANNEL_BLE,
+                ">>> BALANCE START refused: IMU stale, reinit requested");
+    return false;
+  }
+
+  if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    driver->disableMotors();
+    driver->clearCommandState();
+    driver->enableMotors();
+  }
+
+  abbot::balancer::controller::start(abbot::getFusedPitch());
+  return true;
+}
+
+static void stopBalanceFromController() {
+  abbot::balancer::controller::stop();
+  if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    driver->disableMotors();
+  }
+}
+
 // Track button states for edge detection (one byte per tracked button)
 static uint8_t g_lastBalanceButtonState = 0;
 static uint8_t g_lastTrimButtonState = 0;
@@ -82,25 +112,11 @@ static void handleControllerButtons(const uint8_t *pData, size_t length) {
       LOG_PRINTLN(abbot::log::CHANNEL_BLE, buf);
     }
 
-    // Balance toggle: falling edge (button released)
-    if (wasPressed && !currentButton) {
-      if (abbot::balancer::controller::isActive()) {
-        abbot::balancer::controller::stop();
-        if (auto driver = abbot::motor::getActiveMotorDriver()) {
-          driver->disableMotors();
-        }
-        LOG_PRINTLN(abbot::log::CHANNEL_BLE,
-                    ">>> BALANCE STOP (controller button)");
-      } else {
-        if (auto driver = abbot::motor::getActiveMotorDriver()) {
-          if (!driver->areMotorsEnabled()) {
-            driver->enableMotors();
-          }
-        }
-        abbot::balancer::controller::start(abbot::getFusedPitch());
-        LOG_PRINTLN(abbot::log::CHANNEL_BLE,
-                    ">>> BALANCE START (controller button)");
-      }
+    // Balance toggle: rising edge (button pressed) for immediate response.
+    if (!wasPressed && currentButton) {
+      g_pendingControllerActions.fetch_or(kPendingActionBalanceToggle);
+      LOG_PRINTLN(abbot::log::CHANNEL_BLE,
+                  ">>> BALANCE TOGGLE queued (controller button)");
     }
     g_lastBalanceButtonState = currentButton;
   }
@@ -122,11 +138,37 @@ static void handleControllerButtons(const uint8_t *pData, size_t length) {
 
     // Trim calibrate: falling edge (button released)
     if (wasPressed && !currentButton) {
-      abbot::balancer::controller::calibrateTrim();
+      g_pendingControllerActions.fetch_or(kPendingActionTrimCalibrate);
       LOG_PRINTLN(abbot::log::CHANNEL_BLE,
-                  ">>> TRIM CALIBRATED (controller button)");
+                  ">>> TRIM CALIBRATE queued (controller button)");
     }
     g_lastTrimButtonState = currentButton;
+  }
+}
+
+static void processPendingControllerActions() {
+  const uint32_t actions = g_pendingControllerActions.exchange(0);
+  if (actions == 0) {
+    return;
+  }
+
+  if (actions & kPendingActionBalanceToggle) {
+    if (abbot::balancer::controller::isActive()) {
+      stopBalanceFromController();
+      LOG_PRINTLN(abbot::log::CHANNEL_BLE,
+                  ">>> BALANCE STOP (controller button)");
+    } else {
+      if (tryStartBalanceFromController()) {
+        LOG_PRINTLN(abbot::log::CHANNEL_BLE,
+                    ">>> BALANCE START (controller button)");
+      }
+    }
+  }
+
+  if (actions & kPendingActionTrimCalibrate) {
+    abbot::balancer::controller::calibrateTrim();
+    LOG_PRINTLN(abbot::log::CHANNEL_BLE,
+                ">>> TRIM CALIBRATED (controller button)");
   }
 }
 
@@ -254,8 +296,11 @@ static void btleTask(void *pvParameters) {
   pScan->setActiveScan(true);
   pScan->setInterval(100);
   pScan->setWindow(99);
+  uint32_t last_connected_heartbeat_ms = 0;
 
   for (;;) {
+    processPendingControllerActions();
+
     if (!g_connected) {
       g_targetDevice = nullptr;
       LOG_PRINTLN(abbot::log::CHANNEL_BLE, "Scanning for HID devices (5s)...");
@@ -337,9 +382,12 @@ static void btleTask(void *pvParameters) {
 
       vTaskDelay(pdMS_TO_TICKS(1000));
     } else {
-      // Connected, just wait
-      vTaskDelay(pdMS_TO_TICKS(1000));
-      LOG_PRINT(abbot::log::CHANNEL_BLE, ".");
+      uint32_t now_ms = millis();
+      if ((now_ms - last_connected_heartbeat_ms) >= 1000) {
+        LOG_PRINT(abbot::log::CHANNEL_BLE, ".");
+        last_connected_heartbeat_ms = now_ms;
+      }
+      vTaskDelay(pdMS_TO_TICKS(5));
     }
   }
 }

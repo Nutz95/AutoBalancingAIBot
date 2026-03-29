@@ -9,6 +9,27 @@
 namespace abbot {
 namespace balancing {
 
+namespace {
+
+constexpr float kMinUsableLqrFilterHz = 0.5f;
+
+float sanitizeLqrFilterHz(float hz) {
+    if (!std::isfinite(hz) || hz < 0.0f) {
+        return 0.0f;
+    }
+    if (hz > 0.0f && hz < kMinUsableLqrFilterHz) {
+        return 0.0f;
+    }
+    return hz;
+}
+
+void sanitizeConfigFilters(CascadedLqrStrategy::Config& cfg) {
+    cfg.pitch_rate_lpf_hz = sanitizeLqrFilterHz(cfg.pitch_rate_lpf_hz);
+    cfg.cmd_lpf_hz = sanitizeLqrFilterHz(cfg.cmd_lpf_hz);
+}
+
+} // namespace
+
 CascadedLqrStrategy::CascadedLqrStrategy() {
     // Initialize sane in-memory defaults without touching NVS.
     // Persisted values must only be overwritten by an explicit reset
@@ -17,6 +38,8 @@ CascadedLqrStrategy::CascadedLqrStrategy() {
     cfg_.k_gyro  = BALANCER_DEFAULT_K_GYRO;
     cfg_.k_dist  = BALANCER_DEFAULT_K_DIST;
     cfg_.k_speed = BALANCER_DEFAULT_K_SPEED;
+    cfg_.k_yaw = BALANCER_DEFAULT_K_YAW;
+    cfg_.k_yaw_rate = BALANCER_DEFAULT_K_YAW_RATE;
     cfg_.adaptive_trim_enabled = (BALANCER_ENABLE_ADAPTIVE_TRIM != 0);
     cfg_.adaptive_trim_alpha = BALANCER_ADAPTIVE_TRIM_ALPHA;
     cfg_.adaptive_trim_deadband = BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS;
@@ -86,7 +109,7 @@ IBalancingStrategy::Result IRAM_ATTR CascadedLqrStrategy::compute(float pitch_ra
     // Simple PD for steering (Negative feedback to resist turning)
     // Adding a small deadband to yaw_rate to stop jittery tiny corrections
     float filtered_yaw_rate = (fabsf(yaw_rate_rads) < BALANCER_YAW_DEADBAND) ? 0.0f : yaw_rate_rads;
-    float steer = -((yaw_error_accum_rad_ * BALANCER_DEFAULT_K_YAW) + (filtered_yaw_rate * BALANCER_DEFAULT_K_YAW_RATE));
+    float steer = -((yaw_error_accum_rad_ * cfg_.k_yaw) + (filtered_yaw_rate * cfg_.k_yaw_rate));
 
     // 3. Adaptive Trim (Navbot Pillar)
     if (cfg_.adaptive_trim_enabled) {
@@ -183,14 +206,30 @@ void CascadedLqrStrategy::loadConfig() {
         cfg_.k_gyro  = prefs.getFloat("kg", BALANCER_DEFAULT_K_GYRO);
         cfg_.k_dist  = prefs.getFloat("kd", BALANCER_DEFAULT_K_DIST);
         cfg_.k_speed = prefs.getFloat("ks", BALANCER_DEFAULT_K_SPEED);
+        cfg_.k_yaw = prefs.getFloat("ky", BALANCER_DEFAULT_K_YAW);
+        cfg_.k_yaw_rate = prefs.getFloat("kyr", BALANCER_DEFAULT_K_YAW_RATE);
         cfg_.adaptive_trim_enabled = prefs.getBool("ate", (BALANCER_ENABLE_ADAPTIVE_TRIM != 0));
         cfg_.adaptive_trim_alpha = prefs.getFloat("ata", BALANCER_ADAPTIVE_TRIM_ALPHA);
         cfg_.adaptive_trim_deadband = prefs.getFloat("atdb", BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS);
         cfg_.pitch_rate_lpf_hz = prefs.getFloat("prhz", BALANCER_LQR_PITCH_RATE_LPF_HZ);
         cfg_.cmd_lpf_hz = prefs.getFloat("cmdhz", BALANCER_LQR_CMD_LPF_HZ);
         prefs.end();
-        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: gains loaded (Kp=%.6f Kg=%.6f Kd=%.6f Ks=%.6f)\n", 
-                   (double)cfg_.k_pitch, (double)cfg_.k_gyro, (double)cfg_.k_dist, (double)cfg_.k_speed);
+
+        Config loaded_cfg = cfg_;
+        sanitizeConfigFilters(cfg_);
+        if (loaded_cfg.pitch_rate_lpf_hz != cfg_.pitch_rate_lpf_hz ||
+            loaded_cfg.cmd_lpf_hz != cfg_.cmd_lpf_hz) {
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                       "LQR: sanitized unusable filter settings (pitch_rate_lpf_hz=%.3f->%.3f cmd_lpf_hz=%.3f->%.3f)\n",
+                       (double)loaded_cfg.pitch_rate_lpf_hz,
+                       (double)cfg_.pitch_rate_lpf_hz,
+                       (double)loaded_cfg.cmd_lpf_hz,
+                       (double)cfg_.cmd_lpf_hz);
+        }
+
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "LQR: gains loaded (Kp=%.6f Kg=%.6f Kd=%.6f Ks=%.6f Ky=%.6f Kyr=%.6f)\n", 
+                   (double)cfg_.k_pitch, (double)cfg_.k_gyro, (double)cfg_.k_dist, (double)cfg_.k_speed,
+                   (double)cfg_.k_yaw, (double)cfg_.k_yaw_rate);
     }
 }
 
@@ -201,6 +240,8 @@ void CascadedLqrStrategy::saveConfig() {
         prefs.putFloat("kg", cfg_.k_gyro);
         prefs.putFloat("kd", cfg_.k_dist);
         prefs.putFloat("ks", cfg_.k_speed);
+        prefs.putFloat("ky", cfg_.k_yaw);
+        prefs.putFloat("kyr", cfg_.k_yaw_rate);
         prefs.putBool("ate", cfg_.adaptive_trim_enabled);
         prefs.putFloat("ata", cfg_.adaptive_trim_alpha);
         prefs.putFloat("atdb", cfg_.adaptive_trim_deadband);
@@ -215,6 +256,8 @@ void CascadedLqrStrategy::resetToDefaults() {
     cfg_.k_gyro  = BALANCER_DEFAULT_K_GYRO;
     cfg_.k_dist  = BALANCER_DEFAULT_K_DIST;
     cfg_.k_speed = BALANCER_DEFAULT_K_SPEED;
+    cfg_.k_yaw = BALANCER_DEFAULT_K_YAW;
+    cfg_.k_yaw_rate = BALANCER_DEFAULT_K_YAW_RATE;
     cfg_.adaptive_trim_enabled = (BALANCER_ENABLE_ADAPTIVE_TRIM != 0);
     cfg_.adaptive_trim_alpha = BALANCER_ADAPTIVE_TRIM_ALPHA;
     cfg_.adaptive_trim_deadband = BALANCER_ADAPTIVE_TRIM_DEADBAND_TICKS;
@@ -235,6 +278,17 @@ void CascadedLqrStrategy::resetToDefaults() {
 void CascadedLqrStrategy::setConfig(const Config& cfg) {
     bool trim_changed = (cfg_.adaptive_trim_enabled != cfg.adaptive_trim_enabled);
     cfg_ = cfg;
+    Config original_cfg = cfg_;
+    sanitizeConfigFilters(cfg_);
+    if (original_cfg.pitch_rate_lpf_hz != cfg_.pitch_rate_lpf_hz ||
+        original_cfg.cmd_lpf_hz != cfg_.cmd_lpf_hz) {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                   "LQR: rejected too-low filter settings (pitch_rate_lpf_hz=%.3f->%.3f cmd_lpf_hz=%.3f->%.3f)\n",
+                   (double)original_cfg.pitch_rate_lpf_hz,
+                   (double)cfg_.pitch_rate_lpf_hz,
+                   (double)original_cfg.cmd_lpf_hz,
+                   (double)cfg_.cmd_lpf_hz);
+    }
     saveConfig();
     
     // If we just enabled trim, we might want to log it

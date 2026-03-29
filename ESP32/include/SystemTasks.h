@@ -30,6 +30,7 @@ void detachCalibrationQueue();
 // returns pitch rate in rad/s.
 float getFusedPitch();
 float getFusedPitchRate();
+bool getFusedStateSnapshot(float &pitch_rad, float &pitch_rate_rads);
 
 // TUNING CSV stream control. When enabled the device will print CSV lines to
 // the serial console at each IMU sample containing:
@@ -57,6 +58,13 @@ bool isFusionReady();
 
 // Remaining warmup samples (0 when no warmup in progress)
 unsigned long getFusionWarmupRemaining();
+
+// Returns true when the last IMU sample was received recently enough.
+bool isImuDataFresh(uint32_t maxAgeMs);
+
+// Request that the IMU producer task perform a safe reinitialization of the
+// IMU driver on its own thread.
+void requestImuReinitialize();
 
 // Runtime filter selection helpers are provided by `filter_manager.h`.
 

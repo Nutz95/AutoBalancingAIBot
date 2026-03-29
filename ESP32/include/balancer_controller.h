@@ -94,6 +94,7 @@ void resetTrim();       // Clear calibrated trim (reverts to dynamic capture)
 // Provide latest IMU sample (robot frame) for logging/diagnostics.
 // accel in m/s^2, gyro in rad/s.
 void setLatestImuSample(const float accel_robot[3], const float gyro_robot[3]);
+uint32_t getDebugStage();
 
 // Diagnostics helper for telemetry
 struct Diagnostics {
@@ -104,6 +105,14 @@ struct Diagnostics {
     float lqr_gyro;
     float lqr_dist;
     float lqr_speed;
+    float cmd_raw;
+    float cmd_final;
+    float steer;
+    float left_preclip;
+    float right_preclip;
+    float left_postclip;
+    float right_postclip;
+    uint32_t sat_flags;
 };
 void getDiagnostics(Diagnostics &d);
 

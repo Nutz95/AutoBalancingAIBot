@@ -3,6 +3,12 @@
 #include "IStepGenerator.h"
 #include <driver/rmt.h>
 
+#if !defined(UNIT_TEST_HOST)
+#include <freertos/FreeRTOS.h>
+#include <freertos/semphr.h>
+#endif
+
+
 namespace abbot {
 namespace motor {
 
@@ -30,7 +36,7 @@ public:
      * @param is_left True for left motor, false for right
      * @param freq_hz Frequency in Hz (0 to stop)
      */
-    void setFrequency(bool is_left, uint32_t freq_hz) override;
+    bool setFrequency(bool is_left, uint32_t freq_hz) override;
 
     /**
      * @brief Stop pulse generation immediately.
@@ -46,6 +52,11 @@ private:
 
     rmt_channel_t m_left_chan = RMT_CHANNEL_2;
     rmt_channel_t m_right_chan = RMT_CHANNEL_3;
+
+#if !defined(UNIT_TEST_HOST)
+    SemaphoreHandle_t m_left_mutex  = nullptr;
+    SemaphoreHandle_t m_right_mutex = nullptr;
+#endif
 
     void updateHardware(rmt_channel_t channel, uint32_t freq);
 };

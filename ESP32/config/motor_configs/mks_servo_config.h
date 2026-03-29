@@ -267,9 +267,11 @@ enum class MksServoHoldCurrent : uint8_t {
 // =============================================================================
 
 // Max speed in RPM (MKS protocol uses 12-bit value 0-3000)
-// Increased to 1200 for better recovery response to disturbances
+// REDUCED from 1200 to 300: at 1200 RPM cmd=1.0 gives 4.22 m/s (way too aggressive
+// for balancing corrections). At 300 RPM cmd=1.0 gives 1.05 m/s, which is appropriate.
+// With this scaling, Kp/Kg gains can be ×4 higher without saturation during normal corrections.
 #ifndef VELOCITY_MAX_SPEED
-#define VELOCITY_MAX_SPEED 1200
+#define VELOCITY_MAX_SPEED 300
 #endif
 
 // Encoder update frequency (Hz). 

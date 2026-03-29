@@ -17,6 +17,8 @@ public:
         float k_gyro;
         float k_dist;
         float k_speed;
+        float k_yaw;
+        float k_yaw_rate;
         bool adaptive_trim_enabled;
         float adaptive_trim_alpha;
         float adaptive_trim_deadband;

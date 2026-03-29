@@ -18,6 +18,7 @@ import struct
 import sys
 import time
 import math
+import json
 from collections import defaultdict
 
 import numpy as np
@@ -51,12 +52,14 @@ import pandas as pd
 #     uint32_t prof_t;             // 4
 #     uint32_t prof_log;           // 4
 # };
-# v2 adds last_encoder_age_ms after enc_l/enc_r
-TELEMETRY_FMT = "<2I6f3f3ff2i8I6f4I"
+# v3 appends command saturation / motor mixing diagnostics after prof_log
+TELEMETRY_FMT = "<2I6f3f3ff2i8I6f4I6fI"
+TELEMETRY_FMT_V2 = "<2I6f3f3ff2i8I6f4I"
 TELEMETRY_FMT_V1 = "<2I6f3f3ff2i7I6f4I"
 TELEMETRY_FMT_ACK_LR = "<2I6f3f3ff2i3I6f4I"
 TELEMETRY_FMT_LEGACY_ACK = "<2I6f3f3ff2i2I6f4I"
 TELEMETRY_SIZE = struct.calcsize(TELEMETRY_FMT)
+TELEMETRY_SIZE_V2 = struct.calcsize(TELEMETRY_FMT_V2)
 TELEMETRY_SIZE_V1 = struct.calcsize(TELEMETRY_FMT_V1)
 TELEMETRY_SIZE_ACK_LR = struct.calcsize(TELEMETRY_FMT_ACK_LR)
 TELEMETRY_SIZE_LEGACY_ACK = struct.calcsize(TELEMETRY_FMT_LEGACY_ACK)
@@ -66,7 +69,7 @@ UDP_PORT = 8888
 DRIVE_RE = re.compile(r"DRIVE DBG t=(?P<t>\d+)ms.*?tgtV=(?P<tgtV>[-0-9.eE]+).*?filtV=(?P<filtV>[-0-9.eE]+).*?pitch_setpoint=(?P<pitch_setpoint>[-0-9.eE]+)deg.*?pitch_setpoint_rate=(?P<pitch_setpoint_rate>[-0-9.eE]+)deg/s.*?pid_in=(?P<pid_in_drive>[-0-9.eE]+)deg.*?pid_rate=(?P<pid_rate_drive>[-0-9.eE]+)deg/s.*?pid_out=(?P<pid_out_drive>[-0-9.eE]+)")
 SETDRIVE_RE = re.compile(r"SETDRIVE: t=(?P<t>\d+)ms v_req=(?P<v_req>[-0-9.eE]+) w_req=(?P<w_req>[-0-9.eE]+)")
 BAL_RE = re.compile(
-    r"BALANCER_DBG t=(?P<t>\d+)ms.*?pitch=(?P<pitch>[-0-9.eE]+)deg.*?pid_in=(?P<pid_in>[-0-9.eE]+)deg.*?pid_out=(?P<pid_out>[-0-9.eE]+).*?iterm=(?P<iterm>[-0-9.eE]+).*?cmd=(?P<cmd>[-0-9.eE]+)(?:.*?steer=(?P<steer>[-0-9.eE]+))?.*?lat=(?P<lat>\d+)us.*?ax=(?P<ax>[-0-9.eE]+).*?ay=(?P<ay>[-0-9.eE]+).*?az=(?P<az>[-0-9.eE]+).*?gx=(?P<gx>[-0-9.eE]+).*?gy=(?P<gy>[-0-9.eE]+).*?gz=(?P<gz>[-0-9.eE]+)(?:.*?lp_hz=(?P<lp_hz>[-0-9.eE]+))?(?:.*?encL=(?P<encL>[-0-9.eE]+))?(?:.*?encR=(?P<encR>[-0-9.eE]+))?(?:.*?termA=(?P<lqr_angle>[-0-9.eE]+))?(?:.*?termG=(?P<lqr_gyro>[-0-9.eE]+))?(?:.*?termD=(?P<lqr_dist>[-0-9.eE]+))?(?:.*?termS=(?P<lqr_speed>[-0-9.eE]+))?(?:.*?prof_f=(?P<prof_f>\d+))?(?:.*?prof_l=(?P<prof_l>\d+))?(?:.*?prof_t=(?P<prof_t>\d+))?"
+    r"BALANCER_DBG t=(?P<t>\d+)ms.*?pitch=(?P<pitch>[-0-9.eE]+)deg.*?pid_in=(?P<pid_in>[-0-9.eE]+)deg.*?pid_out=(?P<pid_out>[-0-9.eE]+).*?iterm=(?P<iterm>[-0-9.eE]+).*?cmd=(?P<cmd>[-0-9.eE]+)(?:.*?steer=(?P<steer>[-0-9.eE]+))?.*?lat=(?P<lat>\d+)us.*?ax=(?P<ax>[-0-9.eE]+).*?ay=(?P<ay>[-0-9.eE]+).*?az=(?P<az>[-0-9.eE]+).*?gx=(?P<gx>[-0-9.eE]+).*?gy=(?P<gy>[-0-9.eE]+).*?gz=(?P<gz>[-0-9.eE]+)(?:.*?lp_hz=(?P<lp_hz>[-0-9.eE]+))?(?:.*?encL=(?P<encL>[-0-9.eE]+))?(?:.*?encR=(?P<encR>[-0-9.eE]+))?(?:.*?termA=(?P<lqr_angle>[-0-9.eE]+))?(?:.*?termG=(?P<lqr_gyro>[-0-9.eE]+))?(?:.*?termD=(?P<lqr_dist>[-0-9.eE]+))?(?:.*?termS=(?P<lqr_speed>[-0-9.eE]+))?(?:.*?cmdRaw=(?P<cmd_raw>[-0-9.eE]+))?(?:.*?cmdFinal=(?P<cmd_final>[-0-9.eE]+))?(?:.*?leftPre=(?P<left_preclip>[-0-9.eE]+))?(?:.*?rightPre=(?P<right_preclip>[-0-9.eE]+))?(?:.*?leftPost=(?P<left_postclip>[-0-9.eE]+))?(?:.*?rightPost=(?P<right_postclip>[-0-9.eE]+))?(?:.*?sat=0x(?P<sat_flags>[0-9A-Fa-f]+))?(?:.*?prof_f=(?P<prof_f>\d+))?(?:.*?prof_l=(?P<prof_l>\d+))?(?:.*?prof_t=(?P<prof_t>\d+))?"
 )
 
 # Motor telemetry (produced by src/motor_telemetry_manager.cpp)
@@ -83,7 +86,11 @@ CPU_RE = re.compile(r"CPU:\s+t=(?P<t>\d+)ms\s+core0=(?P<cpu0>[-0-9.eE]+)%\s+core
 GAIN_RE_PID = re.compile(r"BALANCER: started \(PID\) \(Kp=(?P<kp>[-0-9.eE]+) Ki=(?P<ki>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+)\)")
 GAIN_RE_LQR = re.compile(r"BALANCER: started \(LQR\) \(Kp=(?P<kp>[-0-9.eE]+) Kg=(?P<kg>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+) Ks=(?P<ks>[-0-9.eE]+)\)")
 GAIN_RE_LQR_BOOT = re.compile(r"LQR: gains loaded \(Kp=(?P<kp>[-0-9.eE]+) Kg=(?P<kg>[-0-9.eE]+) Kd=(?P<kd>[-0-9.eE]+) Ks=(?P<ks>[-0-9.eE]+)\)")
-FILTER_RE = re.compile(r"FUSION: active filter=(?P<filter>[A-Za-z0-9_]+)|\[Filter: (?P<filter2>[A-Za-z0-9_]+)\]")
+GAIN_RE_LQR_RUNTIME = re.compile(r"LQR:\s+(?:gains updated\s*|Kp_pitch=)\(?Kp(?:_pitch)?=(?P<kp>[-0-9.eE]+)\s+Kg(?:_gyro)?=(?P<kg>[-0-9.eE]+)\s+Kd(?:_dist)?=(?P<kd>[-0-9.eE]+)\s+Ks(?:_speed)?=(?P<ks>[-0-9.eE]+)\)?")
+FILTER_RE = re.compile(r"FUSION: active filter(?: set to)?=(?P<filter>[A-Za-z0-9_]+)|\[Filter: (?P<filter2>[A-Za-z0-9_]+)\]|FILTER:\s+current=(?P<filter3>[A-Za-z0-9_]+)")
+LQR_FILTER_RE = re.compile(r"LQR:\s+filters(?: updated)?\s*\(?(?:pitch_rate_lpf_hz=)?(?P<pitch_rate>[-0-9.eE]+)\s+(?:cmd_lpf_hz=)?(?P<cmd_hz>[-0-9.eE]+)\)?")
+LQR_YAW_RE = re.compile(r"LQR:\s+yaw gains(?: updated| reset)?\s+Ky=(?P<ky>[-0-9.eE]+)\s+Kyr=(?P<kyr>[-0-9.eE]+)")
+MOTOR_GAINS_RE = re.compile(r"MOTOR_GAINS:\s+L=(?P<left>[-0-9.eE]+)\s+R=(?P<right>[-0-9.eE]+)")
 
 
 def safe_float(v):
@@ -93,6 +100,14 @@ def safe_float(v):
         return float(v)
     except ValueError:
         return 0.0
+
+def safe_hex_uint(v):
+    if v is None or v == "":
+        return 0
+    try:
+        return int(v, 16)
+    except ValueError:
+        return 0
 
 def _maybe_update_motor_sync(motor_sync, bal_t_ms=None, motor_ts_us=None):
     if bal_t_ms is not None and motor_sync.get('first_bal_t_ms') is None:
@@ -122,7 +137,8 @@ def parse_line(line, rows, motor_sync):
         return
     m = BAL_RE.search(line)
     if m:
-        d = {k: safe_float(v) for k, v in m.groupdict().items()}
+        d = {k: safe_float(v) for k, v in m.groupdict().items() if k != 'sat_flags'}
+        d['sat_flags'] = safe_hex_uint(m.groupdict().get('sat_flags'))
         t = int(float(d.pop('t')))
         _maybe_update_motor_sync(motor_sync, bal_t_ms=t)
         rows['bal'][t].update(d)
@@ -211,6 +227,19 @@ def parse_binary(data, rows, motor_sync):
         bus_lat_left_age = v[23]
         bus_lat_right_age = v[24]
         lqr_index = 25
+        diag_index = lqr_index + 10
+    elif len(data) == TELEMETRY_SIZE_V2:
+        v = struct.unpack(TELEMETRY_FMT_V2, data)
+        last_encoder_age_ms = v[17]
+        lat_index = 18
+        ack_left = v[19]
+        ack_right = v[20]
+        bus_lat_left = v[21]
+        bus_lat_right = v[22]
+        bus_lat_left_age = v[23]
+        bus_lat_right_age = v[24]
+        lqr_index = 25
+        diag_index = None
     elif len(data) == TELEMETRY_SIZE_V1:
         v = struct.unpack(TELEMETRY_FMT_V1, data)
         ack_left = v[18]
@@ -229,6 +258,7 @@ def parse_binary(data, rows, motor_sync):
         bus_lat_left_age = 0
         bus_lat_right_age = 0
         lqr_index = 20
+        diag_index = None
     elif len(data) == TELEMETRY_SIZE_LEGACY_ACK:
         v = struct.unpack(TELEMETRY_FMT_LEGACY_ACK, data)
         ack_left = v[18]
@@ -238,6 +268,7 @@ def parse_binary(data, rows, motor_sync):
         bus_lat_left_age = 0
         bus_lat_right_age = 0
         lqr_index = 19
+        diag_index = None
     else:
         return False
     if v[0] != 0xABBA0001:
@@ -276,6 +307,16 @@ def parse_binary(data, rows, motor_sync):
         'prof_t': v[lqr_index + 8],
         'prof_log': v[lqr_index + 9]
     }
+    if diag_index is not None:
+        d.update({
+            'cmd_raw': v[diag_index],
+            'cmd_final': v[diag_index + 1],
+            'left_preclip': v[diag_index + 2],
+            'right_preclip': v[diag_index + 3],
+            'left_postclip': v[diag_index + 4],
+            'right_postclip': v[diag_index + 5],
+            'sat_flags': v[diag_index + 6],
+        })
     rows['bal'][t].update(d)
     return True
 
@@ -297,8 +338,43 @@ def update_gain_info_from_line(line, gains, gain_info, strategy_mode):
         gains = {k: float(m_gain_lqr_boot.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
         gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
         strategy_mode = 'LQR'
+    else:
+        m_gain_lqr_runtime = GAIN_RE_LQR_RUNTIME.search(line)
+        if m_gain_lqr_runtime:
+            gains = {k: float(m_gain_lqr_runtime.group(k)) for k in ['kp', 'kg', 'kd', 'ks']}
+            gain_info = f"LQR: Kp={gains['kp']} Kg={gains['kg']} Kd={gains['kd']} Ks={gains['ks']}"
+            strategy_mode = 'LQR'
 
     return gains, gain_info, strategy_mode
+
+
+def update_metadata_from_line(line, filter_info, lqr_filter_info, yaw_info, motor_gain_info, trim_info):
+    m_filter = FILTER_RE.search(line)
+    if m_filter:
+        filter_info = m_filter.group('filter') or m_filter.group('filter2') or m_filter.group('filter3')
+
+    m_lqr_filter = LQR_FILTER_RE.search(line)
+    if m_lqr_filter:
+        lqr_filter_info = f"pitch_rate_lpf_hz={float(m_lqr_filter.group('pitch_rate')):.2f} cmd_lpf_hz={float(m_lqr_filter.group('cmd_hz')):.2f}"
+
+    m_lqr_yaw = LQR_YAW_RE.search(line)
+    if m_lqr_yaw:
+        yaw_info = f"Ky={float(m_lqr_yaw.group('ky')):.3f} Kyr={float(m_lqr_yaw.group('kyr')):.3f}"
+
+    m_motor_gains = MOTOR_GAINS_RE.search(line)
+    if m_motor_gains:
+        motor_gain_info = f"L={float(m_motor_gains.group('left')):.3f} R={float(m_motor_gains.group('right')):.3f}"
+
+    if "using calibrated trim =" in line:
+        m = re.search(r"using calibrated trim = ([-0-9.]+) deg", line)
+        if m:
+            trim_info = {"val": float(m.group(1)), "type": "calibrated", "detected": True}
+    elif "dynamic trim captured =" in line:
+        m = re.search(r"dynamic trim captured = ([-0-9.]+) deg", line)
+        if m:
+            trim_info = {"val": float(m.group(1)), "type": "dynamic", "detected": True}
+
+    return filter_info, lqr_filter_info, yaw_info, motor_gain_info, trim_info
 
 
 def update_fall_stop_state(sample, auto_stop_state, fall_angle_deg=45.0, settle_cmd_abs=0.05, hold_ms=300):
@@ -356,6 +432,9 @@ def main():
     gains = {'kp': 0.0, 'ki': 0.0, 'kd': 0.0, 'kg': 0.0, 'ks': 0.0}
     strategy_mode = 'PID' # Default
     filter_info = "Unknown Filter"
+    lqr_filter_info = "pitch_rate_lpf_hz=? cmd_lpf_hz=?"
+    yaw_info = "Ky=? Kyr=?"
+    motor_gain_info = "L=? R=?"
     trim_info = {"val": 0.0, "type": "dynamic", "detected": False}
     auto_stop_state = {'candidate_t_ms': None, 'triggered': False, 'trigger_t_ms': None}
     
@@ -365,19 +444,9 @@ def main():
             for line in f:
                 line = line.strip()
                 gains, gain_info, strategy_mode = update_gain_info_from_line(line, gains, gain_info, strategy_mode)
-                m_filter = FILTER_RE.search(line)
-                if m_filter:
-                    filter_info = m_filter.group('filter') or m_filter.group('filter2')
-                
-                # Detect trim info
-                if "using calibrated trim =" in line:
-                    m = re.search(r"using calibrated trim = ([-0-9.]+) deg", line)
-                    if m:
-                        trim_info = {"val": float(m.group(1)), "type": "calibrated", "detected": True}
-                elif "dynamic trim captured =" in line:
-                    m = re.search(r"dynamic trim captured = ([-0-9.]+) deg", line)
-                    if m:
-                        trim_info = {"val": float(m.group(1)), "type": "dynamic", "detected": True}
+                filter_info, lqr_filter_info, yaw_info, motor_gain_info, trim_info = update_metadata_from_line(
+                    line, filter_info, lqr_filter_info, yaw_info, motor_gain_info, trim_info
+                )
 
                 parse_line(line, rows, motor_sync)
     else:
@@ -411,6 +480,20 @@ def main():
             # We no longer enable text logs by default as binary telemetry is much faster.
             # sock.sendall(b"LOG ENABLE BALANCER\n")
             print(">>> Sent SYS TELEM UDP AUTO (Binary telemetry)")
+            metadata_cmds = [
+                "BALANCE LQR GAINS\n",
+                "BALANCE LQR FILTER SHOW\n",
+                "BALANCE LQR YAW SHOW\n",
+                "BALANCE MOTOR_GAINS GET\n",
+                "BALANCE LQR TRIM\n",
+                "FILTER STATUS\n",
+            ]
+            for cmd in metadata_cmds:
+                try:
+                    sock.sendall(cmd.encode('utf8'))
+                    time.sleep(0.03)
+                except Exception:
+                    pass
 
             if args.motor_telemetry_ms and args.motor_telemetry_ms > 0:
                 try:
@@ -548,10 +631,24 @@ def main():
                         if gain_info != prev_gain_info and gain_info != "Unknown Gains":
                             print(f">>> Detected Strategy: {gain_info}")
 
-                        m_filter = FILTER_RE.search(line)
-                        if m_filter:
-                            filter_info = m_filter.group('filter') or m_filter.group('filter2')
+                        prev_filter_info = filter_info
+                        prev_lqr_filter_info = lqr_filter_info
+                        prev_yaw_info = yaw_info
+                        prev_motor_gain_info = motor_gain_info
+                        prev_trim_info = trim_info.copy()
+                        filter_info, lqr_filter_info, yaw_info, motor_gain_info, trim_info = update_metadata_from_line(
+                            line, filter_info, lqr_filter_info, yaw_info, motor_gain_info, trim_info
+                        )
+                        if filter_info != prev_filter_info:
                             print(f">>> Detected Filter: {filter_info}")
+                        if lqr_filter_info != prev_lqr_filter_info:
+                            print(f">>> Detected LQR filters: {lqr_filter_info}")
+                        if yaw_info != prev_yaw_info:
+                            print(f">>> Detected LQR yaw: {yaw_info}")
+                        if motor_gain_info != prev_motor_gain_info:
+                            print(f">>> Detected motor gains: {motor_gain_info}")
+                        if trim_info != prev_trim_info and trim_info['detected']:
+                            print(f">>> {trim_info['type'].upper()} TRIM detected: {trim_info['val']} deg")
 
                         # Detect balancer start to trigger clearing of old data
                         if "BALANCER: started" in line or ("BALANCER_DBG" in line and not started):
@@ -565,24 +662,11 @@ def main():
 
                             # Re-parse recent history to catch metadata if missed
                             for prev_line in recent_lines:
-                                m_f = FILTER_RE.search(prev_line)
-                                if m_f: 
-                                    filter_info = m_f.group('filter') or m_f.group('filter2')
-                                
                                 gains, gain_info, strategy_mode = update_gain_info_from_line(prev_line, gains, gain_info, strategy_mode)
+                                filter_info, lqr_filter_info, yaw_info, motor_gain_info, trim_info = update_metadata_from_line(
+                                    prev_line, filter_info, lqr_filter_info, yaw_info, motor_gain_info, trim_info
+                                )
                             started = True
-
-                        # Detect trim info
-                        if "using calibrated trim =" in line:
-                            m = re.search(r"using calibrated trim = ([-0-9.]+) deg", line)
-                            if m:
-                                trim_info = {"val": float(m.group(1)), "type": "calibrated", "detected": True}
-                                print(f">>> {trim_info['type'].upper()} TRIM detected: {trim_info['val']} deg")
-                        elif "dynamic trim captured =" in line:
-                            m = re.search(r"dynamic trim captured = ([-0-9.]+) deg", line)
-                            if m:
-                                trim_info = {"val": float(m.group(1)), "type": "dynamic", "detected": True}
-                                print(f">>> {trim_info['type'].upper()} TRIM detected: {trim_info['val']} deg")
 
                         should_parse = started
                         if not should_parse:
@@ -646,6 +730,21 @@ def main():
         recs.append(r)
     
     df = pd.DataFrame(recs).sort_values('time_ms')
+
+    metadata = {
+        'strategy_mode': strategy_mode,
+        'gain_info': gain_info,
+        'filter_info': filter_info,
+        'lqr_filter_info': lqr_filter_info,
+        'yaw_info': yaw_info,
+        'motor_gain_info': motor_gain_info,
+        'trim_type': trim_info.get('type', ''),
+        'trim_detected': bool(trim_info.get('detected', False)),
+        'trim_val_deg': float(trim_info.get('val', 0.0)),
+    }
+
+    for key, value in metadata.items():
+        df[f'meta_{key}'] = value
     
     # Auto-detect strategy mode if not explicitly caught from header
     if strategy_mode == 'PID':
@@ -660,13 +759,30 @@ def main():
     df.to_csv(args.csv, index=False)
     print(f"Wrote CSV: {args.csv}")
 
+    try:
+        with open(args.out, 'a', encoding='utf8') as out_fh:
+            out_fh.write("\n# CAPTURE_METADATA_BEGIN\n")
+            out_fh.write(f"# CAPTURE_METADATA_JSON {json.dumps(metadata, sort_keys=True)}\n")
+            out_fh.write(f"# CAPTURE_METADATA strategy_mode={strategy_mode}\n")
+            out_fh.write(f"# CAPTURE_METADATA gain_info={gain_info}\n")
+            out_fh.write(f"# CAPTURE_METADATA filter_info={filter_info}\n")
+            out_fh.write(f"# CAPTURE_METADATA lqr_filter_info={lqr_filter_info}\n")
+            out_fh.write(f"# CAPTURE_METADATA yaw_info={yaw_info}\n")
+            out_fh.write(f"# CAPTURE_METADATA motor_gain_info={motor_gain_info}\n")
+            out_fh.write(f"# CAPTURE_METADATA trim_type={trim_info.get('type', '')}\n")
+            out_fh.write(f"# CAPTURE_METADATA trim_detected={int(bool(trim_info.get('detected', False)))}\n")
+            out_fh.write(f"# CAPTURE_METADATA trim_val_deg={float(trim_info.get('val', 0.0)):.6f}\n")
+            out_fh.write("# CAPTURE_METADATA_END\n")
+    except Exception as e:
+        print(f"WARN: failed to append metadata to log: {e}")
+
     # Extra stats calculation for display
     stats_text = ""
     # Ticks to meters scale: (math.pi * 0.067) / 51200.0 (67mm wheel)
     t2m = (math.pi * 0.067) / 51200.0
     
     try:
-        valid_pitch = df['pitch'].dropna()
+        valid_pitch = df['pitch'].dropna() if 'pitch' in df.columns else pd.Series(dtype=float)
         if not valid_pitch.empty:
             mean_p = valid_pitch.mean()
             std_p = valid_pitch.std()
@@ -713,20 +829,22 @@ def main():
             df['p_term'] = (df['pid_in'] - trim_info['val']) * gains['kp']
             df['d_term'] = df['pid_out'] - df['p_term'] - df['iterm'] # Roughly iterm + d_term
         elif strategy_mode == 'LQR' and 'pitch' in df.columns and 'gy' in df.columns:
-            # LQR u = Kp*theta + Kg*gyro - Kd*dist - Ks*speed
-            # theta and gyro are in degrees in the log
-            # dist is (encL+encR)/2
-            # speed is d(dist)/dt
-            df['lqr_angle'] = (df['pitch'] - trim_info['val']) * gains.get('kp', 0.0)
-            df['lqr_gyro'] = df['gy'] * gains.get('kg', 0.0)
+            # Only backfill missing decomposition terms. If the firmware already
+            # sent them, trust the packet instead of reconstructing approximations.
+            if 'lqr_angle' not in df.columns or df['lqr_angle'].dropna().empty:
+                df['lqr_angle'] = (df['pitch'] - trim_info['val']) * gains.get('kp', 0.0)
+            if 'lqr_gyro' not in df.columns or df['lqr_gyro'].dropna().empty:
+                df['lqr_gyro'] = df['gy'] * gains.get('kg', 0.0)
             if 'encL' in df.columns and 'encR' in df.columns:
                 df['dist'] = (df['encL'] + df['encR']) / 2.0
                 df['dist_err'] = df['dist'] - df['dist'].iloc[0] # Relative to start of capture
-                df['lqr_dist'] = -df['dist_err'] * gains.get('kd', 0.0)
+                if 'lqr_dist' not in df.columns or df['lqr_dist'].dropna().empty:
+                    df['lqr_dist'] = -df['dist_err'] * gains.get('kd', 0.0)
                 # Velocity estimation (simple)
                 dt_s = df['time_ms'].diff() / 1000.0
                 df['speed'] = df['dist'].diff() / dt_s
-                df['lqr_speed'] = -df['speed'] * gains.get('ks', 0.0)
+                if 'lqr_speed' not in df.columns or df['lqr_speed'].dropna().empty:
+                    df['lqr_speed'] = -df['speed'] * gains.get('ks', 0.0)
 
         time_origin_ms = int(df['time_ms'].iloc[0])
         try:
@@ -763,7 +881,8 @@ def main():
 
         has_motor = any(k.startswith('motor_') for k in df.columns)
         has_cpu = ('cpu_core0_pct' in df.columns) or ('cpu_core1_pct' in df.columns)
-        nrows = 8 + (1 if has_cpu else 0) + (1 if has_motor else 0)
+        has_sat = any(c in df.columns for c in ['cmd_raw', 'left_preclip', 'right_preclip', 'sat_flags'])
+        nrows = 8 + (1 if has_sat else 0) + (1 if has_cpu else 0) + (1 if has_motor else 0)
         plt.figure(figsize=(18, 30 if has_motor else 28))
         
         # Subplot 1: Pitch
@@ -791,7 +910,7 @@ def main():
         ax1.set_ylabel('Degrees')
         ax1.legend(loc='upper right')
         ax1.grid(True)
-        ax1.set_title(f'Balancer Pitch stability ({filter_info} | {gain_info})')
+        ax1.set_title(f'Balancer Pitch stability ({filter_info} | {gain_info} | {lqr_filter_info} | yaw {yaw_info} | motor {motor_gain_info})')
 
         # Subplot 2: PID Components (Decomposition)
         ax2 = plt.subplot(nrows, 1, 2, sharex=ax1)
@@ -820,6 +939,7 @@ def main():
 
         # Subplot 3: Loop Frequency and Latency
         ax3 = plt.subplot(nrows, 1, 3, sharex=ax1)
+        target_hz = 1000.0
         if 'lp_hz' in df.columns:
             # Detect target frequency
             max_hz = df['lp_hz'].max()
@@ -917,8 +1037,37 @@ def main():
         ax4.legend(loc='upper right')
         ax4.grid(True)
 
+        next_row = 5
+        if has_sat:
+            ax_sat = plt.subplot(nrows, 1, next_row, sharex=ax1)
+            if 'cmd_raw' in df.columns:
+                ax_sat.plot(t_axis, df['cmd_raw'], color='gray', linestyle=':', label='cmd raw', alpha=0.9)
+            if 'cmd' in df.columns:
+                ax_sat.plot(t_axis, df['cmd'], color='k', linestyle='-', label='cmd final', alpha=0.9)
+            if 'left_preclip' in df.columns:
+                ax_sat.plot(t_axis, df['left_preclip'], color='tab:blue', linestyle='--', label='left preclip', alpha=0.6)
+            if 'right_preclip' in df.columns:
+                ax_sat.plot(t_axis, df['right_preclip'], color='tab:red', linestyle='--', label='right preclip', alpha=0.6)
+            if 'left_postclip' in df.columns:
+                ax_sat.plot(t_axis, df['left_postclip'], color='tab:blue', linestyle='-', label='left postclip', alpha=0.9)
+            if 'right_postclip' in df.columns:
+                ax_sat.plot(t_axis, df['right_postclip'], color='tab:red', linestyle='-', label='right postclip', alpha=0.9)
+            if 'sat_flags' in df.columns:
+                sat = pd.to_numeric(df['sat_flags'], errors='coerce').fillna(0).astype(int)
+                cmd_sat = (sat & 0x1) != 0
+                left_sat = (sat & 0x2) != 0
+                right_sat = (sat & 0x4) != 0
+                ax_sat.scatter(t_axis[cmd_sat], np.full(cmd_sat.sum(), 1.12), s=10, color='k', label='cmd clipped', alpha=0.7)
+                ax_sat.scatter(t_axis[left_sat], np.full(left_sat.sum(), 1.18), s=10, color='tab:blue', label='left clipped', alpha=0.7)
+                ax_sat.scatter(t_axis[right_sat], np.full(right_sat.sum(), 1.24), s=10, color='tab:red', label='right clipped', alpha=0.7)
+            ax_sat.set_ylabel('Mix / clip')
+            ax_sat.set_title('Command Mixing & Saturation')
+            ax_sat.legend(loc='upper right', ncol=2, fontsize=8)
+            ax_sat.grid(True)
+            next_row += 1
+
         # Subplot 5: Navigation Analysis (Linear Distance & Rotation)
-        ax5 = plt.subplot(nrows, 1, 5, sharex=ax1)
+        ax5 = plt.subplot(nrows, 1, next_row, sharex=ax1)
         if 'encL' in df.columns and 'encR' in df.columns:
             linear_pos = (df['encL'] + df['encR']) / 2.0
             rotation = (df['encL'] - df['encR']) / 2.0  # Proxy for heading
@@ -952,9 +1101,10 @@ def main():
             
         ax5.set_title('Navigation Analysis (Forward/Backward & Yaw Orientation)')
         ax5.grid(True)
+        next_row += 1
 
         # Subplot 6: Yaw Stability and Heading Hold
-        ax6 = plt.subplot(nrows, 1, 6, sharex=ax1)
+        ax6 = plt.subplot(nrows, 1, next_row, sharex=ax1)
         if 'gz' in df.columns:
             ax6.plot(t_axis, np.degrees(df['gz']), 'r-', label='Yaw Rate (deg/s)', alpha=0.8)
         if 'steer' in df.columns:
@@ -973,19 +1123,21 @@ def main():
         ax6.set_ylabel('Rate (deg/s)', color='r')
         ax6.set_title('Yaw Stability and Heading Hold')
         ax6.grid(True)
+        next_row += 1
 
         # Subplot 7: IMU Raw Pitch-Axis
-        ax7 = plt.subplot(nrows, 1, 7, sharex=ax1)
+        ax7 = plt.subplot(nrows, 1, next_row, sharex=ax1)
         ax7.plot(t_axis, df['gx'], label='Gyro X (Roll)', alpha=0.3)
         ax7.plot(t_axis, df['gy'], label='Gyro Y (Pitch)', alpha=0.8)
         ax7.plot(t_axis, df['ax'], label='Accel X (Linear)', alpha=0.6)
         ax7.set_ylabel('IMU Raw')
         ax7.legend(loc='upper right')
         ax7.grid(True)
+        next_row += 1
 
         # Subplot 8: FFT Analysis (Pitch)
         # Goal: highlight resonances (e.g. 8-20Hz) and ignore the low-frequency fall/drift.
-        ax8 = plt.subplot(nrows, 1, 8)
+        ax8 = plt.subplot(nrows, 1, next_row)
         pitch_df = df[['time_ms', 'pitch']].dropna()
         if len(pitch_df) > 32:  # Lowered requirement (from 64)
             dt_series = pitch_df['time_ms'].diff().dropna()
@@ -1062,8 +1214,7 @@ def main():
         ax8.set_ylabel('Magnitude')
         ax8.set_xlabel('Frequency (Hz)')
         ax8.grid(True)
-
-        next_row = 9
+        next_row += 1
         if has_cpu:
             ax_cpu = plt.subplot(nrows, 1, next_row, sharex=ax1)
             # Use rolling means and fill_between for clarity

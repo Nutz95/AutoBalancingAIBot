@@ -7,7 +7,7 @@ namespace telemetry {
 #pragma pack(push, 1)
 /**
  * @brief Binary packet for high-speed UDP telemetry.
- * Size: 136 bytes (34 fields * 4 bytes)
+ * Size: 164 bytes.
  */
 struct TelemetryPacket {
     uint32_t magic = 0xABBA0001; // Magic header for packet validation
@@ -52,6 +52,15 @@ struct TelemetryPacket {
     uint32_t prof_l; // LQR/Control
     uint32_t prof_t; // Total
     uint32_t prof_log; // Logging overhead
+
+    // Command saturation / motor mixing diagnostics
+    float cmd_raw;
+    float cmd_final;
+    float left_preclip;
+    float right_preclip;
+    float left_postclip;
+    float right_postclip;
+    uint32_t sat_flags; // bit0=cmd clipped, bit1=left clipped, bit2=right clipped
 };
 #pragma pack(pop)
 
