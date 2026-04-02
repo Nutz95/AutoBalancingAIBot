@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>ESP32 Live Telemetry</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.3/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/assets/app.css" />
+</head>
+<body>
+  <div class="page">
+    <aside class="sidebar">
+      <h1>ESP32 Live Telemetry</h1>
+      <div class="muted">Sliding window dashboard for binary UDP telemetry.</div>
+      <div id="status" class="status-pill">Connecting…</div>
+
+      <h2>Live metrics</h2>
+      <div class="metrics metric-grid" id="metricGrid"></div>
+
+      <h2>Charts</h2>
+      <div class="check-list" id="chartList"></div>
+
+      <div class="footer-note">
+        Rolling window: <span id="windowLabel">10</span> s.<br />
+        All charts are enabled by default to keep the full system context visible.
+      </div>
+    </aside>
+
+    <main class="content">
+      <div class="toolbar">
+        <button id="allBtn">Show all</button>
+        <button id="noneBtn">Hide all</button>
+        <label class="muted" for="refreshSel">Refresh</label>
+        <select id="refreshSel">
+          <option value="120">120 ms</option>
+          <option value="200" selected>200 ms</option>
+          <option value="333">333 ms</option>
+          <option value="500">500 ms</option>
+        </select>
+      </div>
+      <div class="grid" id="chartGrid"></div>
+    </main>
+  </div>
+
+  <script src="/assets/app.js"></script>
+</body>
+</html>

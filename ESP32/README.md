@@ -440,6 +440,26 @@ Wi‑Fi telemetry capture workflow (current)
 
 For balancing captures, prefer the dedicated helper `tools/capture_balancer_dbg.py` instead of manually copying console logs.
 
+### Live web dashboard (easy command + URL)
+
+For quick live tuning, use the browser dashboard:
+
+```powershell
+e:/AI/AutoBalancingAIBot/ESP32/.venv/Scripts/python.exe .\tools\live_telemetry_web.py --robot-host 192.168.1.159
+```
+
+Then open this URL in your browser:
+
+```text
+http://127.0.0.1:8000
+```
+
+Useful reminder:
+- default local URL: `http://127.0.0.1:8000`
+- the script automatically sends `SYS TELEM UDP AUTO`
+- the default UDP telemetry port is `8888`
+- the default Wi‑Fi console TCP port is `2333`
+
 What it does:
 - connects to the Wi‑Fi console on TCP port `2333`
 - enables binary UDP telemetry (`SYS TELEM UDP AUTO`)
