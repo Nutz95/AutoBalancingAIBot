@@ -180,6 +180,16 @@ public:
     return 0;
   }
 
+  /**
+   * @brief Return the actual STEP frequency currently applied on hardware.
+   *
+   * This differs from the high-level target command: it is the frequency that
+   * the MCU ended up programming into the step generator.
+   */
+  virtual uint32_t getAppliedStepFrequencyHz(MotorSide /*side*/) const {
+    return 0;
+  }
+
   // Human-readable driver name (e.g. "servo", "dc_mirror", ...)
   virtual const char *getDriverName() const = 0;
 };

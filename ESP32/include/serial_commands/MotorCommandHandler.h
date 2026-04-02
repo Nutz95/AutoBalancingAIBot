@@ -54,6 +54,8 @@ private:
     std::unique_ptr<SerialMenu> m_menu;
 
     void motorSetHandler(const String& p);
+    bool handleMotorSet(const String& line, const String& up);
+    bool handleMotorSpeed(const String& line, const String& up);
     bool handleMotorGetEncoder(const String& line, const String& up);
     bool handleMotorTelemetry(const String& line, const String& up);
 };

@@ -37,6 +37,7 @@ namespace controller {
 static void stopControlAndDisableMotors() {
   stop();
   if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    driver->clearCommandState();
     driver->disableMotors();
   }
 }
@@ -240,6 +241,7 @@ void stop() {
   // Channels are no longer toggled here to avoid impacting the system performance.
   if (auto driver = abbot::motor::getActiveMotorDriver()) {
     driver->setMotorCommandBoth(0.0f, 0.0f);
+    driver->clearCommandState();
   }
   g_last_cmd = 0.0f;
   LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "BALANCER: stopped");

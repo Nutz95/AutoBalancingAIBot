@@ -7,7 +7,7 @@ namespace telemetry {
 #pragma pack(push, 1)
 /**
  * @brief Binary packet for high-speed UDP telemetry.
- * Size: 164 bytes.
+ * Size: 180 bytes.
  */
 struct TelemetryPacket {
     uint32_t magic = 0xABBA0001; // Magic header for packet validation
@@ -61,6 +61,14 @@ struct TelemetryPacket {
     float left_postclip;
     float right_postclip;
     uint32_t sat_flags; // bit0=cmd clipped, bit1=left clipped, bit2=right clipped
+
+    // Motor speed feedback from RS485 (RPM, signed: positive=forward)
+    float motor_rpm_l;
+    float motor_rpm_r;
+
+    // Step/Dir diagnostic path: actual applied STEP frequency.
+    uint32_t step_hz_l;
+    uint32_t step_hz_r;
 };
 #pragma pack(pop)
 

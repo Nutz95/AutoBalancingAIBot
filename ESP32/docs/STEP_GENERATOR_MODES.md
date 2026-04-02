@@ -41,13 +41,14 @@ Current meaning:
 
 - `MKS_SERVO_STEP_GENERATOR_TYPE == 0` → `MCPWM`
 - `MKS_SERVO_STEP_GENERATOR_TYPE == 1` → `RMT`
+- `MKS_SERVO_STEP_GENERATOR_TYPE == 2` → `SOFTWARE` (Marlin-style shared timer)
 
 Current default in the repo:
 
 - `MKS_SERVO_USE_STEP_DIR = 1`
-- `MKS_SERVO_STEP_GENERATOR_TYPE = 1`
+- `MKS_SERVO_STEP_GENERATOR_TYPE = 2`
 
-So the project currently uses **RMT**.
+So the project currently uses the **software timed-step backend**.
 
 ## RMT mode
 

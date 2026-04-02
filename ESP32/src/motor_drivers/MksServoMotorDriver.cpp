@@ -13,9 +13,51 @@ namespace motor {
 
 namespace {
 
-void setHardwareEnablePin(abbot::motor::IMotorDriver::MotorSide side, bool enable) {
+const char *stepGeneratorModeName(abbot::motor::StepGeneratorMode mode) {
+    switch (mode) {
+        case abbot::motor::StepGeneratorMode::MCPWM:
+            return "MCPWM";
+        case abbot::motor::StepGeneratorMode::RMT:
+            return "RMT";
+        case abbot::motor::StepGeneratorMode::SOFTWARE:
+            return "SOFTWARE";
+        default:
+            return "UNKNOWN";
+    }
+}
+
+bool parseStepGeneratorModeToken(const String& token, abbot::motor::StepGeneratorMode& mode) {
+    String s = token;
+    s.trim();
+    s.toUpperCase();
+    if (s == "0" || s == "MCPWM") {
+        mode = abbot::motor::StepGeneratorMode::MCPWM;
+        return true;
+    }
+    if (s == "1" || s == "RMT") {
+        mode = abbot::motor::StepGeneratorMode::RMT;
+        return true;
+    }
+    if (s == "2" || s == "SOFTWARE" || s == "SW") {
+        mode = abbot::motor::StepGeneratorMode::SOFTWARE;
+        return true;
+    }
+    return false;
+}
+
+const char *enableLevelName(uint8_t level) {
+    switch (level) {
+        case 0: return "L";
+        case 1: return "H";
+        case 2: return "Hold";
+        default: return "Unknown";
+    }
+}
+
+void setHardwareEnablePin(abbot::motor::IMotorDriver::MotorSide side, bool enable, uint8_t en_effective_level = 0) {
 #if MKS_SERVO_USE_STEP_DIR
-    bool pin_level = enable ? LOW : HIGH;
+    bool active_level = (en_effective_level == 1u) ? HIGH : LOW;
+    bool pin_level = enable ? active_level : !active_level;
 #if !MKS_SERVO_COMMON_ANODE
     pin_level = !pin_level;
 #endif
@@ -127,9 +169,17 @@ void MksServoMotorDriver::initMotorDriver() {
     digitalWrite(MKS_SERVO_P2_EN_PIN, LOW); 
 #endif
 
-    m_stepGenerator.init(MKS_SERVO_P1_STEP_PIN, MKS_SERVO_P2_STEP_PIN, MKS_SERVO_COMMON_ANODE != 0);
+    StepGeneratorMode bootMode = static_cast<StepGeneratorMode>(m_stepGeneratorMode.load());
+    if (!setStepGeneratorMode(bootMode, true)) {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                   "mks_servo: failed to init step generator mode=%s; falling back to SOFTWARE\n",
+                   stepGeneratorModeName(bootMode));
+        (void)setStepGeneratorMode(StepGeneratorMode::SOFTWARE, true);
+    }
 
-    LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "mks_servo: Step/Dir (Hybrid) Hardware Initialized");
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "mks_servo: Step/Dir (Hybrid) Hardware Initialized with %s backend\n",
+               stepGeneratorModeName(getStepGeneratorMode()));
 #endif
 
     // Stage 3: Initial Configuration Injection
@@ -172,6 +222,37 @@ void MksServoMotorDriver::motorTaskEntry(void* pvParameters) {
     driver->runMotorTask(side);
 }
 
+namespace {
+uint32_t stepsPerRevFromConfigByte(uint8_t mstep_value) {
+    const uint32_t microsteps = (mstep_value == 0U) ? 256U : (uint32_t)mstep_value;
+    switch (microsteps) {
+        case 1U:
+        case 2U:
+        case 4U:
+        case 8U:
+        case 16U:
+        case 32U:
+        case 64U:
+        case 128U:
+        case 256U:
+            return MKS_SERVO_FULL_STEPS_PER_REV * microsteps;
+        default:
+            return MKS_SERVO_STEPS_PER_REV;
+    }
+}
+
+namespace Config47Index {
+constexpr size_t kWorkMode = 0;
+constexpr size_t kOperatingCurrentHi = 1;
+constexpr size_t kOperatingCurrentLo = 2;
+constexpr size_t kHoldingCurrent = 3;
+constexpr size_t kMicrostep = 4;
+constexpr size_t kEnableEffectiveLevel = 5;
+constexpr size_t kResponseMethod1 = 13;
+constexpr size_t kResponseMethod2 = 14;
+}
+}
+
 void MksServoMotorDriver::applyStepDirCommand(MotorSide side, float command, bool enabled) {
 #if MKS_SERVO_USE_STEP_DIR
     AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
@@ -194,7 +275,8 @@ void MksServoMotorDriver::applyStepDirCommand(MotorSide side, float command, boo
     float abs_cmd = fabsf(command);
     uint32_t freq = 0;
     if (abs_cmd >= 0.001f && enabled) {
-        freq = (uint32_t)((abs_cmd * VELOCITY_MAX_SPEED / 60.0f) * MKS_SERVO_STEPS_PER_REV);
+        const uint32_t steps_per_rev = async.configured_steps_per_rev.load();
+        freq = (uint32_t)((abs_cmd * VELOCITY_MAX_SPEED / 60.0f) * (float)steps_per_rev);
     }
 
     uint32_t now_us = micros();
@@ -221,7 +303,7 @@ void MksServoMotorDriver::applyStepDirCommand(MotorSide side, float command, boo
         return;
     }
 
-    if (!m_stepGenerator.setFrequency(side == MotorSide::LEFT, freq)) {
+    if (!m_stepGenerator || !m_stepGenerator->setFrequency(side == MotorSide::LEFT, freq)) {
         async.step_mutex_miss.fetch_add(1);
         return;
     }
@@ -429,7 +511,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     markTransmitted();
 
                     // Update physical EN pins (Now mandatory with Step/Dir hybrid)
-                    setHardwareEnablePin(side, target_en);
+                    setHardwareEnablePin(side, target_en, async.configured_enable_level.load());
 
                     async.last_reported_enabled.store(target_en);
                     speed_dirty = true;
@@ -573,6 +655,7 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                                    (unsigned long)enc_age_ms);
                 }
             }
+
 #endif
             xSemaphoreGiveRecursive(mutex);
         } else {
@@ -649,6 +732,7 @@ void MksServoMotorDriver::resetRuntimeStateForSide(MotorSide side, bool target_e
     async.last_encoder_time_us.store(0);
     async.last_reported_enabled.store(!target_enabled);
     async.step_freq_requested.store(0);
+    async.configured_enable_level.store(0);
     async.desired_periodic_interval_ms.store(0xFFFFFFFFu);
     async.interpolator.reset();
     async.last_zero_ms = 0;
@@ -681,7 +765,7 @@ void MksServoMotorDriver::resetRuntimeStateForSide(MotorSide side, bool target_e
     state.speedEstimator.reset();
 
 #if MKS_SERVO_USE_STEP_DIR
-    if (!m_stepGenerator.setFrequency(side == MotorSide::LEFT, 0)) {
+    if (!m_stepGenerator || !m_stepGenerator->setFrequency(side == MotorSide::LEFT, 0)) {
         async.step_mutex_miss.fetch_add(1);
     }
 #endif
@@ -711,6 +795,12 @@ void MksServoMotorDriver::clearCommandState() {
     m_left.last_command = 0.0f;
     m_right.last_command = 0.0f;
     setMotorCommandBoth(0.0f, 0.0f);
+#if MKS_SERVO_USE_STEP_DIR
+    if (m_stepGenerator) {
+        m_stepGenerator->stopAll();
+    }
+    resetStepGeneratorState();
+#endif
 }
 
 float MksServoMotorDriver::getLastMotorCommand(MotorSide side) {
@@ -726,8 +816,8 @@ void MksServoMotorDriver::enableMotors() {
     m_enabled.store(true);
     resetRuntimeStateForSide(MotorSide::LEFT, true);
     resetRuntimeStateForSide(MotorSide::RIGHT, true);
-    setHardwareEnablePin(MotorSide::LEFT, true);
-    setHardwareEnablePin(MotorSide::RIGHT, true);
+    setHardwareEnablePin(MotorSide::LEFT, true, m_left_async.configured_enable_level.load());
+    setHardwareEnablePin(MotorSide::RIGHT, true, m_right_async.configured_enable_level.load());
 
     uint16_t interval = (uint16_t)MKS_SERVO_PERIODIC_TELEMETRY_MS;
     queuePeriodicTelemetry(MotorSide::LEFT, MksServoProtocol::FUNC_READ_TELEMETRY, interval);
@@ -751,11 +841,14 @@ void MksServoMotorDriver::disableMotors() {
     m_enabled.store(false);
     resetRuntimeStateForSide(MotorSide::LEFT, false);
     resetRuntimeStateForSide(MotorSide::RIGHT, false);
-    setHardwareEnablePin(MotorSide::LEFT, false);
-    setHardwareEnablePin(MotorSide::RIGHT, false);
+    setHardwareEnablePin(MotorSide::LEFT, false, m_left_async.configured_enable_level.load());
+    setHardwareEnablePin(MotorSide::RIGHT, false, m_right_async.configured_enable_level.load());
 
 #if MKS_SERVO_USE_STEP_DIR
-    m_stepGenerator.stopAll();
+    if (m_stepGenerator) {
+        m_stepGenerator->stopAll();
+    }
+    resetStepGeneratorState();
 #endif
 
     queuePeriodicTelemetry(MotorSide::LEFT, MksServoProtocol::FUNC_READ_TELEMETRY, 0);
@@ -803,6 +896,13 @@ uint32_t MksServoMotorDriver::getAckPendingTimeUs(MotorSide side) const {
     return m_right_async.ack_pending_time_us.load();
 }
 
+uint32_t MksServoMotorDriver::getAppliedStepFrequencyHz(MotorSide side) const {
+    if (side == MotorSide::LEFT) {
+        return m_left_async.last_ledc_freq;
+    }
+    return m_right_async.last_ledc_freq;
+}
+
 uint32_t MksServoMotorDriver::getLastEncoderAgeMs(MotorSide side) const {
     const AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
     uint32_t last_us = async.last_encoder_time_us.load();
@@ -826,8 +926,9 @@ bool MksServoMotorDriver::areMotorsEnabled() {
 void MksServoMotorDriver::printStatus() {
     uint32_t lat_us = getLastBusLatencyUs();
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
-               "mks_servo: enabled=%d ack=%d accel=%u bus_lat_us=%lu L_cmd=%.3f R_cmd=%.3f\n",
-               (int)m_enabled.load(), (int)m_wait_for_ack.load(), (unsigned)m_speed_accel.load(), (unsigned long)lat_us,
+               "mks_servo: enabled=%d ack=%d accel=%u stepgen=%s bus_lat_us=%lu L_cmd=%.3f R_cmd=%.3f\n",
+               (int)m_enabled.load(), (int)m_wait_for_ack.load(), (unsigned)m_speed_accel.load(),
+               stepGeneratorModeName(getStepGeneratorMode()), (unsigned long)lat_us,
                (double)m_left.last_command, (double)m_right.last_command);
     LOG_PRINTF(abbot::log::CHANNEL_MOTOR,
                "mks_servo: L sent=%lu ack_to=%lu ack_err=%lu enc_ok=%lu enc_to=%lu | R sent=%lu ack_to=%lu ack_err=%lu enc_ok=%lu enc_to=%lu\n",
@@ -1061,8 +1162,26 @@ void MksServoMotorDriver::dumpAllConfigs() {
         xSemaphoreGiveRecursive(mutex);
 
         if (success) {
-            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [ID 0x%02X] Mode: %d, MStep: %d, Current: %d mA, Hold: %d%%\n",
-                       id, params[1], params[2], (params[4] << 8) | params[5], params[14] * 10);
+            AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
+            const uint32_t steps_per_rev = stepsPerRevFromConfigByte(params[Config47Index::kMicrostep]);
+            const uint16_t operating_current_ma =
+                ((uint16_t)params[Config47Index::kOperatingCurrentHi] << 8) |
+                (uint16_t)params[Config47Index::kOperatingCurrentLo];
+            async.configured_steps_per_rev.store(steps_per_rev);
+            async.configured_enable_level.store(params[Config47Index::kEnableEffectiveLevel]);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [ID 0x%02X] Mode: %d, MStep: %d, Current: %d mA, Hold: %d%%, EN: %s\n",
+                       id,
+                       params[Config47Index::kWorkMode],
+                       params[Config47Index::kMicrostep],
+                       (int)operating_current_ma,
+                       params[Config47Index::kHoldingCurrent] * 10,
+                       enableLevelName(params[Config47Index::kEnableEffectiveLevel]));
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [ID 0x%02X] Effective STEP scaling: %lu steps/rev\n",
+                       id, (unsigned long)steps_per_rev);
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [ID 0x%02X] Response mode bytes: %u %u\n",
+                       id,
+                       (unsigned)params[Config47Index::kResponseMethod1],
+                       (unsigned)params[Config47Index::kResponseMethod2]);
             LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "  [ID 0x%02X] KP: %d, KI: %d, KD: %d\n",
                        id, (params[6] << 8) | params[7], (params[8] << 8) | params[9], (params[10] << 8) | params[11]);
         } else {
@@ -1173,6 +1292,34 @@ bool MksServoMotorDriver::processSerialCommand(const String &line) {
     if (line.equalsIgnoreCase("SCAN") || line.startsWith("SCAN ") ||
         line.equalsIgnoreCase("MOTOR SCAN") || line.startsWith("MOTOR SCAN ")) {
         scanBus();
+        return true;
+    }
+
+    if (line.equalsIgnoreCase("STEPGEN") || line.startsWith("STEPGEN ") ||
+        line.equalsIgnoreCase("MOTOR STEPGEN") || line.startsWith("MOTOR STEPGEN ")) {
+        String s = line;
+        s.replace("MOTOR", "");
+        s.trim();
+        if (s.startsWith("STEPGEN")) {
+            s = s.substring(7);
+        }
+        s.trim();
+
+        if (s.length() == 0 || s.equalsIgnoreCase("SHOW")) {
+            LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                       "mks_servo: STEPGEN=%s (0=MCPWM 1=RMT 2=SOFTWARE)\n",
+                       stepGeneratorModeName(getStepGeneratorMode()));
+            return true;
+        }
+
+        StepGeneratorMode mode = getStepGeneratorMode();
+        if (!parseStepGeneratorModeToken(s, mode)) {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                        "mks_servo: Usage: MOTOR STEPGEN [SHOW|MCPWM|RMT|SOFTWARE]");
+            return true;
+        }
+
+        (void)setStepGeneratorMode(mode, false);
         return true;
     }
 
@@ -1324,6 +1471,77 @@ bool MksServoMotorDriver::processSerialCommand(const String &line) {
     return AbstractMotorDriver::processSerialCommand(line);
 }
 
+StepGeneratorMode MksServoMotorDriver::getStepGeneratorMode() const {
+    return static_cast<StepGeneratorMode>(m_stepGeneratorMode.load());
+}
+
+void MksServoMotorDriver::resetStepGeneratorState() {
+    m_left_async.last_ledc_freq = 0;
+    m_right_async.last_ledc_freq = 0;
+    m_left_async.last_ledc_update_us = 0;
+    m_right_async.last_ledc_update_us = 0;
+    m_left_async.step_freq_requested.store(0);
+    m_right_async.step_freq_requested.store(0);
+}
+
+bool MksServoMotorDriver::setStepGeneratorMode(StepGeneratorMode mode, bool force_reinit) {
+#if !MKS_SERVO_USE_STEP_DIR
+    (void)mode;
+    (void)force_reinit;
+    return false;
+#else
+    const StepGeneratorMode current = getStepGeneratorMode();
+    if (!force_reinit && mode == current && m_stepGenerator != nullptr) {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                   "mks_servo: STEPGEN already %s\n",
+                   stepGeneratorModeName(mode));
+        return true;
+    }
+
+    if (m_enabled.load()) {
+        LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT,
+                    "mks_servo: refuse STEPGEN change while motors are enabled; disable first");
+        return false;
+    }
+
+    if (m_stepGenerator) {
+        m_stepGenerator->stopAll();
+    }
+
+    IStepGenerator* next = nullptr;
+    switch (mode) {
+        case StepGeneratorMode::MCPWM:
+            next = &m_mcpwmStepGenerator;
+            break;
+        case StepGeneratorMode::RMT:
+            next = &m_rmtStepGenerator;
+            break;
+        case StepGeneratorMode::SOFTWARE:
+        default:
+            next = &m_softwareStepGenerator;
+            break;
+    }
+
+    if (!next->init(MKS_SERVO_P1_STEP_PIN, MKS_SERVO_P2_STEP_PIN, MKS_SERVO_COMMON_ANODE != 0)) {
+        LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+                   "mks_servo: STEPGEN init failed for %s\n",
+                   stepGeneratorModeName(mode));
+        return false;
+    }
+
+    m_stepGenerator = next;
+    m_stepGeneratorMode.store((uint8_t)mode);
+    resetStepGeneratorState();
+    LOG_PRINTF(abbot::log::CHANNEL_DEFAULT,
+               "mks_servo: STEPGEN switched to %s%s\n",
+               stepGeneratorModeName(mode),
+               (mode == StepGeneratorMode::SOFTWARE)
+                   ? " (software remains the current stable balancing baseline; RMT kept for comparison)"
+                   : "");
+    return true;
+#endif
+}
+
 void MksServoMotorDriver::dumpMotorRegisters(MotorSide side) {
     uint8_t id = getMotorId(side);
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "--- mks_servo: Dumping registers for motor %s (ID 0x%02X) ---\n", 
@@ -1470,6 +1688,7 @@ void MksServoMotorDriver::setHoldCurrent(MotorSide side, MksServoHoldCurrent hol
 }
 
 void MksServoMotorDriver::setEnable(MotorSide side, bool enable) {
+    AsyncState& async = (side == MotorSide::LEFT) ? m_left_async : m_right_async;
     if (side == MotorSide::LEFT) {
         m_left.enabled = enable;
     } else {
@@ -1477,7 +1696,7 @@ void MksServoMotorDriver::setEnable(MotorSide side, bool enable) {
     }
 
     // Support for physical EN pins
-    setHardwareEnablePin(side, enable);
+    setHardwareEnablePin(side, enable, async.configured_enable_level.load());
 
     uint8_t data = enable ? 0x01 : 0x00;
     sendFunctionCommand(side, MksServoProtocol::FUNC_TORQUE_ENABLE, &data, 1);

@@ -26,6 +26,7 @@ void startBalanceControlSession(float start_pitch) {
 void stopBalanceControlSession() {
     abbot::balancer::controller::stop();
     if (auto driver = abbot::motor::getActiveMotorDriver()) {
+        driver->clearCommandState();
         driver->disableMotors();
     }
 }

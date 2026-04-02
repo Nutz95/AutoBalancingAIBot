@@ -98,12 +98,20 @@ enum class MksServoHoldCurrent : uint8_t {
 #endif
 
 /**
- * @brief Choice of hardware peripheral for generating Step pulses.
- * 0: MCPWM (Motor Control Pulse Width Modulator) - High performance, high freq.
- * 1: RMT (Remote Control) - Excellent for low frequencies, very stable. (Recommended)
+ * @brief Default step generator mode selected at boot.
+ *
+ * Runtime switching is supported through `MOTOR STEPGEN ...`, so this macro now
+ * defines the boot default rather than a hard compile-time lock.
+ * 0: MCPWM    - high performance, low CPU.
+ * 1: RMT      - currently kept for comparison; recent bench tests regressed on this path.
+ * 2: SOFTWARE - Marlin-style shared timer scheduler; current debug/balancing baseline.
  */
 #ifndef MKS_SERVO_STEP_GENERATOR_TYPE
-#define MKS_SERVO_STEP_GENERATOR_TYPE 1
+#define MKS_SERVO_STEP_GENERATOR_TYPE 2
+#endif
+
+#ifndef MKS_SERVO_DEFAULT_STEP_GENERATOR_MODE
+#define MKS_SERVO_DEFAULT_STEP_GENERATOR_MODE MKS_SERVO_STEP_GENERATOR_TYPE
 #endif
 
 // Common Anode wiring (COM tied to 3.3V). 
@@ -178,8 +186,20 @@ enum class MksServoHoldCurrent : uint8_t {
 
 // Microsteps per revolution (configured on MKS driver menu)
 // Used to calculate frequency of steps from target speed.
+// IMPORTANT: MKS SERVO42D observed at 256 microsteps/rev (200*256=51200).
+// Verify with MKS control app: Stall->Subdiv setting. Override here to match.
+#ifndef MKS_SERVO_FULL_STEPS_PER_REV
+#define MKS_SERVO_FULL_STEPS_PER_REV 200
+#endif
+
 #ifndef MKS_SERVO_STEPS_PER_REV
-#define MKS_SERVO_STEPS_PER_REV (200 * 32) // 200 pulses * 32 mstep
+#define MKS_SERVO_STEPS_PER_REV (MKS_SERVO_FULL_STEPS_PER_REV * 32) // 200 steps * 32 mstep = 6400 (confirmed)
+#endif
+
+// Internal magnetic encoder resolution reported by the MKS telemetry protocol.
+// This is independent from the pulse microstep subdivision used on the STEP input.
+#ifndef MKS_SERVO_ENCODER_COUNTS_PER_REV
+#define MKS_SERVO_ENCODER_COUNTS_PER_REV 16384.0f
 #endif
 
 // FreeRTOS task priority for each motor bus task.
@@ -271,7 +291,7 @@ enum class MksServoHoldCurrent : uint8_t {
 // for balancing corrections). At 300 RPM cmd=1.0 gives 1.05 m/s, which is appropriate.
 // With this scaling, Kp/Kg gains can be ×4 higher without saturation during normal corrections.
 #ifndef VELOCITY_MAX_SPEED
-#define VELOCITY_MAX_SPEED 300
+#define VELOCITY_MAX_SPEED 600  // 600 RPM = midpoint (300 too slow, 1200 too fast)
 #endif
 
 // Encoder update frequency (Hz). 

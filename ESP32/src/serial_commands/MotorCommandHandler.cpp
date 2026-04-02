@@ -154,6 +154,18 @@ MotorCommandHandler::MotorCommandHandler(IMotorService* motorService)
             LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
         }
     });
+    m_menu->addEntry(17, "MOTOR STEPGEN [SHOW|MCPWM|RMT|SOFTWARE]", [this](const String &p) {
+        if (auto driver = m_motorService->getActiveDriver()) {
+            String cmd = "STEPGEN";
+            if (p.length() > 0) {
+                cmd += " ";
+                cmd += p;
+            }
+            driver->processSerialCommand(cmd);
+        } else {
+            LOG_PRINTLN(abbot::log::CHANNEL_DEFAULT, "No active motor driver");
+        }
+    });
 }
 
 bool MotorCommandHandler::handleCommand(const String& line, const String& lineUpper) {
@@ -161,6 +173,12 @@ bool MotorCommandHandler::handleCommand(const String& line, const String& lineUp
         return false;
     }
 
+    if (handleMotorSet(line, lineUpper)) {
+        return true;
+    }
+    if (handleMotorSpeed(line, lineUpper)) {
+        return true;
+    }
     if (handleMotorGetEncoder(line, lineUpper)) {
         return true;
     }
@@ -181,6 +199,64 @@ bool MotorCommandHandler::handleCommand(const String& line, const String& lineUp
     }
 
     return false;
+}
+
+bool MotorCommandHandler::handleMotorSet(const String &line, const String &up) {
+    if (!up.startsWith("MOTOR SET ")) {
+        return false;
+    }
+
+    String arg = line.substring(10);
+    arg.trim();
+    motorSetHandler(arg);
+    return true;
+}
+
+bool MotorCommandHandler::handleMotorSpeed(const String &line, const String &up) {
+    if (!up.startsWith("MOTOR SPEED")) {
+        return false;
+    }
+
+    String arg = line.substring(11);
+    arg.trim();
+
+    abbot::motor::EncoderReport rep;
+    bool ok = abbot::motor::getEncoderReportFromArg(arg.c_str(), rep);
+    if (!ok) {
+        LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "Usage: MOTOR SPEED <LEFT|RIGHT|ID>");
+        return true;
+    }
+
+    auto drv = m_motorService->getActiveDriver();
+    if (!drv) {
+        LOG_PRINTLN(abbot::log::CHANNEL_MOTOR, "No active motor driver");
+        return true;
+    }
+
+    if (rep.both) {
+        float lsp = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::LEFT);
+        float rsp = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "MOTOR: speed L(id=%d)=%.2f R(id=%d)=%.2f\n",
+                             rep.leftId, (double)lsp, rep.rightId, (double)rsp);
+    } else {
+        float s = 0;
+        if (rep.requestedId == rep.leftId) {
+            s = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::LEFT);
+        } else if (rep.requestedId == rep.rightId) {
+            s = drv->readSpeed(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+        } else {
+            abbot::motor::IMotorDriver::MotorSide side;
+            if (abbot::motor::getSideForId(rep.requestedId, side)) {
+                s = drv->readSpeed(side);
+            } else {
+                LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "MOTOR: speed id=%d unknown\n", rep.requestedId);
+                return true;
+            }
+        }
+        LOG_PRINTF(abbot::log::CHANNEL_MOTOR, "MOTOR: speed id=%d value=%.2f\n", rep.requestedId, (double)s);
+    }
+
+    return true;
 }
 
 SerialMenu* MotorCommandHandler::buildMenu() {

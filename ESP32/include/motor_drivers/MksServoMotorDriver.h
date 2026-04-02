@@ -3,12 +3,9 @@
 
 #include "AbstractMotorDriver.h"
 #include "../../config/motor_configs/mks_servo_config.h"
-
-#if MKS_SERVO_STEP_GENERATOR_TYPE == 0
 #include "McpwmStepGenerator.h"
-#else
 #include "RmtStepGenerator.h"
-#endif
+#include "SoftwareStepGenerator.h"
 
 #include "MksServoProtocol.h"
 #include "MksServoTelemetryIngest.h"
@@ -48,6 +45,12 @@ public:
 
 namespace abbot {
 namespace motor {
+
+enum class StepGeneratorMode : uint8_t {
+    MCPWM = 0,
+    RMT = 1,
+    SOFTWARE = 2,
+};
 
 class MksServoMotorDriver : public AbstractMotorDriver {
 public:
@@ -94,6 +97,7 @@ public:
     uint32_t getLastEncoderAgeMs(MotorSide side) const override;
     uint32_t getAckPendingTimeUs() const override;
     uint32_t getAckPendingTimeUs(MotorSide side) const override;
+    uint32_t getAppliedStepFrequencyHz(MotorSide side) const override;
 
     uint32_t getSpeedCommandAccel() const override {
         return (uint32_t)m_speed_accel.load();
@@ -106,6 +110,7 @@ public:
     void calibrateMotor(uint8_t id);
     void scanBus();
     void dumpAllConfigs();
+    StepGeneratorMode getStepGeneratorMode() const;
 
 private:
     struct FunctionCommandItem {
@@ -147,6 +152,8 @@ private:
         std::atomic<uint32_t> step_apply_ok{0};
         std::atomic<uint32_t> step_mutex_miss{0};
         std::atomic<uint32_t> step_freq_requested{0};
+        std::atomic<uint32_t> configured_steps_per_rev{MKS_SERVO_STEPS_PER_REV};
+        std::atomic<uint8_t> configured_enable_level{0};
         std::atomic<uint32_t> step_poll_count{0};
         std::atomic<uint32_t> task_notify_wake{0};
         std::atomic<uint32_t> task_timeout_wake{0};
@@ -195,11 +202,11 @@ private:
     QueueHandle_t m_leftCommandQueue = nullptr;
     QueueHandle_t m_rightCommandQueue = nullptr;
 
-#if MKS_SERVO_STEP_GENERATOR_TYPE == 0
-    McpwmStepGenerator m_stepGenerator;
-#else
-    RmtStepGenerator m_stepGenerator;
-#endif
+    McpwmStepGenerator m_mcpwmStepGenerator;
+    RmtStepGenerator m_rmtStepGenerator;
+    SoftwareStepGenerator m_softwareStepGenerator;
+    IStepGenerator* m_stepGenerator = nullptr;
+    std::atomic<uint8_t> m_stepGeneratorMode{(uint8_t)MKS_SERVO_DEFAULT_STEP_GENERATOR_MODE};
 
     MksServoProtocol *m_leftProtocol = nullptr;
     MksServoProtocol *m_rightProtocol = nullptr;
@@ -230,6 +237,8 @@ private:
     void setCurrent(MotorSide side, uint16_t current_ma);
     void setHoldCurrent(MotorSide side, MksServoHoldCurrent hold_pct);
     void setEnable(MotorSide side, bool enable);
+    bool setStepGeneratorMode(StepGeneratorMode mode, bool force_reinit = false);
+    void resetStepGeneratorState();
     void queuePeriodicTelemetry(MotorSide side, uint8_t code, uint16_t interval_ms);
     void resetRuntimeStateForSide(MotorSide side, bool target_enabled);
     bool verifyConfig(MotorSide side, uint8_t function_code, uint8_t expected_value, const char* label);

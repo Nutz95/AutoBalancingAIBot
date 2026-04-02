@@ -81,6 +81,7 @@ static bool tryStartBalanceFromController() {
 static void stopBalanceFromController() {
   abbot::balancer::controller::stop();
   if (auto driver = abbot::motor::getActiveMotorDriver()) {
+    driver->clearCommandState();
     driver->disableMotors();
   }
 }

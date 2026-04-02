@@ -49,9 +49,8 @@ bool MksServoTelemetryIngest::ingestByte(uint8_t byte, TelemetrySample &sample_o
         int16_t rpm;
         if (MksServoProtocol::parseSpeedPayload(full_frame, rpm)) {
             // Convert RPM to ticks/sec
-            // 16384 ticks per rev.
-            // ticks_per_sec = (RPM * 16384) / 60
-            float ticks_per_sec = ((float)rpm * 16384.0f) / 60.0f;
+            // ticks_per_sec = (RPM * encoder_counts_per_rev) / 60
+            float ticks_per_sec = ((float)rpm * MKS_SERVO_ENCODER_COUNTS_PER_REV) / 60.0f;
             if (m_invertFlag != nullptr && *m_invertFlag) {
                 ticks_per_sec = -ticks_per_sec;
             }

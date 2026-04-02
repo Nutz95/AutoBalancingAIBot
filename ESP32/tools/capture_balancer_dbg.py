@@ -53,12 +53,16 @@ import pandas as pd
 #     uint32_t prof_log;           // 4
 # };
 # v3 appends command saturation / motor mixing diagnostics after prof_log
-TELEMETRY_FMT = "<2I6f3f3ff2i8I6f4I6fI"
+TELEMETRY_FMT = "<2I6f3f3ff2i8I6f4I6fI2f2I"      # v6: +motor_rpm_l/r +step_hz_l/r
+TELEMETRY_FMT_V5 = "<2I6f3f3ff2i8I6f4I6fI2f2I2i"  # v5 legacy: +step_hz_l/r, pulse_rx_l/r
+TELEMETRY_FMT_V3 = "<2I6f3f3ff2i8I6f4I6fI"   # v3: +sat/clip diags
 TELEMETRY_FMT_V2 = "<2I6f3f3ff2i8I6f4I"
 TELEMETRY_FMT_V1 = "<2I6f3f3ff2i7I6f4I"
 TELEMETRY_FMT_ACK_LR = "<2I6f3f3ff2i3I6f4I"
 TELEMETRY_FMT_LEGACY_ACK = "<2I6f3f3ff2i2I6f4I"
 TELEMETRY_SIZE = struct.calcsize(TELEMETRY_FMT)
+TELEMETRY_SIZE_V5 = struct.calcsize(TELEMETRY_FMT_V5)
+TELEMETRY_SIZE_V3 = struct.calcsize(TELEMETRY_FMT_V3)
 TELEMETRY_SIZE_V2 = struct.calcsize(TELEMETRY_FMT_V2)
 TELEMETRY_SIZE_V1 = struct.calcsize(TELEMETRY_FMT_V1)
 TELEMETRY_SIZE_ACK_LR = struct.calcsize(TELEMETRY_FMT_ACK_LR)
@@ -216,6 +220,8 @@ def parse_line(line, rows, motor_sync):
 def parse_binary(data, rows, motor_sync):
     last_encoder_age_ms = 0
     lat_index = 17
+    step_diag_index = None
+    pulse_diag_index = None
     if len(data) == TELEMETRY_SIZE:
         v = struct.unpack(TELEMETRY_FMT, data)
         last_encoder_age_ms = v[17]
@@ -228,6 +234,36 @@ def parse_binary(data, rows, motor_sync):
         bus_lat_right_age = v[24]
         lqr_index = 25
         diag_index = lqr_index + 10
+        rpm_index = diag_index + 7
+        step_diag_index = rpm_index + 2
+    elif len(data) == TELEMETRY_SIZE_V5:
+        v = struct.unpack(TELEMETRY_FMT_V5, data)
+        last_encoder_age_ms = v[17]
+        lat_index = 18
+        ack_left = v[19]
+        ack_right = v[20]
+        bus_lat_left = v[21]
+        bus_lat_right = v[22]
+        bus_lat_left_age = v[23]
+        bus_lat_right_age = v[24]
+        lqr_index = 25
+        diag_index = lqr_index + 10
+        rpm_index = diag_index + 7
+        step_diag_index = rpm_index + 2
+        pulse_diag_index = step_diag_index + 2
+    elif len(data) == TELEMETRY_SIZE_V3:
+        v = struct.unpack(TELEMETRY_FMT_V3, data)
+        last_encoder_age_ms = v[17]
+        lat_index = 18
+        ack_left = v[19]
+        ack_right = v[20]
+        bus_lat_left = v[21]
+        bus_lat_right = v[22]
+        bus_lat_left_age = v[23]
+        bus_lat_right_age = v[24]
+        lqr_index = 25
+        diag_index = lqr_index + 10
+        rpm_index = None
     elif len(data) == TELEMETRY_SIZE_V2:
         v = struct.unpack(TELEMETRY_FMT_V2, data)
         last_encoder_age_ms = v[17]
@@ -240,6 +276,7 @@ def parse_binary(data, rows, motor_sync):
         bus_lat_right_age = v[24]
         lqr_index = 25
         diag_index = None
+        rpm_index = None
     elif len(data) == TELEMETRY_SIZE_V1:
         v = struct.unpack(TELEMETRY_FMT_V1, data)
         ack_left = v[18]
@@ -249,6 +286,8 @@ def parse_binary(data, rows, motor_sync):
         bus_lat_left_age = v[22]
         bus_lat_right_age = v[23]
         lqr_index = 24
+        diag_index = None
+        rpm_index = None
     elif len(data) == TELEMETRY_SIZE_ACK_LR:
         v = struct.unpack(TELEMETRY_FMT_ACK_LR, data)
         ack_left = v[18]
@@ -259,6 +298,7 @@ def parse_binary(data, rows, motor_sync):
         bus_lat_right_age = 0
         lqr_index = 20
         diag_index = None
+        rpm_index = None
     elif len(data) == TELEMETRY_SIZE_LEGACY_ACK:
         v = struct.unpack(TELEMETRY_FMT_LEGACY_ACK, data)
         ack_left = v[18]
@@ -269,6 +309,7 @@ def parse_binary(data, rows, motor_sync):
         bus_lat_right_age = 0
         lqr_index = 19
         diag_index = None
+        rpm_index = None
     else:
         return False
     if v[0] != 0xABBA0001:
@@ -316,6 +357,21 @@ def parse_binary(data, rows, motor_sync):
             'left_postclip': v[diag_index + 4],
             'right_postclip': v[diag_index + 5],
             'sat_flags': v[diag_index + 6],
+        })
+    if rpm_index is not None:
+        d.update({
+            'motor_rpm_l': v[rpm_index],
+            'motor_rpm_r': v[rpm_index + 1],
+        })
+    if step_diag_index is not None:
+        d.update({
+            'step_hz_l': v[step_diag_index],
+            'step_hz_r': v[step_diag_index + 1],
+        })
+    if pulse_diag_index is not None:
+        d.update({
+            'pulse_rx_l': v[pulse_diag_index + 2],
+            'pulse_rx_r': v[pulse_diag_index + 3],
         })
     rows['bal'][t].update(d)
     return True
@@ -473,6 +529,15 @@ def main():
                 print(f">>> ERROR: Could not bind UDP port {UDP_PORT}: {e}")
                 print(">>> Continuing with TCP text logs only.")
                 udp_sock = None
+
+            # Best-effort cleanup first in case a previous capture crashed and left
+            # periodic streams active. Keep this conservative: do not force a BALANCE STOP here.
+            for cmd in ("SYS TELEM UDP STOP\n", "SYS CPU STOP\n", "MOTOR TELEMETRY ALL 0\n"):
+                try:
+                    sock.sendall(cmd.encode('utf8'))
+                    time.sleep(0.03)
+                except Exception:
+                    pass
 
             # Automatically enable UDP telemetry first to reduce CPU load from text logs
             sock.sendall(b"SYS TELEM UDP AUTO\n")
@@ -696,15 +761,24 @@ def main():
         finally:
             if sock:
                 try:
-                    # Cleanup telemetry streams
-                    sock.sendall(b"SYS TELEM UDP STOP\n")
-                    time.sleep(0.05)
+                    # Cleanup telemetry streams and leave the robot in an unambiguously idle state.
+                    cleanup_cmds = [
+                        b"BALANCE STOP\n",
+                        b"MOTOR SET BOTH 0 0\n",
+                        b"MOTOR DISABLE\n",
+                        b"SYS TELEM UDP STOP\n",
+                        b"MOTOR TELEMETRY ALL 0\n",
+                    ]
                     if args.cpu_telemetry_ms and args.cpu_telemetry_ms > 0:
-                        sock.sendall(b"SYS CPU STOP\n")
+                        cleanup_cmds.append(b"SYS CPU STOP\n")
+
+                    for cmd in cleanup_cmds:
+                        sock.sendall(cmd)
                         time.sleep(0.05)
-                    if args.motor_telemetry_ms and args.motor_telemetry_ms > 0:
-                        sock.sendall(b"MOTOR TELEMETRY ALL 0\n")
-                        time.sleep(0.05)
+                except Exception:
+                    pass
+                try:
+                    sock.shutdown(socket.SHUT_RDWR)
                 except Exception:
                     pass
                 sock.close()
@@ -855,7 +929,7 @@ def main():
             pass
 
         t_axis = (df['time_ms'] - time_origin_ms) / 1000.0
-        
+
         # Calculate Gyro Pitch (simple integration for lag comparison)
         if 'gy' in df.columns and len(df) > 1:
             dt_integrated = df['time_ms'].diff() / 1000.0
@@ -880,9 +954,11 @@ def main():
             df['gyro_pitch_est'] = gyro_pitch
 
         has_motor = any(k.startswith('motor_') for k in df.columns)
+        has_motor_rpm = ('motor_rpm_l' in df.columns) or ('motor_rpm_r' in df.columns)
+        has_pulse_path = any(c in df.columns for c in ['step_hz_l', 'step_hz_r'])
         has_cpu = ('cpu_core0_pct' in df.columns) or ('cpu_core1_pct' in df.columns)
         has_sat = any(c in df.columns for c in ['cmd_raw', 'left_preclip', 'right_preclip', 'sat_flags'])
-        nrows = 8 + (1 if has_sat else 0) + (1 if has_cpu else 0) + (1 if has_motor else 0)
+        nrows = 8 + (1 if has_sat else 0) + (1 if has_cpu else 0) + (1 if has_motor else 0) + (1 if has_motor_rpm else 0) + (1 if has_pulse_path else 0)
         plt.figure(figsize=(18, 30 if has_motor else 28))
         
         # Subplot 1: Pitch
@@ -1233,6 +1309,33 @@ def main():
             ax_cpu.set_title('CPU Load (per core)')
             ax_cpu.legend(loc='upper right')
             ax_cpu.grid(True)
+            next_row += 1
+
+        # Motor RPM subplot (RS485 feedback)
+        if has_motor_rpm:
+            ax_rpm = plt.subplot(nrows, 1, next_row, sharex=ax1)
+            if 'motor_rpm_l' in df.columns:
+                ax_rpm.plot(t_axis, df['motor_rpm_l'], 'b-', label='Motor L (RPM)', linewidth=1.5)
+            if 'motor_rpm_r' in df.columns:
+                ax_rpm.plot(t_axis, df['motor_rpm_r'], 'r-', label='Motor R (RPM)', linewidth=1.5)
+            ax_rpm.axhline(0, color='k', linestyle=':', alpha=0.4)
+            ax_rpm.set_ylabel('RPM')
+            ax_rpm.set_title('Motor Speed RS485 Feedback (signed: +forward)')
+            ax_rpm.legend(loc='upper right')
+            ax_rpm.grid(True)
+            next_row += 1
+
+        if has_pulse_path:
+            ax_step = plt.subplot(nrows, 1, next_row, sharex=ax1)
+            if 'step_hz_l' in df.columns:
+                ax_step.plot(t_axis, df['step_hz_l'], color='tab:blue', linestyle='-', label='Applied STEP L (Hz)', alpha=0.9)
+            if 'step_hz_r' in df.columns:
+                ax_step.plot(t_axis, df['step_hz_r'], color='tab:red', linestyle='-', label='Applied STEP R (Hz)', alpha=0.9)
+            ax_step.axhline(0, color='k', linestyle=':', alpha=0.4)
+            ax_step.set_ylabel('Hz')
+            ax_step.set_title('Step Path: applied STEP frequency')
+            ax_step.legend(loc='upper right', fontsize=8)
+            ax_step.grid(True)
             next_row += 1
 
         # Optional: Motor command freshness / bus health

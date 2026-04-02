@@ -2,6 +2,7 @@
 #include "SystemTasks.h" // For ENABLE_DEBUG_LOGS
 #include "../config/imu_filter_config.h"
 #include "../config/balancer_config.h"
+#include "../config/motor_configs/mks_servo_config.h"
 #include "../include/balancer_controller.h"
 #include "imu_calibration.h"
 #include "imu_mapping.h"
@@ -422,6 +423,20 @@ void emitDiagnosticsIfEnabled(uint32_t ts_ms, float fused_pitch_local,
         pkt.left_postclip = diag.left_postclip;
         pkt.right_postclip = diag.right_postclip;
         pkt.sat_flags = diag.sat_flags;
+        // Motor speed from RS485 telemetry (converted ticks/s -> RPM, signed: +forward/-backward)
+        // readSpeed() returns encoder counts/s, so RPM = counts_per_sec * 60 / encoder_counts_per_rev
+        if (auto mdrv = abbot::motor::getActiveMotorDriver()) {
+          constexpr float kTicksPerSecondToRpm = 60.0f / MKS_SERVO_ENCODER_COUNTS_PER_REV;
+          pkt.motor_rpm_l = mdrv->readSpeed(abbot::motor::IMotorDriver::MotorSide::LEFT)  * kTicksPerSecondToRpm;
+          pkt.motor_rpm_r = mdrv->readSpeed(abbot::motor::IMotorDriver::MotorSide::RIGHT) * kTicksPerSecondToRpm;
+          pkt.step_hz_l = mdrv->getAppliedStepFrequencyHz(abbot::motor::IMotorDriver::MotorSide::LEFT);
+          pkt.step_hz_r = mdrv->getAppliedStepFrequencyHz(abbot::motor::IMotorDriver::MotorSide::RIGHT);
+        } else {
+            pkt.motor_rpm_l = 0.0f;
+            pkt.motor_rpm_r = 0.0f;
+            pkt.step_hz_l = 0;
+            pkt.step_hz_r = 0;
+        }
       abbot::telemetry::TelemetryService::getInstance().send(pkt);
       }
   }
