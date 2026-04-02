@@ -1,0 +1,11 @@
+from __future__ import annotations
+
+import struct
+
+TELEMETRY_FMT_V6 = "<2I6f3f3ff2i8I6f4I6fI2f2I"
+TELEMETRY_FMT_V5 = "<2I6f3f3ff2i8I6f4I6fI2f2I2i"
+TELEMETRY_FMT_V3 = "<2I6f3f3ff2i8I6f4I6fI"
+TELEMETRY_SIZE_V6 = struct.calcsize(TELEMETRY_FMT_V6)
+TELEMETRY_SIZE_V5 = struct.calcsize(TELEMETRY_FMT_V5)
+TELEMETRY_SIZE_V3 = struct.calcsize(TELEMETRY_FMT_V3)
+PACKET_MAGIC = 0xABBA0001
