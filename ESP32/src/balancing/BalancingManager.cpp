@@ -1,4 +1,5 @@
 #include "balancing/BalancingManager.h"
+#include "common/ConfigPersistence.h"
 #include "balancing/strategies/LegacyPidStrategy.h"
 #include "balancing/strategies/CascadedLqrStrategy.h"
 #include "logging.h"
@@ -9,8 +10,8 @@ namespace abbot {
 namespace balancing {
 
 BalancingManager::BalancingManager() {
-    strategies_[static_cast<int>(StrategyType::LEGACY_PID)] = std::unique_ptr<LegacyPidStrategy>(new LegacyPidStrategy());
-    strategies_[static_cast<int>(StrategyType::CASCADED_LQR)] = std::unique_ptr<CascadedLqrStrategy>(new CascadedLqrStrategy());
+    strategies_by_type_[static_cast<int>(StrategyType::LEGACY_PID)] = std::unique_ptr<LegacyPidStrategy>(new LegacyPidStrategy());
+    strategies_by_type_[static_cast<int>(StrategyType::CASCADED_LQR)] = std::unique_ptr<CascadedLqrStrategy>(new CascadedLqrStrategy());
 }
 
 BalancingManager& BalancingManager::getInstance() {
@@ -19,9 +20,9 @@ BalancingManager& BalancingManager::getInstance() {
 }
 
 void BalancingManager::init() {
-    for (auto& s : strategies_) {
-        if (s) {
-            s->init();
+    for (auto& strategy : strategies_by_type_) {
+        if (strategy) {
+            strategy->init();
         }
     }
     loadActiveStrategy();
@@ -29,51 +30,52 @@ void BalancingManager::init() {
 }
 
 void BalancingManager::setStrategy(StrategyType type) {
-    if (type == current_type_) {
+    if (type == active_strategy_type_) {
         return;
     }
     
-    current_type_ = type;
+    active_strategy_type_ = type;
     LOG_PRINTF(abbot::log::CHANNEL_DEFAULT, "STRATEGY: switched to %s\n", getActiveStrategy()->getName());
     saveActiveStrategy();
 }
 
 IBalancingStrategy* IRAM_ATTR BalancingManager::getActiveStrategy() {
-    return strategies_[static_cast<int>(current_type_)].get();
+    return strategies_by_type_[static_cast<int>(active_strategy_type_)].get();
 }
 
 IBalancingStrategy* BalancingManager::getStrategy(StrategyType type) {
-    return strategies_[static_cast<int>(type)].get();
+    return strategies_by_type_[static_cast<int>(type)].get();
 }
 
 IBalancingStrategy::Result IRAM_ATTR BalancingManager::compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
                               int32_t enc_l_ticks, int32_t enc_r_ticks,
                               float v_enc_ticks_s) {
-    auto* active = getActiveStrategy();
-    if (!active) {
+    auto* activeStrategy = getActiveStrategy();
+    if (!activeStrategy) {
         return {0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f, 0.0f};
     }
-    return active->compute(pitch_rad, pitch_rate_rads, yaw_rate_rads, dt_s, enc_l_ticks, enc_r_ticks, v_enc_ticks_s);
+    return activeStrategy->compute(pitch_rad, pitch_rate_rads, yaw_rate_rads, dt_s, enc_l_ticks, enc_r_ticks, v_enc_ticks_s);
 }
 
 void BalancingManager::reset(float initial_pitch_rad) {
-    auto* active = getActiveStrategy();
-    if (active) {
-        active->reset(initial_pitch_rad);
+    auto* activeStrategy = getActiveStrategy();
+    if (activeStrategy) {
+        activeStrategy->reset(initial_pitch_rad);
     }
 }
 
 void BalancingManager::setDriveSetpoints(float v_norm, float w_norm) {
-    auto* active = getActiveStrategy();
-    if (active) {
-        active->setDriveSetpoints(v_norm, w_norm);
+    auto* activeStrategy = getActiveStrategy();
+    if (activeStrategy) {
+        activeStrategy->setDriveSetpoints(v_norm, w_norm);
     }
 }
 
 void BalancingManager::saveActiveStrategy() {
     Preferences prefs;
     if (prefs.begin("bal_mgr", false)) {
-        prefs.putInt("active_type", static_cast<int>(current_type_));
+        const int activeStrategyTypeValue = static_cast<int>(active_strategy_type_);
+        abbot::config::putIntIfChanged(prefs, "active_type", activeStrategyTypeValue, -1);
         prefs.end();
     }
 }
@@ -81,8 +83,8 @@ void BalancingManager::saveActiveStrategy() {
 void BalancingManager::loadActiveStrategy() {
     Preferences prefs;
     if (prefs.begin("bal_mgr", true)) {
-        int type = prefs.getInt("active_type", static_cast<int>(StrategyType::LEGACY_PID));
-        current_type_ = static_cast<StrategyType>(type);
+        const int strategyTypeValue = prefs.getInt("active_type", static_cast<int>(StrategyType::LEGACY_PID));
+        active_strategy_type_ = static_cast<StrategyType>(strategyTypeValue);
         prefs.end();
     }
 }

@@ -47,11 +47,11 @@ public:
     void resetToDefaults() override;
 
     // Strategy-specific configuration
-    void setConfig(const Config& cfg);
-    Config getConfig() const { return cfg_; }
+    void setConfig(const Config& configuration);
+    Config getConfig() const { return configuration_; }
 
 private:
-    Config cfg_;
+    Config configuration_;
     float pitch_trim_rad_ = 0.0f;
     float yaw_error_accum_rad_ = 0.0f;
     int32_t enc_dist_zeropoint_ = 0;
@@ -64,7 +64,7 @@ private:
     float lp_v_speed_ = 0.0f;
     float lp_cmd_ = 0.0f;
 
-    void updateAdaptiveTrim(float pitch_rad, float dist_err, float dt);
+    void updateAdaptiveTrim(float pitch_rad, float distance_error, float delta_time_s);
 };
 
 } // namespace balancing

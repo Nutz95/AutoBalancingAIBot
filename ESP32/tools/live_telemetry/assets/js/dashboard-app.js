@@ -1,6 +1,10 @@
 import { DashboardApi } from './dashboard-api.js';
 import { ChartManager } from './chart-manager.js';
+import { InfoPanel } from './info-panel.js';
+import { LogsPanel } from './logs-panel.js';
 import { MetricsPanel } from './metrics-panel.js';
+import { SettingsPanel } from './settings-panel.js';
+import { TabController } from './tab-controller.js';
 
 export class DashboardApp {
   constructor(documentRef = document) {
@@ -14,6 +18,10 @@ export class DashboardApp {
       this._document.getElementById('status'),
       this._document.getElementById('metricGrid'),
     );
+    this._tabController = new TabController(this._document);
+    this._settingsPanel = new SettingsPanel(this._document, this._api);
+    this._logsPanel = new LogsPanel(this._document, this._api);
+    this._infoPanel = new InfoPanel(this._document, this._api);
     this._windowLabelElement = this._document.getElementById('windowLabel');
     this._refreshSelectElement = this._document.getElementById('refreshSel');
     this._refreshHandle = null;
@@ -22,7 +30,14 @@ export class DashboardApp {
 
   start() {
     this._wireControls();
+    this._tabController.start((tabName) => {
+      this._handleTabChange(tabName);
+    });
+    this._settingsPanel.start();
+    this._logsPanel.start();
+    this._infoPanel.start();
     this._chartManager.build();
+    this._tabController.activate('live');
     this._scheduleRefresh();
   }
 
@@ -59,6 +74,20 @@ export class DashboardApp {
       this._chartManager.update(payload);
     } catch {
       this._metricsPanel.setDisconnected();
+    }
+  }
+
+  _handleTabChange(tabName) {
+    if (tabName === 'settings') {
+      void this._settingsPanel.load();
+    }
+    if (tabName === 'logs') {
+      this._logsPanel.activate();
+    } else {
+      this._logsPanel.deactivate();
+    }
+    if (tabName === 'info') {
+      void this._infoPanel.load();
     }
   }
 }

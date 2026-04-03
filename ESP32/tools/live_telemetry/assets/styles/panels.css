@@ -1,0 +1,22 @@
+.tab-button.is-active {
+  background: #17304d;
+  border-color: #2d6ab0;
+  color: #dff0ff;
+}
+
+.panel-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 14px;
+}
+
+.panel-status {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+.panel-status.is-error {
+  color: #ff9b9b;
+}

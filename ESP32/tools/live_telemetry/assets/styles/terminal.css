@@ -1,0 +1,29 @@
+.terminal {
+  min-height: 440px;
+  max-height: 70vh;
+  overflow: auto;
+  padding: 14px;
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  background: #07101d;
+  font-family: Consolas, 'Courier New', monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+.terminal-line {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.terminal-line.level-system {
+  color: #9ab0d6;
+}
+
+.terminal-line.level-command {
+  color: #7de2a8;
+}
+
+.terminal-line.level-robot {
+  color: #dbe7ff;
+}

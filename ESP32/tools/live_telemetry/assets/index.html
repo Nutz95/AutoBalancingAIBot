@@ -27,18 +27,121 @@
     </aside>
 
     <main class="content">
-      <div class="toolbar">
-        <button id="allBtn">Show all</button>
-        <button id="noneBtn">Hide all</button>
-        <label class="muted" for="refreshSel">Refresh</label>
-        <select id="refreshSel">
-          <option value="120">120 ms</option>
-          <option value="200" selected>200 ms</option>
-          <option value="333">333 ms</option>
-          <option value="500">500 ms</option>
-        </select>
+      <div class="tabs">
+        <button class="tab-button is-active" data-tab-button="live">Live</button>
+        <button class="tab-button" data-tab-button="settings">Settings</button>
+        <button class="tab-button" data-tab-button="logs">Logs</button>
+        <button class="tab-button" data-tab-button="info">Info</button>
       </div>
-      <div class="grid" id="chartGrid"></div>
+
+      <section class="tab-panel is-active" data-tab-panel="live">
+        <div class="toolbar">
+          <button id="allBtn">Show all</button>
+          <button id="noneBtn">Hide all</button>
+          <label class="muted" for="refreshSel">Refresh</label>
+          <select id="refreshSel">
+            <option value="120">120 ms</option>
+            <option value="200" selected>200 ms</option>
+            <option value="333">333 ms</option>
+            <option value="500">500 ms</option>
+          </select>
+        </div>
+        <div class="grid" id="chartGrid"></div>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="settings">
+        <div class="panel-toolbar">
+          <div id="settingsStatus" class="panel-status">Waiting for config…</div>
+          <button id="settingsRefreshBtn">Refresh settings</button>
+        </div>
+
+        <div class="settings-grid">
+          <form id="controllerForm" class="settings-card settings-form">
+            <h3>Controller</h3>
+            <div class="form-grid">
+              <label><span>Mode</span><select id="controllerMode"><option value="LQR">LQR</option><option value="PID">PID</option></select></label>
+              <label><span>Adaptive trim</span><input id="adaptiveTrimEnabled" type="checkbox" /></label>
+              <label><span>PID Kp</span><input id="pidKp" type="number" step="0.000001" /></label>
+              <label><span>PID Ki</span><input id="pidKi" type="number" step="0.000001" /></label>
+              <label><span>PID Kd</span><input id="pidKd" type="number" step="0.000001" /></label>
+              <label><span>LQR K pitch</span><input id="lqrKPitch" type="number" step="0.000001" /></label>
+              <label><span>LQR K gyro</span><input id="lqrKGyro" type="number" step="0.000001" /></label>
+              <label><span>LQR K dist</span><input id="lqrKDist" type="number" step="0.000001" /></label>
+              <label><span>LQR K speed</span><input id="lqrKSpeed" type="number" step="0.000001" /></label>
+              <label><span>Deadband</span><input id="deadbandValue" type="number" step="0.000001" /></label>
+              <label><span>Min cmd</span><input id="minCmdValue" type="number" step="0.000001" /></label>
+              <label><span>Motor gain left</span><input id="motorGainLeft" type="number" step="0.000001" /></label>
+              <label><span>Motor gain right</span><input id="motorGainRight" type="number" step="0.000001" /></label>
+              <label><span>Pitch rate LPF (Hz)</span><input id="pitchRateLpfHz" type="number" step="0.000001" /></label>
+              <label><span>Cmd LPF (Hz)</span><input id="cmdLpfHz" type="number" step="0.000001" /></label>
+            </div>
+            <div class="form-actions"><button type="submit">Save controller</button></div>
+          </form>
+
+          <form id="filterForm" class="settings-card settings-form">
+            <h3>Filter</h3>
+            <div class="form-grid">
+              <label><span>Current filter</span><select id="filterName"></select></label>
+              <div class="form-meta">Supported params: <span id="filterSupportedParams">—</span></div>
+              <label><span>ALPHA</span><input id="filterAlpha" type="number" step="0.000001" /></label>
+              <label><span>KACC</span><input id="filterKacc" type="number" step="0.000001" /></label>
+              <label><span>KBIAS</span><input id="filterKbias" type="number" step="0.000001" /></label>
+              <label><span>BETA</span><input id="filterBeta" type="number" step="0.000001" /></label>
+            </div>
+            <div class="form-actions"><button type="submit">Save filter</button></div>
+          </form>
+
+          <section class="settings-card">
+            <h3>Motor diagnostics</h3>
+            <div class="stack gap-sm">
+              <div class="form-meta">Driver: <span id="motorDriverValue">—</span></div>
+              <div class="form-meta">State: <span id="motorsEnabledValue">—</span></div>
+              <div class="form-meta" id="motorLeftMeta">—</div>
+              <div class="form-meta" id="motorRightMeta">—</div>
+              <div class="form-meta" id="motorLastCommands">—</div>
+              <div class="button-row">
+                <button id="motorEnableBtn" type="button">Enable</button>
+                <button id="motorDisableBtn" type="button">Disable</button>
+              </div>
+              <div class="form-grid">
+                <label><span>Left command</span><input id="motorDriveLeft" type="number" step="0.01" min="-1" max="1" value="0" /></label>
+                <label><span>Right command</span><input id="motorDriveRight" type="number" step="0.01" min="-1" max="1" value="0" /></label>
+              </div>
+              <div class="button-row">
+                <button id="motorDriveApplyBtn" type="button">Apply drive</button>
+                <button id="motorDriveStopBtn" type="button">Stop</button>
+              </div>
+            </div>
+          </section>
+
+          <section class="settings-card">
+            <h3>System</h3>
+            <p class="muted">Safe actions exposed to the web UI are intentionally limited.</p>
+            <div class="button-row">
+              <button id="rebootBtn" type="button">Reboot ESP32</button>
+            </div>
+          </section>
+        </div>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="logs">
+        <div class="panel-toolbar">
+          <div id="logsStatus" class="panel-status">Console disconnected</div>
+          <div class="button-row">
+            <button id="logsRefreshBtn">Refresh logs</button>
+            <button id="logsClearBtn">Clear terminal</button>
+          </div>
+        </div>
+        <div id="logsTerminal" class="terminal"></div>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="info">
+        <div class="panel-toolbar">
+          <div id="infoStatus" class="panel-status">Waiting for info…</div>
+          <button id="infoRefreshBtn">Refresh info</button>
+        </div>
+        <div id="infoGrid" class="settings-grid"></div>
+      </section>
     </main>
   </div>
 

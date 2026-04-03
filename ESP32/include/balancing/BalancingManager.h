@@ -21,7 +21,7 @@ public:
     void setStrategy(StrategyType type);
     IBalancingStrategy* getActiveStrategy();
     IBalancingStrategy* getStrategy(StrategyType type);
-    StrategyType getActiveType() const { return current_type_; }
+    StrategyType getActiveType() const { return active_strategy_type_; }
 
     // Unified compute call
     IBalancingStrategy::Result compute(float pitch_rad, float pitch_rate_rads, float yaw_rate_rads, float dt_s,
@@ -36,11 +36,13 @@ public:
     void loadActiveStrategy();
 
 private:
+    static constexpr int kStrategyCount = 2;
+
     BalancingManager();
     ~BalancingManager() = default;
 
-    std::unique_ptr<IBalancingStrategy> strategies_[2];
-    StrategyType current_type_ = StrategyType::LEGACY_PID;
+    std::unique_ptr<IBalancingStrategy> strategies_by_type_[kStrategyCount];
+    StrategyType active_strategy_type_ = StrategyType::LEGACY_PID;
 };
 
 } // namespace balancing

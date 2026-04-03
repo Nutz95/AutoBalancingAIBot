@@ -10,6 +10,7 @@
 #include "balancing/strategies/CascadedLqrStrategy.h"
 
 #include "autotune_controller.h"
+#include "common/ConfigPersistence.h"
 #include "logging.h"
 #include "imu_drivers/imu_manager.h"
 #include "motor_drivers/driver_manager.h"
@@ -278,16 +279,34 @@ bool isSuspended() {
   return g_suspended;
 }
 
-void setDeadband(float db) {
-  g_deadband = db;
-  if (g_prefs_ready) g_preferences_helper.putFloat("db", db);
+void setDeadband(float deadband) {
+  if (abbot::config::nearlyEqual(g_deadband, deadband)) {
+    return;
+  }
+  g_deadband = deadband;
+  if (g_prefs_ready) {
+    abbot::config::putFloatIfChanged(
+        g_preferences_helper,
+        "db",
+        deadband,
+        BALANCER_MOTOR_MIN_OUTPUT);
+  }
 }
 
 float getDeadband() { return g_deadband; }
 
-void setMinCmd(float m) {
-  g_min_command_output = m;
-  if (g_prefs_ready) g_preferences_helper.putFloat("min_cmd", m);
+void setMinCmd(float minCommandOutput) {
+  if (abbot::config::nearlyEqual(g_min_command_output, minCommandOutput)) {
+    return;
+  }
+  g_min_command_output = minCommandOutput;
+  if (g_prefs_ready) {
+    abbot::config::putFloatIfChanged(
+        g_preferences_helper,
+        "min_cmd",
+        minCommandOutput,
+        BALANCER_MIN_CMD);
+  }
 }
 
 float getMinCmd() { return g_min_command_output; }
@@ -493,77 +512,134 @@ void setAutotuneRelay(float a) { g_autotune_cfg.relay_amplitude = a; }
 void setAutotuneDeadband(float d) { g_autotune_cfg.deadband = d; }
 void setAutotuneMaxAngle(float m) { g_autotune_cfg.max_pitch_abort = m; }
 
-void setMotorGains(float l, float r) {
-    g_left_motor_scale = l; g_right_motor_scale = r;
-    if (g_prefs_ready) { g_preferences_helper.putFloat("mg_L", l); g_preferences_helper.putFloat("mg_R", r); }
+void setMotorGains(float leftMotorGain, float rightMotorGain) {
+  if (abbot::config::nearlyEqual(g_left_motor_scale, leftMotorGain)
+      && abbot::config::nearlyEqual(g_right_motor_scale, rightMotorGain)) {
+    return;
+  }
+  g_left_motor_scale = leftMotorGain;
+  g_right_motor_scale = rightMotorGain;
+  if (g_prefs_ready) {
+    abbot::config::putFloatIfChanged(
+        g_preferences_helper,
+        "mg_L",
+        leftMotorGain,
+        BALANCER_LEFT_MOTOR_GAIN);
+    abbot::config::putFloatIfChanged(
+        g_preferences_helper,
+        "mg_R",
+        rightMotorGain,
+        BALANCER_RIGHT_MOTOR_GAIN);
+  }
 }
-void getMotorGains(float &l, float &r) { l = g_left_motor_scale; r = g_right_motor_scale; }
-
-void getDiagnostics(Diagnostics &d) {
-    if (g_telemetry_mutex && xSemaphoreTake(g_telemetry_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
-        d.enc_l = g_telemetry_state.last_enc_l;
-        d.enc_r = g_telemetry_state.last_enc_r;
-        d.iterm = g_telemetry_state.pid_iterm;
-        d.lqr_angle = g_telemetry_state.lqr_angle;
-        d.lqr_gyro = g_telemetry_state.lqr_gyro;
-        d.lqr_dist = g_telemetry_state.lqr_dist;
-        d.lqr_speed = g_telemetry_state.lqr_speed;
-        d.cmd_raw = g_telemetry_state.cmd_raw;
-        d.cmd_final = g_telemetry_state.cmd_final;
-        d.steer = g_telemetry_state.steer;
-        d.left_preclip = g_telemetry_state.left_preclip;
-        d.right_preclip = g_telemetry_state.right_preclip;
-        d.left_postclip = g_telemetry_state.left_postclip;
-        d.right_postclip = g_telemetry_state.right_postclip;
-        d.sat_flags = g_telemetry_state.sat_flags;
-        xSemaphoreGive(g_telemetry_mutex);
-    } else {
-        d.enc_l = 0; d.enc_r = 0; d.iterm = 0.0f;
-        d.lqr_angle = 0.0f; d.lqr_gyro = 0.0f; d.lqr_dist = 0.0f; d.lqr_speed = 0.0f;
-        d.cmd_raw = 0.0f; d.cmd_final = 0.0f; d.steer = 0.0f;
-        d.left_preclip = 0.0f; d.right_preclip = 0.0f;
-        d.left_postclip = 0.0f; d.right_postclip = 0.0f;
-        d.sat_flags = 0u;
-    }
+void getMotorGains(float &leftMotorGain, float &rightMotorGain) {
+  leftMotorGain = g_left_motor_scale;
+  rightMotorGain = g_right_motor_scale;
 }
 
-void setMode(ControllerMode m) { 
-    abbot::balancing::BalancingManager::getInstance().setStrategy((abbot::balancing::StrategyType)m); 
-    if (g_prefs_ready) {
-        g_preferences_helper.putInt("mode", (int)m);
-    }
+namespace {
+
+void clearDiagnostics(abbot::balancer::controller::Diagnostics& diagnostics) {
+  diagnostics.enc_l = 0;
+  diagnostics.enc_r = 0;
+  diagnostics.iterm = 0.0f;
+  diagnostics.lqr_angle = 0.0f;
+  diagnostics.lqr_gyro = 0.0f;
+  diagnostics.lqr_dist = 0.0f;
+  diagnostics.lqr_speed = 0.0f;
+  diagnostics.cmd_raw = 0.0f;
+  diagnostics.cmd_final = 0.0f;
+  diagnostics.steer = 0.0f;
+  diagnostics.left_preclip = 0.0f;
+  diagnostics.right_preclip = 0.0f;
+  diagnostics.left_postclip = 0.0f;
+  diagnostics.right_postclip = 0.0f;
+  diagnostics.sat_flags = 0u;
+}
+
+} // namespace
+
+void getDiagnostics(Diagnostics &diagnostics) {
+  if (g_telemetry_mutex && xSemaphoreTake(g_telemetry_mutex, pdMS_TO_TICKS(5)) == pdTRUE) {
+    diagnostics.enc_l = g_telemetry_state.last_enc_l;
+    diagnostics.enc_r = g_telemetry_state.last_enc_r;
+    diagnostics.iterm = g_telemetry_state.pid_iterm;
+    diagnostics.lqr_angle = g_telemetry_state.lqr_angle;
+    diagnostics.lqr_gyro = g_telemetry_state.lqr_gyro;
+    diagnostics.lqr_dist = g_telemetry_state.lqr_dist;
+    diagnostics.lqr_speed = g_telemetry_state.lqr_speed;
+    diagnostics.cmd_raw = g_telemetry_state.cmd_raw;
+    diagnostics.cmd_final = g_telemetry_state.cmd_final;
+    diagnostics.steer = g_telemetry_state.steer;
+    diagnostics.left_preclip = g_telemetry_state.left_preclip;
+    diagnostics.right_preclip = g_telemetry_state.right_preclip;
+    diagnostics.left_postclip = g_telemetry_state.left_postclip;
+    diagnostics.right_postclip = g_telemetry_state.right_postclip;
+    diagnostics.sat_flags = g_telemetry_state.sat_flags;
+    xSemaphoreGive(g_telemetry_mutex);
+    return;
+  }
+
+  clearDiagnostics(diagnostics);
+}
+
+void setMode(ControllerMode controllerMode) {
+  if (getMode() == controllerMode) {
+    return;
+  }
+  abbot::balancing::BalancingManager::getInstance().setStrategy(
+    static_cast<abbot::balancing::StrategyType>(controllerMode));
+  if (g_prefs_ready) {
+  abbot::config::putIntIfChanged(
+    g_preferences_helper,
+    "mode",
+    static_cast<int>(controllerMode),
+    -1);
+  }
 }
 ControllerMode getMode() { return (ControllerMode)abbot::balancing::BalancingManager::getInstance().getActiveType(); }
 
-void setCascadedGains(const CascadedGains &g) {
-    auto* s = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
-    if (s) {
-        auto* lqr = static_cast<abbot::balancing::CascadedLqrStrategy*>(s);
-        auto cfg = lqr->getConfig();
-        cfg.k_pitch = g.k_pitch; cfg.k_gyro = g.k_gyro; cfg.k_dist = g.k_dist; cfg.k_speed = g.k_speed;
-        lqr->setConfig(cfg);
+void setCascadedGains(const CascadedGains &cascadedGains) {
+  auto* strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(
+    abbot::balancing::StrategyType::CASCADED_LQR);
+  if (strategy) {
+    auto* cascadedLqrStrategy = static_cast<abbot::balancing::CascadedLqrStrategy*>(strategy);
+    auto configuration = cascadedLqrStrategy->getConfig();
+    configuration.k_pitch = cascadedGains.k_pitch;
+    configuration.k_gyro = cascadedGains.k_gyro;
+    configuration.k_dist = cascadedGains.k_dist;
+    configuration.k_speed = cascadedGains.k_speed;
+    cascadedLqrStrategy->setConfig(configuration);
     }
 }
-void getCascadedGains(CascadedGains &g) {
-    auto* s = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
-    if (s) {
-        auto cfg = static_cast<abbot::balancing::CascadedLqrStrategy*>(s)->getConfig();
-        g.k_pitch = cfg.k_pitch; g.k_gyro = cfg.k_gyro; g.k_dist = cfg.k_dist; g.k_speed = cfg.k_speed;
+void getCascadedGains(CascadedGains &cascadedGains) {
+  auto* strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(
+    abbot::balancing::StrategyType::CASCADED_LQR);
+  if (strategy) {
+    const auto configuration = static_cast<abbot::balancing::CascadedLqrStrategy*>(strategy)->getConfig();
+    cascadedGains.k_pitch = configuration.k_pitch;
+    cascadedGains.k_gyro = configuration.k_gyro;
+    cascadedGains.k_dist = configuration.k_dist;
+    cascadedGains.k_speed = configuration.k_speed;
     }
 }
 
-void setAdaptiveTrimEnabled(bool e) {
-    auto* s = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
-    if (s) {
-        auto* lqr = static_cast<abbot::balancing::CascadedLqrStrategy*>(s);
-        auto cfg = lqr->getConfig();
-        cfg.adaptive_trim_enabled = e;
-        lqr->setConfig(cfg);
+void setAdaptiveTrimEnabled(bool enabled) {
+  auto* strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(
+    abbot::balancing::StrategyType::CASCADED_LQR);
+  if (strategy) {
+    auto* cascadedLqrStrategy = static_cast<abbot::balancing::CascadedLqrStrategy*>(strategy);
+    auto configuration = cascadedLqrStrategy->getConfig();
+    configuration.adaptive_trim_enabled = enabled;
+    cascadedLqrStrategy->setConfig(configuration);
     }
 }
 bool isAdaptiveTrimEnabled() {
-    auto* s = abbot::balancing::BalancingManager::getInstance().getStrategy(abbot::balancing::StrategyType::CASCADED_LQR);
-    return s ? static_cast<abbot::balancing::CascadedLqrStrategy*>(s)->getConfig().adaptive_trim_enabled : false;
+  auto* strategy = abbot::balancing::BalancingManager::getInstance().getStrategy(
+    abbot::balancing::StrategyType::CASCADED_LQR);
+  return strategy
+    ? static_cast<abbot::balancing::CascadedLqrStrategy*>(strategy)->getConfig().adaptive_trim_enabled
+    : false;
 }
 
 void calibrateTrim() { 

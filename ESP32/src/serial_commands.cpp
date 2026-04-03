@@ -14,6 +14,7 @@
 #include "serial_commands/LogCommandHandler.h"
 #include "serial_commands/FusionCommandHandler.h"
 #include "serial_commands/SystemCommandHandler.h"
+#include "serial_commands/WebUiCommandHandler.h"
 #include "motor_drivers/driver_manager.h"
 #include "imu_drivers/IIMUDriver.h"
 #include "imu_drivers/imu_manager.h"
@@ -68,6 +69,7 @@ static void ensureMenus(IIMUDriver *driver) {
   g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new LogCommandHandler()));
   g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new FusionCommandHandler(&g_fusionService)));
   g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new SystemCommandHandler()));
+  g_registry.registerHandler(std::unique_ptr<ICommandHandler>(new WebUiCommandHandler()));
 
   // 2. Build root menu from registered handlers
   std::unique_ptr<SerialMenu> root(new SerialMenu("Main Menu"));

@@ -2,10 +2,12 @@
 #define FILTER_SERVICE_H
 
 #include "IFilterService.h"
+#include "common/ConfigPersistence.h"
 #include "filter_manager.h"
 #include "logging.h"
 #include "SystemTasks.h"
 #include <Preferences.h>
+#include <cmath>
 
 namespace abbot {
 
@@ -56,7 +58,7 @@ public:
     void saveParamToPrefs(const char* key, float value) override {
         Preferences pref;
         if (pref.begin("abbot", false)) {
-            pref.putFloat(key, value);
+            abbot::config::putFloatIfChanged(pref, key, value, value);
             pref.end();
         }
     }

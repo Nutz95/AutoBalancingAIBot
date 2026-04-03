@@ -3,7 +3,8 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
-from .network import RobotConsoleClient, TelemetryReceiver
+from .console import CommandProfileService, ConfigSnapshotStore, ConsoleSession, LogBuffer
+from .network import TelemetryReceiver
 from .state import DashboardState
 from .telemetry import TelemetryPacketParser, TelemetrySignalProcessor
 from .web import AssetRepository, DashboardHttpServer
@@ -15,13 +16,25 @@ class LiveTelemetryApplication:
         self._parser = TelemetryPacketParser()
         self._processor = TelemetrySignalProcessor()
         self._state = DashboardState(window_sec=args.window_sec, processor=self._processor)
-        self._console = RobotConsoleClient(args.robot_host, args.robot_port)
+        self._log_buffer = LogBuffer()
+        self._console_session = ConsoleSession(args.robot_host, args.robot_port, self._log_buffer)
+        self._config_store = ConfigSnapshotStore(self._console_session)
+        self._command_profiles = CommandProfileService(self._console_session, self._config_store)
         bind_host = "" if args.http_host == "0.0.0.0" else args.http_host
         self._receiver = TelemetryReceiver(self._state, self._parser, bind_host=bind_host, udp_port=args.udp_port)
         assets = AssetRepository(Path(__file__).with_name("assets"))
-        self._server = DashboardHttpServer((args.http_host, args.http_port), self._state, self._console, assets)
+        self._server = DashboardHttpServer(
+            (args.http_host, args.http_port),
+            self._state,
+            self._console_session,
+            self._command_profiles,
+            self._config_store,
+            self._log_buffer,
+            assets,
+        )
 
     def run(self) -> int:
+        self._console_session.start()
         self._arm_udp_telemetry_if_needed()
         self._receiver.start()
         print(f"Dashboard listening on http://127.0.0.1:{self._args.http_port}")
@@ -33,6 +46,7 @@ class LiveTelemetryApplication:
             print("\nStopping dashboard…")
         finally:
             self._receiver.stop()
+            self._console_session.stop()
             self._server.server_close()
         return 0
 
@@ -40,12 +54,10 @@ class LiveTelemetryApplication:
         if self._args.no_auto_start:
             return
         try:
-            lines = self._console.send("SYS TELEM UDP STOP", "SYS TELEM UDP AUTO")
-            if lines:
-                print("Robot console:")
-                for line in lines:
-                    print(f"  {line}")
-        except OSError as exc:
+            if not self._console_session.wait_until_connected(timeout_s=2.0):
+                raise OSError("console connection timed out")
+            self._command_profiles.ensure_udp_auto()
+        except (OSError, TimeoutError) as exc:
             print(f"Warning: could not arm UDP telemetry automatically: {exc}")
 
 

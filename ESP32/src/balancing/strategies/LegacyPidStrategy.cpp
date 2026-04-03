@@ -1,7 +1,30 @@
 #include "balancing/strategies/LegacyPidStrategy.h"
 #include "../../../config/balancer_config.h"
+#include "common/ConfigPersistence.h"
 #include "logging.h"
 #include <Preferences.h>
+
+namespace {
+
+struct PidPreferenceValue {
+    const char* key;
+    float value;
+    float defaultValue;
+};
+
+void savePidConfigToPreferences(Preferences& preferences, float kp, float ki, float kd) {
+    const PidPreferenceValue values[] = {
+        {"kp", kp, BALANCER_DEFAULT_KP},
+        {"ki", ki, BALANCER_DEFAULT_KI},
+        {"kd", kd, BALANCER_DEFAULT_KD},
+    };
+
+    for (const auto& value : values) {
+        abbot::config::putFloatIfChanged(preferences, value.key, value.value, value.defaultValue);
+    }
+}
+
+}
 
 namespace abbot {
 namespace balancing {
@@ -46,9 +69,10 @@ void LegacyPidStrategy::loadConfig() {
 void LegacyPidStrategy::saveConfig() {
     Preferences prefs;
     if (prefs.begin("bal_pid", false)) {
-        prefs.putFloat("kp", pid_.getKp());
-        prefs.putFloat("ki", pid_.getKi());
-        prefs.putFloat("kd", pid_.getKd());
+        const float kp = pid_.getKp();
+        const float ki = pid_.getKi();
+        const float kd = pid_.getKd();
+        savePidConfigToPreferences(prefs, kp, ki, kd);
         prefs.end();
     }
 }
@@ -59,6 +83,11 @@ void LegacyPidStrategy::resetToDefaults() {
 }
 
 void LegacyPidStrategy::setGains(float kp, float ki, float kd) {
+    if (abbot::config::nearlyEqual(pid_.getKp(), kp)
+        && abbot::config::nearlyEqual(pid_.getKi(), ki)
+        && abbot::config::nearlyEqual(pid_.getKd(), kd)) {
+        return;
+    }
     pid_.setGains(kp, ki, kd);
     saveConfig();
 }
