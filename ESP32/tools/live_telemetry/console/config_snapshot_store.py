@@ -37,8 +37,14 @@ class ConfigSnapshotStore:
         section_names = sections or list(self._SECTION_COMMANDS.keys())
         if self._console_session.is_connected():
             self.refresh_sections(section_names, force=force)
+        return self.get_cached_snapshot(section_names)
+
+    def get_cached_snapshot(self, sections: list[str] | None = None) -> dict[str, Any]:
+        section_names = sections or list(self._SECTION_COMMANDS.keys())
         with self._snapshot_lock:
-            payload = {section: self._sections.get(section) for section in self._SECTION_COMMANDS}
+            payload = {section: self._sections.get(section) for section in self._SECTION_COMMANDS if section in section_names}
+            for section in self._SECTION_COMMANDS:
+                payload.setdefault(section, self._sections.get(section))
         payload["console_connected"] = self._console_session.is_connected()
         return payload
 

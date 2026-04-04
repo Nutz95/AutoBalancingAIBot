@@ -1,3 +1,4 @@
+import { CapturePanel } from './capture-panel.js';
 import { DashboardApi } from './dashboard-api.js';
 import { ChartManager } from './chart-manager.js';
 import { InfoPanel } from './info-panel.js';
@@ -22,10 +23,12 @@ export class DashboardApp {
     this._settingsPanel = new SettingsPanel(this._document, this._api);
     this._logsPanel = new LogsPanel(this._document, this._api);
     this._infoPanel = new InfoPanel(this._document, this._api);
+    this._capturePanel = new CapturePanel(this._document, this._api);
     this._windowLabelElement = this._document.getElementById('windowLabel');
     this._refreshSelectElement = this._document.getElementById('refreshSel');
     this._refreshHandle = null;
     this._refreshMs = 200;
+    this._refreshInFlight = false;
   }
 
   start() {
@@ -36,6 +39,7 @@ export class DashboardApp {
     this._settingsPanel.start();
     this._logsPanel.start();
     this._infoPanel.start();
+    this._capturePanel.start();
     this._chartManager.build();
     this._tabController.activate('live');
     this._scheduleRefresh();
@@ -67,6 +71,10 @@ export class DashboardApp {
   }
 
   async _refresh() {
+    if (this._refreshInFlight) {
+      return;
+    }
+    this._refreshInFlight = true;
     try {
       const payload = await this._api.fetchState();
       this._windowLabelElement.textContent = payload.window_sec;
@@ -74,6 +82,8 @@ export class DashboardApp {
       this._chartManager.update(payload);
     } catch {
       this._metricsPanel.setDisconnected();
+    } finally {
+      this._refreshInFlight = false;
     }
   }
 
@@ -85,6 +95,11 @@ export class DashboardApp {
       this._logsPanel.activate();
     } else {
       this._logsPanel.deactivate();
+    }
+    if (tabName === 'capture') {
+      this._capturePanel.activate();
+    } else {
+      this._capturePanel.deactivate();
     }
     if (tabName === 'info') {
       void this._infoPanel.load();

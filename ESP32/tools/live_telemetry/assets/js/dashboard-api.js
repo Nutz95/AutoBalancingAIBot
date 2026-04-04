@@ -18,6 +18,29 @@ export class DashboardApi {
     return this._getJson(`/api/logs?after=${afterSequence}&limit=${limit}`);
   }
 
+  async fetchCaptureStatus() {
+    return this._getJson('/api/capture/status');
+  }
+
+  async fetchCaptureRun(captureId) {
+    return this._getJson(`/api/capture/run?capture_id=${encodeURIComponent(captureId)}`);
+  }
+
+  async armCapture(label = '', mode = 'manual') {
+    const payload = await this._postJson('/api/capture/arm', { label, mode });
+    return payload.capture;
+  }
+
+  async stopCapture(reason = 'manual_stop') {
+    const payload = await this._postJson('/api/capture/stop', { reason });
+    return payload.capture;
+  }
+
+  async deleteCapture(captureId) {
+    const payload = await this._postJson('/api/capture/delete', { capture_id: captureId });
+    return payload.capture;
+  }
+
   async updateControllerSettings(payload) {
     return this._postJson('/api/settings/controller', payload);
   }

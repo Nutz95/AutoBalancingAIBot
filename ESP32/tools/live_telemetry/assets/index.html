@@ -14,21 +14,35 @@
       <div class="muted">Sliding window dashboard for binary UDP telemetry.</div>
       <div id="status" class="status-pill">Connecting…</div>
 
-      <h2>Live metrics</h2>
-      <div class="metrics metric-grid" id="metricGrid"></div>
+      <details class="sidebar-accordion">
+        <summary><span>Live metrics</span></summary>
+        <div class="sidebar-accordion-body">
+          <div class="metrics metric-grid" id="metricGrid"></div>
+        </div>
+      </details>
 
-      <h2>Charts</h2>
-      <div class="check-list" id="chartList"></div>
+      <details class="sidebar-accordion">
+        <summary><span>Charts</span></summary>
+        <div class="sidebar-accordion-body">
+          <div class="check-list" id="chartList"></div>
+        </div>
+      </details>
 
-      <div class="footer-note">
-        Rolling window: <span id="windowLabel">10</span> s.<br />
-        All charts are enabled by default to keep the full system context visible.
+      <div class="sidebar-bottom">
+        <div class="footer-note">
+          Rolling window: <span id="windowLabel">10</span> s.<br />
+          All charts are enabled by default to keep the full system context visible.
+        </div>
+        <div class="sidebar-brand">
+          <img src="/assets/ChainsawDynamics.png" alt="Chainsaw Dynamics logo" class="sidebar-brand-logo" />
+        </div>
       </div>
     </aside>
 
     <main class="content">
       <div class="tabs">
         <button class="tab-button is-active" data-tab-button="live">Live</button>
+        <button class="tab-button" data-tab-button="capture">Capture</button>
         <button class="tab-button" data-tab-button="settings">Settings</button>
         <button class="tab-button" data-tab-button="logs">Logs</button>
         <button class="tab-button" data-tab-button="info">Info</button>
@@ -47,6 +61,55 @@
           </select>
         </div>
         <div class="grid" id="chartGrid"></div>
+      </section>
+
+      <section class="tab-panel" data-tab-panel="capture">
+        <div class="panel-toolbar">
+          <div id="captureStatus" class="panel-status">Capture idle</div>
+          <div class="button-row">
+            <button id="captureRefreshBtn" type="button">Refresh</button>
+          </div>
+        </div>
+
+        <div class="capture-layout">
+          <section class="capture-card">
+            <h3>Capture control</h3>
+            <div class="form-grid">
+              <label><span>Run label</span><input id="captureLabel" type="text" placeholder="lqr_test_01" /></label>
+              <div class="form-meta">Storage root: <span id="captureStoragePath">captures/live_telemetry</span></div>
+            </div>
+            <div class="button-row capture-action-row" style="margin-top: 12px;">
+              <button id="captureArmBtn" type="button">Arm capture</button>
+              <button id="captureStopBtn" type="button">Stop capture</button>
+              <label class="capture-mode-toggle capture-mode-inline"><input id="captureAutoMode" type="checkbox" checked /><span>Auto mode</span></label>
+            </div>
+            <p class="capture-note">Auto mode waits for <code>BALANCER: started</code>, then captures the run and stops automatically on balancing stop, fall, or controller error. If unchecked, capture starts on the first balancing activity and stops manually.</p>
+          </section>
+
+          <section class="capture-card">
+            <h3>Selected run</h3>
+            <div id="captureSource" class="capture-note">No capture selected yet.</div>
+            <div id="captureSummary" class="capture-summary-grid"></div>
+          </section>
+
+          <section class="capture-charts-grid">
+            <article class="card"><h3>Pitch / command</h3><canvas id="captureChart-pitch"></canvas></article>
+            <article class="card"><h3>LQR decomposition</h3><canvas id="captureChart-lqr"></canvas></article>
+            <article class="card"><h3>Motor drive / RPM</h3><canvas id="captureChart-drive"></canvas></article>
+            <article class="card"><h3>Timing / encoder health</h3><canvas id="captureChart-timing"></canvas></article>
+          </section>
+
+          <section class="capture-card">
+            <div class="capture-section-header">
+              <h3>Recent captures</h3>
+              <div class="button-row capture-batch-actions">
+                <span id="captureSelectionSummary" class="muted">0 selected</span>
+                <button id="captureDeleteSelectedBtn" type="button" class="button-danger" disabled>Delete selected</button>
+              </div>
+            </div>
+            <div id="captureRunsList" class="capture-run-list"></div>
+          </section>
+        </div>
       </section>
 
       <section class="tab-panel" data-tab-panel="settings">

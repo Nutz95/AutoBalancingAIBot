@@ -635,9 +635,11 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
             }
 
             if (current_enabled && desired_periodic_interval_ms > 0) {
+                const bool waiting_for_first_encoder = (async.last_encoder_time_us.load() == 0);
                 uint32_t enc_age_ms = getLastEncoderAgeMs(side);
+                const uint32_t rearm_interval_ms = waiting_for_first_encoder ? 150u : 1000u;
                 if (enc_age_ms > 250 &&
-                    (now_ms - async.last_telemetry_ms) >= 1000 &&
+                    (now_ms - async.last_telemetry_ms) >= rearm_interval_ms &&
                     canTransmitNow()) {
                     MksServoProtocol::StatusCode status = MksServoProtocol::StatusCode::Ok;
                     protocol.setPeriodicReadParameter(
@@ -649,10 +651,12 @@ void MksServoMotorDriver::runMotorTask(MotorSide side) {
                     async.last_telemetry_ms = now_ms;
                     async.periodic_rearm.fetch_add(1);
                     LOG_PRINTF_TRY(abbot::log::CHANNEL_MOTOR,
-                                   "mks_servo: rearm telemetry %s id=0x%02X enc_age=%lu ms\n",
+                                   "mks_servo: rearm telemetry %s id=0x%02X enc_age=%lu ms first=%d interval=%lu ms\n",
                                    (side == MotorSide::LEFT ? "LEFT" : "RIGHT"),
                                    state.id,
-                                   (unsigned long)enc_age_ms);
+                                   (unsigned long)enc_age_ms,
+                                   waiting_for_first_encoder ? 1 : 0,
+                                   (unsigned long)rearm_interval_ms);
                 }
             }
 

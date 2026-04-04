@@ -3,6 +3,7 @@ from __future__ import annotations
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 from typing import Any
 
 from .telemetry import TelemetryPacket, TelemetrySignalProcessor
@@ -14,6 +15,7 @@ class DashboardState:
         self._processor = processor
         self._samples: deque[TelemetryPacket] = deque()
         self._lock = threading.Lock()
+        self._listeners: list[Callable[[TelemetryPacket], None]] = []
         self._packet_count = 0
         self._last_rx_monotonic = 0.0
         self._status = "Waiting for telemetry…"
@@ -24,9 +26,16 @@ class DashboardState:
             self._packet_count += 1
             self._last_rx_monotonic = time.monotonic()
             self._status = "Receiving telemetry"
+            listeners = tuple(self._listeners)
             cutoff_ms = packet.timestamp_ms - int(self.window_sec * 1000.0)
             while self._samples and self._samples[0].timestamp_ms < cutoff_ms:
                 self._samples.popleft()
+        for listener in listeners:
+            listener(packet)
+
+    def add_listener(self, listener: Callable[[TelemetryPacket], None]) -> None:
+        with self._lock:
+            self._listeners.append(listener)
 
     def set_status(self, status: str) -> None:
         with self._lock:

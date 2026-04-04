@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 
+from .capture import CaptureManager
 from .console import CommandProfileService, ConfigSnapshotStore, ConsoleSession, LogBuffer
 from .network import TelemetryReceiver
 from .state import DashboardState
@@ -20,6 +21,10 @@ class LiveTelemetryApplication:
         self._console_session = ConsoleSession(args.robot_host, args.robot_port, self._log_buffer)
         self._config_store = ConfigSnapshotStore(self._console_session)
         self._command_profiles = CommandProfileService(self._console_session, self._config_store)
+        capture_root = Path(__file__).resolve().parents[2] / "captures" / "live_telemetry"
+        self._capture_manager = CaptureManager(capture_root, self._processor, self._config_store)
+        self._state.add_listener(self._capture_manager.handle_packet)
+        self._log_buffer.add_listener(self._capture_manager.handle_log_entry)
         bind_host = "" if args.http_host == "0.0.0.0" else args.http_host
         self._receiver = TelemetryReceiver(self._state, self._parser, bind_host=bind_host, udp_port=args.udp_port)
         assets = AssetRepository(Path(__file__).with_name("assets"))
@@ -30,6 +35,7 @@ class LiveTelemetryApplication:
             self._command_profiles,
             self._config_store,
             self._log_buffer,
+            self._capture_manager,
             assets,
         )
 
@@ -76,3 +82,7 @@ def build_arg_parser() -> argparse.ArgumentParser:
 def main() -> int:
     args = build_arg_parser().parse_args()
     return LiveTelemetryApplication(args).run()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
